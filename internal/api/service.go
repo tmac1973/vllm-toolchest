@@ -194,6 +194,10 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
+	if len(lines) == 0 {
+		fmt.Fprint(w, "No logs yet.")
+		return
+	}
 	for _, line := range lines {
 		fmt.Fprintf(w, "%s\n", line)
 	}
