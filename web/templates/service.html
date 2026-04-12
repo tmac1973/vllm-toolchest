@@ -55,7 +55,7 @@ fetch('/api/models', {headers: {'Accept': 'application/json'}})
             if (m.orphaned) return;
             var opt = document.createElement('option');
             opt.value = m.id;
-            opt.textContent = m.display_name || m.id;
+            opt.textContent = m.id;
             sel.appendChild(opt);
         });
     })
