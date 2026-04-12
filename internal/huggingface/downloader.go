@@ -207,6 +207,7 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 			dl.errMsg = err.Error()
 			dl.mu.Unlock()
 			dl.broadcast()
+			d.cleanupFiles(modelDir)
 			return
 		}
 	}
@@ -224,6 +225,7 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 			dl.status = "cancelled"
 			dl.mu.Unlock()
 			dl.broadcast()
+			d.cleanupFiles(modelDir)
 			return
 		case sem <- struct{}{}:
 		}
@@ -245,6 +247,7 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 		dl.errMsg = firstErr.Error()
 		dl.mu.Unlock()
 		dl.broadcast()
+		d.cleanupFiles(modelDir)
 		return
 	}
 
@@ -256,6 +259,11 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 	if d.onComplete != nil {
 		d.onComplete(downloadID, modelID, modelDir)
 	}
+}
+
+// cleanupFiles removes the model directory and all its contents.
+func (d *Downloader) cleanupFiles(modelDir string) {
+	os.RemoveAll(modelDir)
 }
 
 func (d *Downloader) downloadFile(ctx context.Context, modelID, modelDir string, f ModelFile, dl *download) error {

@@ -390,9 +390,13 @@ func (s *Server) handleHFDownloadCancel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	// Remove any partial registry entry (model ID uses / not --)
+	modelID := strings.ReplaceAll(id, "--", "/")
+	s.registry.Delete(modelID, false) // files already cleaned up by downloader
+
 	if isHTMX(r) {
 		respondHTML(w)
-		return // empty = remove the article
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
