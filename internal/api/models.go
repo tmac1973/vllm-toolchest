@@ -96,46 +96,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 
 	respondHTML(w)
 	c := m.VLLMConfig
-
-	// Auto-save: every input change triggers a PUT via htmx
-	// hx-trigger="change" on the form, targeting a small status span
-	autoSave := fmt.Sprintf(
-		`hx-put="/api/models/config?id=%s" hx-trigger="change" hx-target="#save-status-%s" hx-swap="innerHTML" hx-include="closest form"`,
-		m.ID, safeID(m.ID))
-
 	sid := safeID(m.ID)
-
-	fmt.Fprintf(w, `<article style="margin:0.5rem 0;">
-  <header style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Configuration: %s</span>
-    <small id="save-status-%s" style="opacity:0.7;"></small>
-  </header>
-
-  <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
-    <strong>VRAM Estimate:</strong> %.1f GB weights + %.1f GB overhead = <strong>%.1f GB</strong>
-    &mdash; %s
-  </div>
-
-  <form %s>
-    <fieldset>
-      <legend>Core</legend>
-      <div class="grid">
-        <label title="Data type for model weights. 'auto' uses the model's native dtype (usually bfloat16). Use float16 for older GPUs that don't support bfloat16.">
-          dtype
-          <select name="dtype">`,
-		m.DisplayName,
-		sid,
-		m.VRAMEstimate.WeightMemoryGB, m.VRAMEstimate.ActivationGB, m.VRAMEstimate.TotalSingleGPUGB,
-		m.VRAMEstimate.FitLabel,
-		autoSave)
-
-	for _, opt := range []string{"auto", "float16", "bfloat16", "float32"} {
-		sel := ""
-		if c.Dtype == opt {
-			sel = " selected"
-		}
-		fmt.Fprintf(w, `<option value="%s"%s>%s</option>`, opt, sel, opt)
-	}
 
 	maxCtx := m.HFConfig.MaxPositionEmbeddings
 	if maxCtx == 0 {
@@ -146,172 +107,176 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		modelLen = maxCtx
 	}
 
-	fmt.Fprintf(w, `</select>
-        </label>
-        <label title="Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache. The model's native max is %d.">
-          Context length <small>(max: %d)</small>
-          <input type="number" name="max_model_len" value="%d" min="256" max="%d">
-        </label>
-      </div>
-      <div class="grid">
-        <label title="Split the model across multiple GPUs. TP=2 halves the per-GPU memory requirement but requires 2 GPUs.">
-          Tensor parallel
-          <select name="tensor_parallel_size">
-            <option value="1"%s>1 GPU</option>
-            <option value="2"%s>2 GPUs (TP=2)</option>
-          </select>
-        </label>
-        <label title="Fraction of GPU memory vLLM is allowed to use (0.1-0.99). Higher values fit more KV cache (longer contexts, more concurrent requests) but risk OOM. 0.90 is a safe default.">
-          GPU memory utilization
-          <input type="range" name="gpu_memory_utilization" min="0.1" max="0.99" step="0.01" value="%.2f"
-                 oninput="this.nextElementSibling.textContent=this.value">
-          <small>%.2f</small>
-        </label>
-      </div>
-    </fieldset>
+	p := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
 
-    <fieldset>
-      <legend>Performance</legend>
-      <div class="grid">
-        <label title="Disable HIP/CUDA graph compilation. Slower steady-state inference but faster startup and more compatible. Enable this if you get graph compilation errors or crashes.">
-          <input type="checkbox" name="enforce_eager" role="switch"%s>
-          Enforce eager mode
-        </label>
-        <label title="Cache KV blocks for shared prefixes (like system prompts). Speeds up requests that share the same prefix. Safe to enable for most workloads.">
-          <input type="checkbox" name="enable_prefix_caching" role="switch"%s>
-          Prefix caching
-        </label>
-      </div>
-      <label title="Maximum number of sequences (requests) processed concurrently. Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64. Higher values need more KV cache memory.">
-        Max concurrent sequences
-        <select name="max_num_seqs">`,
-		maxCtx, maxCtx, modelLen, maxCtx,
-		selected(c.TensorParallelSize == 1), selected(c.TensorParallelSize == 2),
-		c.GPUMemoryUtilization, c.GPUMemoryUtilization,
-		checked(c.EnforceEager), checked(c.EnablePrefixCaching))
+	p(`<article style="margin:0.5rem 0;">
+  <header style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Configuration: %s</span>
+    <small id="save-status-%s" style="opacity:0.7;"></small>
+  </header>
+  <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
+    <strong>VRAM Estimate:</strong> %.1f GB weights + %.1f GB overhead = <strong>%.1f GB</strong> &mdash; %s
+  </div>
+  <form hx-put="/api/models/config?id=%s" hx-trigger="change" hx-target="#save-status-%s" hx-swap="innerHTML" hx-include="closest form">`,
+		m.DisplayName, sid,
+		m.VRAMEstimate.WeightMemoryGB, m.VRAMEstimate.ActivationGB, m.VRAMEstimate.TotalSingleGPUGB, m.VRAMEstimate.FitLabel,
+		m.ID, sid)
 
-	for _, n := range []int{1, 4, 8, 16, 32, 64, 128, 256} {
-		sel := ""
-		if c.MaxNumSeqs == n {
-			sel = " selected"
+	// ── Core ──
+	p(`<fieldset><legend>Core</legend><div class="grid">`)
+
+	// dtype
+	p(`<label title="Data type for model weights. 'auto' uses the model's native dtype (usually bfloat16). Use float16 for older GPUs that don't support bfloat16.">dtype <select name="dtype">`)
+	for _, opt := range []string{"auto", "float16", "bfloat16", "float32"} {
+		p(`<option value="%s"%s>%s</option>`, opt, selected(c.Dtype == opt), opt)
+	}
+	p(`</select></label>`)
+
+	// Context length dropdown
+	ctxOptions := []int{2048, 4096, 8192, 16384, 32768, 65536, 131072}
+	// Ensure model max is in list, filter to <= max
+	hasMax := false
+	for _, v := range ctxOptions {
+		if v == maxCtx {
+			hasMax = true
 		}
-		fmt.Fprintf(w, `<option value="%d"%s>%d</option>`, n, sel, n)
+	}
+	if !hasMax && maxCtx > 0 {
+		var tmp []int
+		inserted := false
+		for _, v := range ctxOptions {
+			if !inserted && maxCtx < v {
+				tmp = append(tmp, maxCtx)
+				inserted = true
+			}
+			tmp = append(tmp, v)
+		}
+		if !inserted {
+			tmp = append(tmp, maxCtx)
+		}
+		ctxOptions = tmp
+	}
+	if maxCtx > 0 {
+		var tmp []int
+		for _, v := range ctxOptions {
+			if v <= maxCtx {
+				tmp = append(tmp, v)
+			}
+		}
+		ctxOptions = tmp
+	}
+	isCustomCtx := true
+	for _, v := range ctxOptions {
+		if v == modelLen {
+			isCustomCtx = false
+		}
 	}
 
-	fmt.Fprintf(w, `</select>
-      </label>
-    </fieldset>
-
-    <fieldset>
-      <legend>Quantization <a href="#" onclick="document.getElementById('quant-help').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend>
-      <div class="grid">
-        <label title="Override the quantization method used at inference time. 'auto-detect' reads the method from the model's config files. Only change this if auto-detection is wrong or you want to force a specific kernel (e.g. marlin for compatible GPTQ/AWQ models).">
-          Method
-          <select name="quantization">`)
-
-	for _, opt := range []string{"", "awq", "gptq", "fp8", "bitsandbytes", "marlin", "squeezellm", "compressed_tensors"} {
-		sel := ""
-		if c.Quantization == opt {
-			sel = " selected"
+	p(`<label title="Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache. Model max is %d.">Context length <small>(max: %d)</small>`, maxCtx, maxCtx)
+	p(`<select name="max_model_len" id="ctx-sel-%s" onchange="var c=document.getElementById('ctx-cust-%s');if(this.value==='custom'){c.style.display='';c.name='max_model_len';this.name='';}else{c.style.display='none';c.name='';this.name='max_model_len';}">`, sid, sid)
+	for _, v := range ctxOptions {
+		label := fmt.Sprintf("%d", v)
+		if v >= 1024 {
+			label = fmt.Sprintf("%dK", v/1024)
 		}
+		if v == maxCtx {
+			label += " (max)"
+		}
+		p(`<option value="%d"%s>%s</option>`, v, selected(!isCustomCtx && v == modelLen), label)
+	}
+	customDisplay := "display:none;"
+	customName := ""
+	if isCustomCtx {
+		customDisplay = ""
+		customName = "max_model_len"
+	}
+	p(`<option value="custom"%s>Custom...</option></select>`, selected(isCustomCtx))
+	p(`<input type="number" id="ctx-cust-%s" name="%s" value="%d" min="256" max="%d" style="%smargin-top:0.25rem;" placeholder="Custom context length">`, sid, customName, modelLen, maxCtx, customDisplay)
+	p(`</label></div>`)
+
+	// Tensor parallel + GPU memory util
+	p(`<div class="grid">`)
+	p(`<label title="Split the model across multiple GPUs. TP must evenly divide the model's attention heads. Higher TP reduces per-GPU memory but adds inter-GPU communication overhead.">Tensor parallel <select name="tensor_parallel_size">`)
+	for _, tp := range []int{1, 2, 4, 6, 8} {
+		label := fmt.Sprintf("%d GPU", tp)
+		if tp > 1 {
+			label += "s"
+		}
+		p(`<option value="%d"%s>%s</option>`, tp, selected(c.TensorParallelSize == tp), label)
+	}
+	p(`</select></label>`)
+
+	p(`<label title="Fraction of GPU memory vLLM is allowed to use (0.1-0.99). Higher = more KV cache (longer contexts) but risk OOM. 0.90 is a safe default.">GPU memory utilization`)
+	p(`<input type="range" name="gpu_memory_utilization" min="0.1" max="0.99" step="0.01" value="%.2f" oninput="this.nextElementSibling.textContent=this.value">`, c.GPUMemoryUtilization)
+	p(`<small>%.2f</small></label>`, c.GPUMemoryUtilization)
+	p(`</div></fieldset>`)
+
+	// ── Performance ──
+	p(`<fieldset><legend>Performance</legend><div class="grid">`)
+	p(`<label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"%s> Enforce eager mode</label>`, checked(c.EnforceEager))
+	p(`<label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"%s> Prefix caching</label>`, checked(c.EnablePrefixCaching))
+	p(`</div>`)
+
+	p(`<label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs">`)
+	for _, n := range []int{1, 4, 8, 16, 32, 64, 128, 256} {
+		p(`<option value="%d"%s>%d</option>`, n, selected(c.MaxNumSeqs == n), n)
+	}
+	p(`</select></label></fieldset>`)
+
+	// ── Quantization ──
+	p(`<fieldset><legend>Quantization <a href="#" onclick="document.getElementById('quant-help-%s').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend><div class="grid">`, sid)
+
+	p(`<label title="Override the quantization method. 'auto-detect' reads from model config. Only change if auto-detection is wrong or to force a specific kernel (e.g. marlin).">Method <select name="quantization">`)
+	for _, opt := range []string{"", "awq", "gptq", "fp8", "bitsandbytes", "marlin", "squeezellm", "compressed_tensors"} {
 		label := opt
 		if label == "" {
 			label = "auto-detect"
 		}
-		fmt.Fprintf(w, `<option value="%s"%s>%s</option>`, opt, sel, label)
+		p(`<option value="%s"%s>%s</option>`, opt, selected(c.Quantization == opt), label)
 	}
+	p(`</select></label>`)
 
-	fmt.Fprintf(w, `</select>
-        </label>
-        <label title="Data type for the KV cache. 'auto' uses FP16. FP8 halves KV cache memory, allowing longer contexts or more concurrent requests, with a very small quality tradeoff.">
-          KV cache dtype
-          <select name="kv_cache_dtype">`)
-
+	p(`<label title="Data type for KV cache. 'auto' uses FP16. FP8 halves cache memory for longer contexts, with minimal quality tradeoff.">KV cache dtype <select name="kv_cache_dtype">`)
 	for _, opt := range []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"} {
-		sel := ""
-		if c.KVCacheDtype == opt {
-			sel = " selected"
-		}
-		fmt.Fprintf(w, `<option value="%s"%s>%s</option>`, opt, sel, opt)
+		p(`<option value="%s"%s>%s</option>`, opt, selected(c.KVCacheDtype == opt), opt)
 	}
+	p(`</select></label></div></fieldset>`)
 
-	fmt.Fprintf(w, `</select>
-        </label>
-      </div>
-    </fieldset>
+	// ── Tool Use ──
+	p(`<fieldset><legend>Tool Use</legend><div class="grid">`)
+	p(`<label title="Allow the model to autonomously decide when to call tools/functions. Requires a compatible model and a tool call parser."><input type="checkbox" name="enable_auto_tool_choice" role="switch"%s> Enable auto tool choice</label>`, checked(c.EnableAutoToolChoice))
 
-    <fieldset>
-      <legend>Tool Use</legend>
-      <div class="grid">
-        <label title="Allow the model to autonomously decide when to call tools/functions. Requires a compatible model and a tool call parser to be selected.">
-          <input type="checkbox" name="enable_auto_tool_choice" role="switch"%s>
-          Enable auto tool choice
-        </label>
-        <label title="Parser that extracts tool calls from the model's output. Must match the model's chat template format. hermes: Hermes/NousResearch/Qwen2.5+. llama3_json: Llama 3.1+. mistral: Mistral/Mixtral.">
-          Tool call parser
-          <select name="tool_call_parser">
-            <option value=""%s>(none)</option>
-            <option value="hermes"%s>hermes</option>
-            <option value="llama3_json"%s>llama3_json</option>
-            <option value="mistral"%s>mistral</option>
-            <option value="granite"%s>granite</option>
-            <option value="internlm"%s>internlm</option>
-            <option value="jamba"%s>jamba</option>
-            <option value="pythonic"%s>pythonic</option>
-          </select>
-        </label>
-      </div>
-    </fieldset>
+	p(`<label title="Parser for tool calls. Must match model's chat template. hermes: Hermes/Qwen2.5+. llama3_json: Llama 3.1+. mistral: Mistral/Mixtral.">Tool call parser <select name="tool_call_parser">`)
+	for _, opt := range []struct{ val, label string }{
+		{"", "(none)"}, {"hermes", "hermes"}, {"llama3_json", "llama3_json"},
+		{"mistral", "mistral"}, {"granite", "granite"}, {"internlm", "internlm"},
+		{"jamba", "jamba"}, {"pythonic", "pythonic"},
+	} {
+		p(`<option value="%s"%s>%s</option>`, opt.val, selected(c.ToolCallParser == opt.val), opt.label)
+	}
+	p(`</select></label></div></fieldset>`)
 
-    <fieldset>
-      <legend>Advanced</legend>
-      <label title="Allow the model to execute custom Python code from its HuggingFace repo. Required by some models (Yi, InternLM, etc.) but is a security risk -- only enable for trusted models.">
-        <input type="checkbox" name="trust_remote_code" role="switch"%s>
-        Trust remote code <small>(security risk)</small>
-      </label>
-      <label title="Raw CLI flags appended to the vllm serve command. Use for any option not exposed above, e.g. --disable-log-requests, --swap-space 4, --max-num-batched-tokens 4096">
-        Extra flags
-        <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4">
-      </label>
-    </fieldset>
-  </form>
+	// ── Advanced ──
+	p(`<fieldset><legend>Advanced</legend>`)
+	p(`<label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"%s> Trust remote code <small>(security risk)</small></label>`, checked(c.TrustRemoteCode))
+	p(`<label title="Raw CLI flags appended to vllm serve. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4"></label>`, c.ExtraFlags)
+	p(`</fieldset></form>`)
 
-  <dialog id="quant-help">
-    <article style="max-width:600px;">
-      <header>
-        <button aria-label="Close" rel="prev" onclick="document.getElementById('quant-help').close();"></button>
-        <strong>Quantization Methods</strong>
-      </header>
-      <table style="font-size:0.85rem;">
-        <thead><tr><th>Method</th><th>Bits</th><th>Description</th></tr></thead>
-        <tbody>
-          <tr><td><strong>FP16/BF16</strong></td><td>16</td><td>Full precision. Best quality, highest VRAM usage. BF16 is preferred for newer GPUs.</td></tr>
-          <tr><td><strong>AWQ</strong></td><td>4</td><td>Activation-aware Weight Quantization. Good quality/size tradeoff. Pre-quantized models available on HuggingFace.</td></tr>
-          <tr><td><strong>GPTQ</strong></td><td>4</td><td>Post-Training Quantization. Similar to AWQ. Slightly different quality characteristics depending on calibration data.</td></tr>
-          <tr><td><strong>Marlin</strong></td><td>4</td><td>Optimized inference kernel for compatible GPTQ/AWQ models. Faster than standard GPTQ/AWQ but same model files. Requires symmetric quantization.</td></tr>
-          <tr><td><strong>FP8</strong></td><td>8</td><td>8-bit floating point. Half the VRAM of FP16 with minimal quality loss. Native support on newer GPUs (Ada, RDNA4).</td></tr>
-          <tr><td><strong>BitsAndBytes</strong></td><td>4/8</td><td>Dynamic quantization at load time. No pre-quantized model needed -- quantizes FP16 models on the fly. Slower loading, requires eager mode.</td></tr>
-          <tr><td><strong>SqueezeLLM</strong></td><td>4</td><td>Older quantization method. Rarely used with newer models.</td></tr>
-          <tr><td><strong>compressed_tensors</strong></td><td>mixed</td><td>vLLM's native format. Supports mixed precision across layers.</td></tr>
-        </tbody>
-      </table>
-      <footer>
-        <button onclick="document.getElementById('quant-help').close();">Close</button>
-      </footer>
-    </article>
-  </dialog>
-</article>`,
-		checked(c.EnableAutoToolChoice),
-		selected(c.ToolCallParser == ""),
-		selected(c.ToolCallParser == "hermes"),
-		selected(c.ToolCallParser == "llama3_json"),
-		selected(c.ToolCallParser == "mistral"),
-		selected(c.ToolCallParser == "granite"),
-		selected(c.ToolCallParser == "internlm"),
-		selected(c.ToolCallParser == "jamba"),
-		selected(c.ToolCallParser == "pythonic"),
-		checked(c.TrustRemoteCode),
-		c.ExtraFlags)
+	// ── Quant help modal ──
+	p(`<dialog id="quant-help-%s"><article style="max-width:600px;">`, sid)
+	p(`<header><button aria-label="Close" rel="prev" onclick="this.closest('dialog').close();"></button><strong>Quantization Methods</strong></header>`)
+	p(`<table style="font-size:0.85rem;"><thead><tr><th>Method</th><th>Bits</th><th>Description</th></tr></thead><tbody>`)
+	p(`<tr><td><strong>FP16/BF16</strong></td><td>16</td><td>Full precision. Best quality, highest VRAM. BF16 preferred for newer GPUs.</td></tr>`)
+	p(`<tr><td><strong>AWQ</strong></td><td>4</td><td>Activation-aware Weight Quantization. Good quality/size tradeoff. Pre-quantized models on HF.</td></tr>`)
+	p(`<tr><td><strong>GPTQ</strong></td><td>4</td><td>Post-Training Quantization. Similar to AWQ, depends on calibration data.</td></tr>`)
+	p(`<tr><td><strong>Marlin</strong></td><td>4</td><td>Optimized kernel for compatible GPTQ/AWQ. Faster inference, same model files. Needs symmetric quant.</td></tr>`)
+	p(`<tr><td><strong>FP8</strong></td><td>8</td><td>8-bit float. Half VRAM of FP16, minimal quality loss. Native on Ada/RDNA4.</td></tr>`)
+	p(`<tr><td><strong>BitsAndBytes</strong></td><td>4/8</td><td>Dynamic quantization at load. No pre-quantized model needed. Slower load, requires eager mode.</td></tr>`)
+	p(`<tr><td><strong>SqueezeLLM</strong></td><td>4</td><td>Older method. Rarely used with newer models.</td></tr>`)
+	p(`<tr><td><strong>compressed_tensors</strong></td><td>mixed</td><td>vLLM native format. Mixed precision across layers.</td></tr>`)
+	p(`</tbody></table>`)
+	p(`<footer><button onclick="this.closest('dialog').close();">Close</button></footer></article></dialog>`)
+	p(`</article>`)
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {
