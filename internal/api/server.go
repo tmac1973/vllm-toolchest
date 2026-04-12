@@ -113,7 +113,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/", s.handleIndex)
 	r.Get("/models", s.handleModelsPage)
 	r.Get("/models/browse", s.handleModelsBrowsePage)
-	r.Get("/service", s.handleServicePage)
+	r.Get("/server", s.handleServicePage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
 	r.Get("/settings", s.handleSettingsPage)
 
