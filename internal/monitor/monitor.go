@@ -14,13 +14,17 @@ type Metrics struct {
 }
 
 type GPUInfo struct {
-	Index       int     `json:"index"`
-	Name        string  `json:"name"`
-	UtilPercent int     `json:"util_percent"`
-	VRAMUsedMB  int     `json:"vram_used_mb"`
-	VRAMTotalMB int     `json:"vram_total_mb"`
-	TempC       int     `json:"temp_c"`
-	PowerW      float64 `json:"power_w,omitempty"`
+	Index         int     `json:"index"`
+	Name          string  `json:"name"`
+	UtilPercent   int     `json:"util_percent"`
+	VRAMUsedMB    int     `json:"vram_used_mb"`
+	VRAMTotalMB   int     `json:"vram_total_mb"`
+	TempC         int     `json:"temp_c"`
+	PowerW        float64 `json:"power_w,omitempty"`
+	FanPercent    int     `json:"fan_percent,omitempty"`
+	ClockMHz      int     `json:"clock_mhz,omitempty"`
+	DriverVersion string  `json:"driver_version,omitempty"`
+	ROCmVersion   string  `json:"rocm_version,omitempty"`
 }
 
 type CPUInfo struct {

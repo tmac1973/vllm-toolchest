@@ -194,37 +194,60 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	metrics := s.monitor.Current()
 	apiURL := strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1"
 
-	gpuInfo := "No GPU detected"
+	// GPU card
+	gpuHTML := "<p>No GPU detected</p>"
 	if len(metrics.GPU) > 0 {
-		g := metrics.GPU[0]
-		gpuInfo = fmt.Sprintf("%s (%.0fGB)", g.Name, float64(g.VRAMTotalMB)/1024)
-		if len(metrics.GPU) > 1 {
-			gpuInfo += fmt.Sprintf(" x%d", len(metrics.GPU))
+		var buf strings.Builder
+		for _, g := range metrics.GPU {
+			buf.WriteString(fmt.Sprintf(`<p><strong>%s</strong></p>`, g.Name))
+			buf.WriteString(fmt.Sprintf(`<p>VRAM: %.1f / %.1f GB</p>`,
+				float64(g.VRAMUsedMB)/1024, float64(g.VRAMTotalMB)/1024))
+			if g.ROCmVersion != "" || g.DriverVersion != "" {
+				buf.WriteString("<p>")
+				if g.DriverVersion != "" {
+					buf.WriteString(fmt.Sprintf("Driver: %s", g.DriverVersion))
+				}
+				if g.ROCmVersion != "" {
+					if g.DriverVersion != "" {
+						buf.WriteString(" &middot; ")
+					}
+					buf.WriteString(fmt.Sprintf("ROCm: %s", g.ROCmVersion))
+				}
+				buf.WriteString("</p>")
+			}
 		}
+		gpuHTML = buf.String()
+	}
+
+	// Tool use indicator
+	toolUseLabel := "disabled"
+	if s.cfg.ToolUseEnabled {
+		toolUseLabel = "<ins>enabled</ins>"
 	}
 
 	respondHTML(w)
 	fmt.Fprintf(w, `<div class="grid">
     <article>
-        <header>Service</header>
-        <p>vLLM: Stopped</p>
+        <header>vLLM Service</header>
+        <p>Stopped</p>
         <p><a href="/service">Manage &rarr;</a></p>
     </article>
     <article>
         <header>GPU</header>
-        <p>%s</p>
+        %s
     </article>
     <article>
         <header>Models</header>
         <p><strong>0</strong> models registered</p>
-        <p><a href="/models/browse">Download Models &rarr;</a></p>
+        <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
     </article>
     <article>
         <header>API Endpoint</header>
         <pre style="user-select: all; cursor: pointer;">%s</pre>
+        <p>Tool use: %s</p>
         <p><a href="/settings">Settings &rarr;</a></p>
     </article>
-</div>`, gpuInfo, apiURL)
+</div>`, gpuHTML, apiURL, toolUseLabel)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

@@ -9,13 +9,20 @@ import (
 	"strings"
 )
 
-type rocmBackend struct{}
+type rocmBackend struct {
+	rocmVersion   string
+	driverVersion string
+}
 
 func newROCm() GPUBackend {
 	if _, err := os.Stat("/dev/kfd"); err != nil {
 		return nil
 	}
-	return &rocmBackend{}
+	b := &rocmBackend{
+		rocmVersion:   readROCmVersion(),
+		driverVersion: readDriverVersion(),
+	}
+	return b
 }
 
 func (r *rocmBackend) Name() string { return "rocm" }
@@ -30,6 +37,7 @@ func (r *rocmBackend) Collect() ([]GPUInfo, error) {
 func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 	out, err := exec.Command("rocm-smi",
 		"--showuse", "--showmemuse", "--showtemp", "--showpower",
+		"--showfan", "--showclocks",
 		"--csv").Output()
 	if err != nil {
 		return nil, fmt.Errorf("rocm-smi: %w", err)
@@ -67,11 +75,29 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 		if i, ok := colIdx["Average Graphics Package Power (W)"]; ok && i < len(fields) {
 			gpu.PowerW, _ = strconv.ParseFloat(strings.TrimSpace(fields[i]), 64)
 		}
+		// Fan speed — column name varies across ROCm versions
+		for _, col := range []string{"Fan speed (%)", "Fan Speed (%)", "Fan speed"} {
+			if i, ok := colIdx[col]; ok && i < len(fields) {
+				f, _ := strconv.ParseFloat(strings.TrimSpace(fields[i]), 64)
+				gpu.FanPercent = int(f)
+				break
+			}
+		}
+		// GPU clock
+		for _, col := range []string{"sclk clock speed (MHz)", "SCLK", "sclk clock speed"} {
+			if i, ok := colIdx[col]; ok && i < len(fields) {
+				f, _ := strconv.ParseFloat(strings.TrimSpace(fields[i]), 64)
+				gpu.ClockMHz = int(f)
+				break
+			}
+		}
 
 		vramUsed, vramTotal := readVRAMSysfs(gpu.Index)
 		gpu.VRAMUsedMB = vramUsed
 		gpu.VRAMTotalMB = vramTotal
 		gpu.Name = readGPUNameSysfs(gpu.Index)
+		gpu.ROCmVersion = r.rocmVersion
+		gpu.DriverVersion = r.driverVersion
 
 		gpus = append(gpus, gpu)
 	}
@@ -115,7 +141,32 @@ func (r *rocmBackend) collectSysfs() ([]GPUInfo, error) {
 			}
 		}
 
+		// Fan speed from hwmon (pwm1: 0-255 scale)
+		for _, hwmon := range hwmonDirs {
+			if data, err := os.ReadFile(filepath.Join(hwmon, "pwm1")); err == nil {
+				pwm, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+				gpu.FanPercent = pwm * 100 / 255
+				break
+			}
+		}
+
+		// GPU clock from pp_dpm_sclk (active entry marked with *)
+		if data, err := os.ReadFile(filepath.Join(deviceDir, "pp_dpm_sclk")); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.Contains(line, "*") {
+					fields := strings.Fields(line)
+					if len(fields) >= 2 {
+						clockStr := strings.TrimSuffix(fields[1], "Mhz")
+						clockStr = strings.TrimSuffix(clockStr, "MHz")
+						gpu.ClockMHz, _ = strconv.Atoi(clockStr)
+					}
+				}
+			}
+		}
+
 		gpu.Name = readGPUNameSysfs(idx)
+		gpu.ROCmVersion = r.rocmVersion
+		gpu.DriverVersion = r.driverVersion
 		gpus = append(gpus, gpu)
 		idx++
 	}
@@ -170,4 +221,24 @@ func readGPUNameSysfs(gpuIdx int) string {
 		}
 	}
 	return fmt.Sprintf("AMD GPU %d", gpuIdx)
+}
+
+func readROCmVersion() string {
+	// Try /opt/rocm/.info/version
+	if data, err := os.ReadFile("/opt/rocm/.info/version"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	// Try /opt/rocm/include/rocm-core/rocm_version.h or similar
+	if data, err := os.ReadFile("/opt/rocm/.info/version-dev"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return ""
+}
+
+func readDriverVersion() string {
+	// Try /sys/module/amdgpu/version
+	if data, err := os.ReadFile("/sys/module/amdgpu/version"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return ""
 }

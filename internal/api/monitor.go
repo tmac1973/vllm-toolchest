@@ -72,6 +72,12 @@ func monitorBarData(m monitor.Metrics) struct {
 		if gpu.PowerW > 0 {
 			details += fmt.Sprintf(" \u00b7 %.0fW", gpu.PowerW)
 		}
+		if gpu.FanPercent > 0 {
+			details += fmt.Sprintf(" \u00b7 Fan %d%%", gpu.FanPercent)
+		}
+		if gpu.ClockMHz > 0 {
+			details += fmt.Sprintf(" \u00b7 %dMHz", gpu.ClockMHz)
+		}
 		gpus[i] = monitorBarGPU{
 			Index:       gpu.Index,
 			Name:        gpu.Name,
