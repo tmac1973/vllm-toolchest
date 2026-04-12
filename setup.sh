@@ -1,209 +1,608 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── vllm-toolchest setup ──────────────────────────────────────────
-# Detects GPU, container runtime, and launches vllm-toolchest.
+# ─────────────────────────────────────────────────────────────────────────────
+# vllm-toolchest setup — distro-agnostic, runtime-agnostic setup and launcher
+# ─────────────────────────────────────────────────────────────────────────────
 
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly CDI_SYSTEM_DIR="/etc/cdi"
+readonly CDI_USER_DIR="${HOME}/.config/containers/cdi"
+
+# ─── Global state (populated by detect_* functions) ──────────────────────────
+
+GPU_VENDOR=""           # cuda, rocm
+GPU_INFO=""             # human-readable GPU description
+AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
+HOST_VIDEO_GID=""       # host video group GID
+HOST_RENDER_GID=""      # host render group GID
+
+VLLMCTL_PORT="3000"
+VLLMCTL_INFERENCE_PORT="8000"
+VLLMCTL_MODELS_DIR=""
+
+CONTAINER_CMD=""        # docker or podman
+COMPOSE_CMD=""          # "docker compose" or "podman-compose" or "podman compose"
+CONTAINER_VERSION=""
+COMPOSE_VERSION=""
+
+DISTRO_ID=""
+DISTRO_NAME=""
+DISTRO_FAMILY=""
+PKG_MANAGER=""
+
+ACTIONS=()
+PREREQS=()
+
+# ─── Utility ─────────────────────────────────────────────────────────────────
+
 RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
+log()   { echo -e "${BLUE}==>${NC} $*"; }
+ok()    { echo -e "${GREEN}  ✓${NC} $*"; }
+warn()  { echo -e "${YELLOW}  ⚠${NC} $*" >&2; }
+err()   { echo -e "${RED}  ✗${NC} $*" >&2; }
+fatal() { err "$@"; exit 1; }
 
-# ─── GPU Detection ─────────────────────────────────────────────────
-detect_gpu() {
-    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-        GPU_TYPE="cuda"
-        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-        GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-        info "Detected NVIDIA GPU: ${GPU_NAME} (${GPU_COUNT} GPU(s))"
-    elif [ -e /dev/kfd ]; then
-        GPU_TYPE="rocm"
-        if command -v rocminfo &>/dev/null; then
-            GPU_NAME=$(rocminfo 2>/dev/null | grep "Marketing Name" | grep -v "AMD Ryzen\|AMD EPYC" | head -1 | sed 's/.*Marketing Name:\s*//')
-        else
-            GPU_NAME="AMD GPU"
-        fi
-        GPU_COUNT=$(ls /dev/dri/renderD* 2>/dev/null | wc -l)
-        info "Detected AMD GPU: ${GPU_NAME} (${GPU_COUNT} render node(s))"
+need_cmd() {
+    command -v "$1" &>/dev/null
+}
+
+run_sudo() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
     else
-        GPU_TYPE="none"
-        GPU_NAME="None detected"
-        GPU_COUNT=0
-        warn "No GPU detected. vLLM requires a GPU to run inference."
+        sudo "$@"
     fi
 }
 
-# ─── Container Runtime Detection ───────────────────────────────────
-detect_runtime() {
-    if command -v docker &>/dev/null; then
-        RUNTIME="docker"
-        COMPOSE_CMD="docker compose"
-        # Check if docker compose plugin is available
-        if ! docker compose version &>/dev/null; then
-            if command -v docker-compose &>/dev/null; then
-                COMPOSE_CMD="docker-compose"
-            else
-                error "docker compose plugin not found. Install with: sudo apt install docker-compose-plugin"
-                exit 1
-            fi
+prompt_confirm() {
+    local prompt="$1"
+    local answer
+    read -rp "$(echo -e "${BOLD}${prompt}${NC} [Y/n] ")" answer
+    case "${answer:-Y}" in
+        [Yy]*|"") return 0 ;;
+        *)        return 1 ;;
+    esac
+}
+
+# ─── Detection: GPU ──────────────────────────────────────────────────────────
+
+detect_host_gpu_gids() {
+    if need_cmd getent; then
+        HOST_VIDEO_GID="$(getent group video 2>/dev/null | cut -d: -f3)" || true
+        HOST_RENDER_GID="$(getent group render 2>/dev/null | cut -d: -f3)" || true
+    fi
+    if [[ -z "$HOST_VIDEO_GID" ]]; then
+        HOST_VIDEO_GID="$(grep '^video:' /etc/group 2>/dev/null | cut -d: -f3)" || true
+    fi
+    if [[ -z "$HOST_RENDER_GID" ]]; then
+        HOST_RENDER_GID="$(grep '^render:' /etc/group 2>/dev/null | cut -d: -f3)" || true
+    fi
+}
+
+detect_amd_gfx_version() {
+    local gfx_target=""
+    if need_cmd rocminfo; then
+        gfx_target="$(rocminfo 2>/dev/null | grep -oP 'gfx\d+' | head -1)" || true
+    fi
+    [[ -z "$gfx_target" ]] && return
+    case "$gfx_target" in
+        gfx1200|gfx1201|gfx1100|gfx1101|gfx1102|gfx1103)
+            AMD_GFX_VERSION="" ;;
+        gfx1030|gfx1031|gfx1032|gfx1033|gfx1034|gfx1035|gfx1036)
+            AMD_GFX_VERSION="" ;;
+        gfx1010|gfx1011|gfx1012|gfx1013)
+            AMD_GFX_VERSION="10.1.0" ;;
+        gfx900|gfx902|gfx904|gfx906|gfx908|gfx909)
+            AMD_GFX_VERSION="9.0.0" ;;
+        *) AMD_GFX_VERSION="" ;;
+    esac
+}
+
+detect_gpu() {
+    if need_cmd nvidia-smi; then
+        if nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null; then
+            GPU_VENDOR="cuda"
+            GPU_INFO="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
+            GPU_INFO="${GPU_INFO%%$'\n'*}"
+            return
         fi
-        info "Container runtime: Docker (${COMPOSE_CMD})"
-    elif command -v podman &>/dev/null; then
-        RUNTIME="podman"
-        if command -v podman-compose &>/dev/null; then
+    fi
+    if [[ -e /dev/nvidia0 ]]; then
+        GPU_VENDOR="cuda"
+        GPU_INFO="NVIDIA GPU detected (nvidia-smi unavailable)"
+        return
+    fi
+    if [[ -e /dev/kfd ]]; then
+        GPU_VENDOR="rocm"
+        GPU_INFO="AMD GPU"
+        if need_cmd rocminfo; then
+            local name
+            name="$(rocminfo 2>/dev/null | grep 'Marketing Name' | sed 's/.*: *//' \
+                | grep -iE 'Radeon|Instinct|FirePro' | head -1)" || true
+            [[ -n "$name" ]] && GPU_INFO="$name"
+        fi
+        detect_amd_gfx_version
+        detect_host_gpu_gids
+        return
+    fi
+    GPU_VENDOR="cuda"
+    GPU_INFO="No GPU detected (defaulting to CUDA)"
+}
+
+# ─── Detection: Container runtime ────────────────────────────────────────────
+
+detect_container_runtime() {
+    local user_override="${RUNTIME:-}"
+
+    if [[ -n "$user_override" ]]; then
+        case "$user_override" in
+            docker) need_cmd docker || fatal "RUNTIME=docker but docker not found"; CONTAINER_CMD="docker" ;;
+            podman) need_cmd podman || fatal "RUNTIME=podman but podman not found"; CONTAINER_CMD="podman" ;;
+            *) fatal "Unknown RUNTIME=$user_override" ;;
+        esac
+    else
+        if need_cmd docker && docker info &>/dev/null 2>&1; then
+            if docker --version 2>/dev/null | grep -qi podman; then
+                CONTAINER_CMD="podman"
+            else
+                CONTAINER_CMD="docker"
+            fi
+        elif need_cmd podman; then
+            CONTAINER_CMD="podman"
+        else
+            fatal "No container runtime found. Install Docker or Podman."
+        fi
+    fi
+
+    CONTAINER_VERSION="$($CONTAINER_CMD --version 2>/dev/null || true)"
+    CONTAINER_VERSION="${CONTAINER_VERSION%%$'\n'*}"
+
+    if [[ "$CONTAINER_CMD" == "docker" ]]; then
+        if docker compose version &>/dev/null 2>&1; then
+            COMPOSE_CMD="docker compose"
+        elif need_cmd docker-compose; then
+            COMPOSE_CMD="docker-compose"
+        else
+            fatal "Docker found but no compose plugin"
+        fi
+    else
+        if podman compose version &>/dev/null 2>&1; then
+            COMPOSE_CMD="podman compose"
+        elif need_cmd podman-compose; then
             COMPOSE_CMD="podman-compose"
         else
-            error "podman-compose not found. Install with: pip install podman-compose"
-            exit 1
+            fatal "Podman found but no compose command"
         fi
-        info "Container runtime: Podman (${COMPOSE_CMD})"
-    else
-        error "No container runtime found. Install Docker or Podman first."
-        echo ""
-        echo "Docker:  https://docs.docker.com/engine/install/"
-        echo "Podman:  https://podman.io/docs/installation"
-        exit 1
     fi
+    COMPOSE_VERSION="$($COMPOSE_CMD version 2>/dev/null || $COMPOSE_CMD --version 2>/dev/null || true)"
+    COMPOSE_VERSION="${COMPOSE_VERSION%%$'\n'*}"
 }
 
-# ─── NVIDIA-specific setup ─────────────────────────────────────────
-setup_nvidia() {
-    # Check for NVIDIA Container Toolkit
-    if ! command -v nvidia-container-cli &>/dev/null; then
-        warn "NVIDIA Container Toolkit not detected."
-        echo ""
-        echo "Install it from: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html"
-        echo ""
-        read -p "Continue anyway? (y/N) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
+# ─── Detection: Linux distribution ───────────────────────────────────────────
+
+detect_distro() {
+    [[ ! -f /etc/os-release ]] && fatal "Cannot detect distribution"
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    DISTRO_ID="${ID:-unknown}"
+    DISTRO_NAME="${PRETTY_NAME:-$DISTRO_ID}"
+    local id_like="${ID_LIKE:-}"
+
+    case "$DISTRO_ID" in
+        debian|ubuntu|pop|linuxmint) DISTRO_FAMILY="debian"; PKG_MANAGER="apt" ;;
+        fedora|rhel|centos|rocky|alma|nobara) DISTRO_FAMILY="fedora"; PKG_MANAGER="dnf" ;;
+        arch|cachyos|endeavouros|manjaro) DISTRO_FAMILY="arch"; PKG_MANAGER="pacman" ;;
+        opensuse-leap|opensuse-tumbleweed) DISTRO_FAMILY="suse"; PKG_MANAGER="zypper" ;;
+        *)
+            if [[ "$id_like" == *"debian"* || "$id_like" == *"ubuntu"* ]]; then
+                DISTRO_FAMILY="debian"; PKG_MANAGER="apt"
+            elif [[ "$id_like" == *"fedora"* || "$id_like" == *"rhel"* ]]; then
+                DISTRO_FAMILY="fedora"; PKG_MANAGER="dnf"
+            elif [[ "$id_like" == *"arch"* ]]; then
+                DISTRO_FAMILY="arch"; PKG_MANAGER="pacman"
+            else
+                DISTRO_FAMILY="unknown"; PKG_MANAGER=""
+            fi
+            ;;
+    esac
+}
+
+# ─── Prerequisites ────────────────────────────────────────────────────────────
+
+has_nvidia_toolkit() { need_cmd nvidia-ctk; }
+has_cdi_spec() { [[ -f "$CDI_SYSTEM_DIR/nvidia.yaml" ]] || [[ -f "$CDI_USER_DIR/nvidia.yaml" ]]; }
+docker_has_nvidia_runtime() { docker info 2>/dev/null | grep -qi "nvidia"; }
+
+check_prerequisites() {
+    PREREQS=()
+    ACTIONS=()
+
+    if [[ "$GPU_VENDOR" == "cuda" ]]; then
+        if ! has_nvidia_toolkit; then
+            PREREQS+=("install_nvidia_toolkit")
+            ACTIONS+=("Install NVIDIA Container Toolkit")
         fi
+        if [[ "$CONTAINER_CMD" == "docker" ]]; then
+            if ! docker_has_nvidia_runtime; then
+                PREREQS+=("configure_docker_nvidia")
+                ACTIONS+=("Configure Docker NVIDIA runtime")
+            fi
+        elif [[ "$CONTAINER_CMD" == "podman" ]]; then
+            if ! has_cdi_spec; then
+                PREREQS+=("generate_cdi_spec")
+                ACTIONS+=("Generate NVIDIA CDI spec for Podman")
+            fi
+        fi
+    fi
+
+    ACTIONS+=("Build container image (Dockerfile.${GPU_VENDOR})")
+    ACTIONS+=("Start vllm-toolchest")
+}
+
+install_nvidia_toolkit() {
+    case "$PKG_MANAGER" in
+        apt)
+            log "Adding NVIDIA Container Toolkit apt repo..."
+            run_sudo apt-get update -qq
+            run_sudo apt-get install -y -qq curl gpg
+            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+                | run_sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+                | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+                | run_sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+            run_sudo apt-get update -qq
+            run_sudo apt-get install -y nvidia-container-toolkit ;;
+        dnf)
+            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+                | run_sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo > /dev/null
+            run_sudo dnf install -y nvidia-container-toolkit ;;
+        pacman)
+            run_sudo pacman -Sy --noconfirm nvidia-container-toolkit ;;
+        zypper)
+            run_sudo zypper ar -f https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo nvidia-container-toolkit 2>/dev/null || true
+            run_sudo zypper --gpg-auto-import-keys install -y nvidia-container-toolkit ;;
+        *) fatal "Cannot install NVIDIA Container Toolkit: unsupported package manager" ;;
+    esac
+    ok "NVIDIA Container Toolkit installed"
+}
+
+configure_docker_nvidia() {
+    log "Configuring Docker NVIDIA runtime..."
+    run_sudo nvidia-ctk runtime configure --runtime=docker
+    run_sudo systemctl restart docker
+    ok "Docker NVIDIA runtime configured"
+}
+
+generate_cdi_spec() {
+    log "Generating NVIDIA CDI spec..."
+    run_sudo mkdir -p "$CDI_SYSTEM_DIR"
+    run_sudo nvidia-ctk cdi generate --output="$CDI_SYSTEM_DIR/nvidia.yaml"
+    ok "CDI spec written to $CDI_SYSTEM_DIR/nvidia.yaml"
+}
+
+install_prerequisites() {
+    for prereq in "${PREREQS[@]}"; do
+        case "$prereq" in
+            install_nvidia_toolkit)  install_nvidia_toolkit ;;
+            configure_docker_nvidia) configure_docker_nvidia ;;
+            generate_cdi_spec)       generate_cdi_spec ;;
+        esac
+    done
+}
+
+# ─── Port configuration ──────────────────────────────────────────────────────
+
+is_port_available() {
+    local port="$1"
+    if need_cmd ss; then
+        ! ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .
     else
-        info "NVIDIA Container Toolkit detected."
+        return 0
     fi
 }
 
-# ─── AMD-specific setup ───────────────────────────────────────────
-setup_amd() {
-    # Check group membership
-    if ! id -nG | grep -qw video; then
-        warn "Current user is not in the 'video' group."
-        echo "  Run: sudo usermod -aG video \$USER"
+load_env_ports() {
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ -f "$env_file" ]]; then
+        local val
+        val="$(grep '^VLLMCTL_PORT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && VLLMCTL_PORT="$val" || true
+        val="$(grep '^VLLMCTL_INFERENCE_PORT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && VLLMCTL_INFERENCE_PORT="$val" || true
+        val="$(grep '^VLLMCTL_MODELS_DIR=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && VLLMCTL_MODELS_DIR="$val" || true
     fi
-    if ! id -nG | grep -qw render; then
-        warn "Current user is not in the 'render' group."
-        echo "  Run: sudo usermod -aG render \$USER"
-    fi
-
-    # Get group GIDs for compose
-    HOST_VIDEO_GID=$(getent group video 2>/dev/null | cut -d: -f3 || echo "video")
-    HOST_RENDER_GID=$(getent group render 2>/dev/null | cut -d: -f3 || echo "render")
 }
 
-# ─── Generate .env ────────────────────────────────────────────────
-generate_env() {
-    if [ -f .env ]; then
-        info ".env file already exists, not overwriting."
+prompt_ports() {
+    echo ""
+    echo -e "${BOLD}Port configuration${NC}"
+    echo "  Management UI:  ${VLLMCTL_PORT}"
+    echo "  Inference API:  ${VLLMCTL_INFERENCE_PORT}"
+
+    local ports_ok=true
+    if ! is_port_available "$VLLMCTL_PORT"; then
+        warn "Port ${VLLMCTL_PORT} is already in use"
+        ports_ok=false
+    fi
+    if ! is_port_available "$VLLMCTL_INFERENCE_PORT"; then
+        warn "Port ${VLLMCTL_INFERENCE_PORT} is already in use"
+        ports_ok=false
+    fi
+
+    if [[ "$ports_ok" == true ]] && prompt_confirm "Use these ports?"; then
         return
     fi
 
-    cat > .env << EOF
-# Generated by setup.sh on $(date -Iseconds)
-# GPU: ${GPU_TYPE} - ${GPU_NAME}
+    local port
+    while true; do
+        read -rp "  Management UI port [${VLLMCTL_PORT}]: " port
+        port="${port:-$VLLMCTL_PORT}"
+        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+            VLLMCTL_PORT="$port"; break
+        fi
+        err "Invalid port"
+    done
+    while true; do
+        read -rp "  Inference API port [${VLLMCTL_INFERENCE_PORT}]: " port
+        port="${port:-$VLLMCTL_INFERENCE_PORT}"
+        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+            VLLMCTL_INFERENCE_PORT="$port"; break
+        fi
+        err "Invalid port"
+    done
+}
 
-VLLMCTL_PORT=3000
-VLLMCTL_INFERENCE_PORT=8000
-EOF
+prompt_models_dir() {
+    echo ""
+    echo -e "${BOLD}Model storage${NC}"
+    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
+        echo "  Current: ${VLLMCTL_MODELS_DIR}"
+    else
+        echo "  Current: Docker volume (default)"
+    fi
+    echo "  Mount a host directory so models persist across container rebuilds."
 
-    if [ "${GPU_TYPE}" = "rocm" ]; then
-        cat >> .env << EOF
+    local path
+    read -rp "  Host path [${VLLMCTL_MODELS_DIR:-none}]: " path
+    if [[ -z "$path" ]]; then return; fi
+    if [[ "$path" == "none" || "$path" == "-" ]]; then
+        VLLMCTL_MODELS_DIR=""; return
+    fi
+    path="${path/#\~/$HOME}"
+    [[ "$path" != /* ]] && path="$(cd "$SCRIPT_DIR" && realpath -m "$path")"
+    [[ ! -d "$path" ]] && mkdir -p "$path"
+    VLLMCTL_MODELS_DIR="$path"
+    export VLLMCTL_MODELS_DIR
+}
 
-# AMD ROCm settings
-HOST_VIDEO_GID=${HOST_VIDEO_GID:-video}
-HOST_RENDER_GID=${HOST_RENDER_GID:-render}
-EOF
+# ─── Container operations ────────────────────────────────────────────────────
+
+compose_file() {
+    if [[ "$GPU_VENDOR" == "rocm" ]]; then
+        echo "docker-compose.yml"
+    else
+        echo "docker-compose.cuda.yml"
+    fi
+}
+
+compose_cmd() {
+    local cmd="$COMPOSE_CMD -f $(compose_file)"
+    if [[ -n "${VLLMCTL_MODELS_DIR:-}" ]]; then
+        cmd+=" -f docker-compose.models.yml"
+    fi
+    echo "$cmd"
+}
+
+write_env_file() {
+    local env_file="${SCRIPT_DIR}/.env"
+    : > "$env_file"
+    echo "VLLMCTL_PORT=${VLLMCTL_PORT}" >> "$env_file"
+    echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}" >> "$env_file"
+    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
+        echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}" >> "$env_file"
+    fi
+    if [[ -n "$AMD_GFX_VERSION" ]]; then
+        echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}" >> "$env_file"
+    fi
+    if [[ -n "$HOST_VIDEO_GID" ]]; then
+        echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}" >> "$env_file"
+    fi
+    if [[ -n "$HOST_RENDER_GID" ]]; then
+        echo "HOST_RENDER_GID=${HOST_RENDER_GID}" >> "$env_file"
+    fi
+}
+
+container_install() {
+    write_env_file
+    $(compose_cmd) up -d --build
+}
+
+container_up() {
+    $(compose_cmd) up -d
+}
+
+container_down() {
+    $(compose_cmd) down
+}
+
+container_rebuild() {
+    container_down
+    $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
+    write_env_file
+    $(compose_cmd) build --no-cache
+    $(compose_cmd) up -d
+}
+
+container_quick_rebuild() {
+    container_down
+    write_env_file
+    $(compose_cmd) up -d --build
+}
+
+container_logs() {
+    $(compose_cmd) logs -f
+}
+
+# ─── Summary ─────────────────────────────────────────────────────────────────
+
+print_summary() {
+    echo ""
+    echo -e "${BOLD}════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  vllm-toolchest setup${NC}"
+    echo -e "${BOLD}════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${CYAN}GPU${NC}           ${GPU_INFO}"
+    echo -e "  ${CYAN}Backend${NC}       ${GPU_VENDOR}"
+    echo -e "  ${CYAN}Runtime${NC}       ${CONTAINER_VERSION}"
+    echo -e "  ${CYAN}Compose${NC}       ${COMPOSE_VERSION}"
+    echo -e "  ${CYAN}Distro${NC}        ${DISTRO_NAME}"
+    echo -e "  ${CYAN}Compose file${NC}  $(compose_file)"
+    echo -e "  ${CYAN}UI port${NC}       ${VLLMCTL_PORT}"
+    echo -e "  ${CYAN}Inference port${NC} ${VLLMCTL_INFERENCE_PORT}"
+    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
+        echo -e "  ${CYAN}Models dir${NC}    ${VLLMCTL_MODELS_DIR}"
+    fi
+    if [[ -n "$AMD_GFX_VERSION" ]]; then
+        echo -e "  ${CYAN}HSA Override${NC}  ${AMD_GFX_VERSION}"
+    fi
+    echo ""
+    if [[ ${#ACTIONS[@]} -gt 0 ]]; then
+        echo -e "  ${BOLD}Actions:${NC}"
+        local i=1
+        for action in "${ACTIONS[@]}"; do
+            echo "    ${i}. ${action}"
+            ((i++))
+        done
+        echo ""
+    fi
+    if [[ ${#PREREQS[@]} -gt 0 ]]; then
+        echo -e "  ${YELLOW}Note:${NC} Prerequisite steps require sudo"
+        echo ""
+    fi
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+usage() {
+    cat <<'USAGE'
+vllm-toolchest setup — auto-detect GPU + container runtime, build & run
+
+Usage: ./setup.sh <command>
+
+Lifecycle:
+  install     Detect everything, install prerequisites, build image, start
+  quick       Fast rebuild — reuse cached base layers, rebuild Go code only
+  rebuild     Full rebuild with no cache
+  uninstall   Stop and remove container + image
+
+Runtime:
+  up          Start a stopped container
+  down        Stop the container
+  logs        Follow container logs
+
+Info:
+  status      Show detected environment, then exit
+  detect      Print detected GPU backend (cuda/rocm) and exit
+  help        Show this help
+
+Environment:
+  GPU=cuda|rocm          Override GPU detection
+  RUNTIME=docker|podman  Override runtime detection
+USAGE
+}
+
+main() {
+    local command="${1:-help}"
+    cd "$SCRIPT_DIR"
+
+    case "$command" in
+        install|quick|rebuild|uninstall|up|down|logs|detect|status) ;;
+        -h|--help|help) usage; exit 0 ;;
+        *) err "Unknown command: $command"; usage; exit 1 ;;
+    esac
+
+    if [[ -n "${GPU:-}" ]]; then
+        GPU_VENDOR="$GPU"
+        GPU_INFO="(manually set: $GPU)"
+    else
+        detect_gpu
     fi
 
-    info "Generated .env file."
-}
+    if [[ "$command" == "detect" ]]; then
+        echo "$GPU_VENDOR"
+        exit 0
+    fi
 
-# ─── Select compose file ──────────────────────────────────────────
-select_compose() {
-    case "${GPU_TYPE}" in
-        cuda)
-            COMPOSE_FILE="docker-compose.cuda.yml"
+    detect_container_runtime
+    detect_distro
+    load_env_ports
+
+    case "$command" in
+        up)     container_up;   ok "vllm-toolchest started"; exit 0 ;;
+        down)   container_down; ok "vllm-toolchest stopped"; exit 0 ;;
+        logs)   container_logs; exit 0 ;;
+        quick)
+            log "Quick rebuild (cached)..."
+            container_quick_rebuild
+            ok "vllm-toolchest is running"
+            echo "  Web UI: http://localhost:${VLLMCTL_PORT}"
+            exit 0
             ;;
-        rocm)
-            COMPOSE_FILE="docker-compose.yml"
-            ;;
-        *)
-            warn "No GPU detected. Using CUDA compose file (will fail without GPU)."
-            COMPOSE_FILE="docker-compose.cuda.yml"
+        uninstall)
+            container_down
+            $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
+            ok "vllm-toolchest removed"
+            exit 0
             ;;
     esac
-    info "Using compose file: ${COMPOSE_FILE}"
-}
 
-# ─── Build and launch ─────────────────────────────────────────────
-build_and_launch() {
-    echo ""
-    echo -e "${BOLD}Building container image...${NC}"
-    echo "This may take a while (especially the first time)."
-    echo ""
+    # install, rebuild, status
+    check_prerequisites
+    print_summary
 
-    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" build
+    [[ "$command" == "status" ]] && exit 0
 
-    echo ""
-    echo -e "${BOLD}Starting vllm-toolchest...${NC}"
-    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+    prompt_ports
+    prompt_models_dir
 
-    # Wait for health check
-    echo ""
-    info "Waiting for vllm-toolchest to start..."
-    for i in $(seq 1 30); do
-        if curl -sf http://localhost:3000/healthz >/dev/null 2>&1; then
+    if [[ ${#PREREQS[@]} -gt 0 ]]; then
+        if prompt_confirm "Install prerequisites?"; then
             echo ""
-            echo -e "${GREEN}${BOLD}vllm-toolchest is running!${NC}"
+            install_prerequisites
             echo ""
-            echo "  Web UI:  http://localhost:3000"
-            echo "  API:     http://localhost:3000/v1"
-            echo ""
-            echo "  Logs:    ${COMPOSE_CMD} -f ${COMPOSE_FILE} logs -f"
-            echo "  Stop:    ${COMPOSE_CMD} -f ${COMPOSE_FILE} down"
-            echo ""
-            return
         fi
-        sleep 1
-        echo -n "."
-    done
+    fi
+
+    if ! prompt_confirm "Build and start vllm-toolchest?"; then
+        echo "Aborted."
+        exit 0
+    fi
 
     echo ""
-    warn "Health check timed out. Container may still be starting."
-    echo "Check logs: ${COMPOSE_CMD} -f ${COMPOSE_FILE} logs -f"
-}
-
-# ─── Main ─────────────────────────────────────────────────────────
-main() {
-    echo -e "${BOLD}vllm-toolchest setup${NC}"
-    echo ""
-
-    detect_gpu
-    detect_runtime
-
-    case "${GPU_TYPE}" in
-        cuda)  setup_nvidia ;;
-        rocm)  setup_amd ;;
+    case "$command" in
+        install) container_install ;;
+        rebuild) container_rebuild ;;
     esac
 
-    select_compose
-    generate_env
-    build_and_launch
+    echo ""
+    ok "vllm-toolchest is running"
+    echo ""
+    echo "  Web UI:     http://localhost:${VLLMCTL_PORT}"
+    echo "  Inference:  http://localhost:${VLLMCTL_INFERENCE_PORT}"
+    echo ""
+    echo "  Logs:       ./setup.sh logs"
+    echo "  Stop:       ./setup.sh down"
+    echo "  Quick rebuild: ./setup.sh quick"
+    echo ""
 }
 
 main "$@"

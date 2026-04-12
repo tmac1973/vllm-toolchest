@@ -71,6 +71,14 @@ shell:
 test:
 	go test ./...
 
+# ─── Dev: rebuild Go binary and inject into running container ───────
+# Compiles on host, copies into container, restarts the process.
+# Much faster than rebuilding the entire image.
+reload: build
+	docker cp bin/vllmctl vllm-toolchest:/usr/local/bin/vllmctl
+	docker restart vllm-toolchest
+	@echo "Binary reloaded. UI at http://localhost:3000"
+
 # ─── Cleanup ────────────────────────────────────────────────────────
 clean:
 	rm -rf bin/
