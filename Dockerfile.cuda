@@ -34,7 +34,9 @@ RUN if [ -n "${VLLM_VERSION}" ]; then \
     fi
 
 # ── Additional quantization support ───────────────────────────────
-RUN pip install --no-cache-dir bitsandbytes auto-gptq autoawq
+# vLLM bundles GPTQ/AWQ/Marlin kernel support natively.
+# bitsandbytes is needed separately for BnB 4-bit/8-bit quantization.
+RUN pip install --no-cache-dir bitsandbytes
 
 # Verify installation
 RUN python3 -c "import vllm; print(f'vLLM {vllm.__version__} installed')" && \
