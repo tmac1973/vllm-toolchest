@@ -291,7 +291,8 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 
 	// ── Advanced ──
 	p(`<fieldset><legend>Advanced</legend>`)
-	p(`<label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"%s> Trust remote code <small>(security risk)</small></label>`, checked(c.TrustRemoteCode))
+	p(`<label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"%s> Trust remote code</label>
+<small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Warning: executes arbitrary code from the model repo</small>`, checked(c.TrustRemoteCode))
 	p(`<label title="Raw CLI flags appended to vllm serve. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4"></label>`, c.ExtraFlags)
 	p(`</fieldset>`)
 
