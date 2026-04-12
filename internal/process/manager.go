@@ -404,19 +404,16 @@ func BuildArgs(cfg VLLMStartConfig) []string {
 }
 
 // BuildEnv constructs environment variables for the vLLM process.
+// ROCm-specific vars (VLLM_TARGET_DEVICE, TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL,
+// FLASH_ATTENTION_TRITON_AMD_ENABLE) are set in the container's Dockerfile and
+// inherited via os.Environ(), so they are not duplicated here.
 func BuildEnv(quantMethod string) []string {
 	env := []string{
-		// Force vLLM to use fork start method so child process logs are captured
+		// Force vLLM to use spawn start method so child process logs are captured
 		"VLLM_WORKER_MULTIPROC_METHOD=spawn",
 		// Disable log buffering so errors appear immediately
 		"PYTHONUNBUFFERED=1",
 	}
-	// ROCm-specific vars (harmless on CUDA)
-	env = append(env,
-		"VLLM_TARGET_DEVICE=rocm",
-		"TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1",
-		"FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE",
-	)
 	if quantMethod == "awq" {
 		env = append(env, "VLLM_USE_TRITON_AWQ=1")
 	}

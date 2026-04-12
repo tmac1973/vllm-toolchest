@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 func (s *Server) newProxyHandler() http.Handler {
@@ -26,6 +28,13 @@ func (s *Server) newProxyHandler() http.Handler {
 }
 
 func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
+	// When vLLM is running, proxy through to get actual model paths
+	if s.process.GetStatus().State == process.StateRunning {
+		s.newProxyHandler().ServeHTTP(w, r)
+		return
+	}
+
+	// Fallback: return registry list when vLLM is not running
 	list := s.registry.List()
 	type modelObj struct {
 		ID      string `json:"id"`
