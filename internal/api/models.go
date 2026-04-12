@@ -25,7 +25,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Fprint(w, `<table><thead><tr>
-    <th>Model</th><th>Quant</th><th>Size</th><th>VRAM</th><th>Tools</th><th>Enabled</th><th></th>
+    <th>Model</th><th>Quant</th><th>Size</th><th>VRAM</th><th>Tools</th><th></th>
   </tr></thead><tbody>`)
 
 	for _, m := range list {
@@ -34,11 +34,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		toolBadge := ""
 		if m.ToolUse.HasToolSupport {
 			toolBadge = fmt.Sprintf(`<ins title="%s">tool use</ins>`, m.ToolUse.ToolCallParser)
-		}
-
-		enabledChecked := ""
-		if m.Enabled {
-			enabledChecked = " checked"
 		}
 
 		orphanBadge := ""
@@ -59,11 +54,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
       <td>%s</td>
       <td>%s</td>
       <td>
-        <input type="checkbox" role="switch"%s
-               hx-patch="/api/models/toggle?id=%s"
-               hx-swap="none">
-      </td>
-      <td>
         <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
                 hx-delete="/api/models/delete?id=%s"
                 hx-confirm="Delete %s? This removes all model files."
@@ -71,7 +61,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
                 hx-swap="outerHTML">Delete</button>
       </td>
     </tr>
-    <tr id="config-%s-row"><td colspan="7"><div id="config-%s"></div></td></tr>`,
+    <tr id="config-%s-row"><td colspan="6"><div id="config-%s"></div></td></tr>`,
 			m.ID, sid,
 			m.DisplayName, orphanBadge,
 			m.ID,
@@ -79,8 +69,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			huggingface.FormatBytes(m.TotalSizeBytes),
 			vramLabel,
 			toolBadge,
-			enabledChecked,
-			m.ID,
 			m.ID, m.DisplayName,
 			sid, sid)
 	}
@@ -337,21 +325,6 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 	if isHTMX(r) {
 		respondHTML(w)
 		fmt.Fprint(w, `<p><ins>Configuration saved.</ins></p>`)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleToggleModel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
-	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.registry.SetEnabled(id, !m.Enabled); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

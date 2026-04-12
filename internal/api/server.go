@@ -130,7 +130,6 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/get", s.handleGetModel)
 			r.Get("/config-panel", s.handleModelConfigPanel)
 			r.Put("/config", s.handleUpdateModelConfig)
-			r.Patch("/toggle", s.handleToggleModel)
 			r.Delete("/delete", s.handleDeleteModel)
 		})
 		r.Route("/hf", func(r chi.Router) {

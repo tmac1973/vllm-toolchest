@@ -39,13 +39,11 @@ func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 
 	resp := response{Object: "list"}
 	for _, m := range list {
-		if m.Enabled {
-			resp.Data = append(resp.Data, modelObj{
-				ID:      m.ID,
-				Object:  "model",
-				OwnedBy: "vllm-toolchest",
-			})
-		}
+		resp.Data = append(resp.Data, modelObj{
+			ID:      m.ID,
+			Object:  "model",
+			OwnedBy: "vllm-toolchest",
+		})
 	}
 
 	respondJSON(w, resp)
