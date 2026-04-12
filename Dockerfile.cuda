@@ -23,17 +23,9 @@ RUN python3 -m venv /opt/vllm-venv
 ENV PATH=/opt/vllm-venv/bin:$PATH \
     VIRTUAL_ENV=/opt/vllm-venv
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging psutil ninja
 
-# ── PyTorch (CUDA) ─────────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu128
-
-# ── Flash Attention ────────────────────────────────────────────────
-RUN pip install --no-cache-dir flash-attn --no-build-isolation
-
-# ── vLLM ───────────────────────────────────────────────────────────
+# ── vLLM (installs PyTorch and flash-attn as dependencies) ────────
 ARG VLLM_VERSION=""
 RUN if [ -n "${VLLM_VERSION}" ]; then \
         pip install --no-cache-dir "vllm==${VLLM_VERSION}"; \
@@ -41,11 +33,8 @@ RUN if [ -n "${VLLM_VERSION}" ]; then \
         pip install --no-cache-dir vllm; \
     fi
 
-# ── bitsandbytes (CUDA native) ────────────────────────────────────
-RUN pip install --no-cache-dir bitsandbytes
-
 # ── Additional quantization support ───────────────────────────────
-RUN pip install --no-cache-dir auto-gptq autoawq
+RUN pip install --no-cache-dir bitsandbytes auto-gptq autoawq
 
 # Verify installation
 RUN python3 -c "import vllm; print(f'vLLM {vllm.__version__} installed')" && \
