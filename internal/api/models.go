@@ -198,7 +198,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	// Tensor parallel + GPU memory util
 	p(`<div class="grid">`)
 	p(`<label title="Split the model across multiple GPUs. TP must evenly divide the model's attention heads. Higher TP reduces per-GPU memory but adds inter-GPU communication overhead.">Tensor parallel <select name="tensor_parallel_size">`)
-	for _, tp := range []int{1, 2, 4, 6, 8} {
+	for _, tp := range []int{1, 2, 4, 8} {
 		label := fmt.Sprintf("%d GPU", tp)
 		if tp > 1 {
 			label += "s"
