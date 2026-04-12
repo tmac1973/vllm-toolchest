@@ -251,6 +251,11 @@ func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
 	// Set default vLLM config based on quant method
 	vllmCfg := defaultVLLMConfig(quantMeta, toolMeta, hfCfg)
 
+	// Auto-enable trust_remote_code for models that need it
+	if needsTrustRemoteCode(modelDir, hfCfg) {
+		vllmCfg.TrustRemoteCode = true
+	}
+
 	// Compute display name
 	displayName := filepath.Base(modelDir)
 	if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
@@ -362,6 +367,51 @@ func (r *Registry) backfillMetadata() {
 			m.VRAMEstimate = EstimateVRAM(m)
 		}
 	}
+}
+
+// needsTrustRemoteCode checks if a model requires --trust-remote-code.
+func needsTrustRemoteCode(modelDir string, hfCfg HFConfig) bool {
+	// Models with custom tokenizer classes need trust_remote_code
+	data, err := os.ReadFile(filepath.Join(modelDir, "tokenizer_config.json"))
+	if err == nil {
+		s := string(data)
+		// Custom tokenizer backends not in standard transformers
+		if strings.Contains(s, "TokenizersBackend") ||
+			strings.Contains(s, "AutoTokenizer") == false && strings.Contains(s, "tokenizer_class") {
+			// Check if the tokenizer_class is non-standard
+			var tc struct {
+				TokenizerClass string `json:"tokenizer_class"`
+			}
+			if json.Unmarshal(data, &tc) == nil && tc.TokenizerClass != "" {
+				standardClasses := map[string]bool{
+					"PreTrainedTokenizerFast": true,
+					"GPT2Tokenizer":          true,
+					"GPT2TokenizerFast":      true,
+					"LlamaTokenizer":         true,
+					"LlamaTokenizerFast":     true,
+					"T5Tokenizer":            true,
+					"T5TokenizerFast":        true,
+				}
+				if !standardClasses[tc.TokenizerClass] {
+					return true
+				}
+			}
+		}
+	}
+
+	// Known model families that need it
+	for _, arch := range hfCfg.Architectures {
+		lower := strings.ToLower(arch)
+		if strings.Contains(lower, "qwen") ||
+			strings.Contains(lower, "internlm") ||
+			strings.Contains(lower, "yi") ||
+			strings.Contains(lower, "chatglm") ||
+			strings.Contains(lower, "baichuan") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
