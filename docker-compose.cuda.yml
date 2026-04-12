@@ -1,0 +1,30 @@
+services:
+  vllm-toolchest:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+      args:
+        VLLM_VERSION: "${VLLM_VERSION:-}"
+    container_name: vllm-toolchest
+    ports:
+      - "${VLLMCTL_PORT:-3000}:3000"
+      - "${VLLMCTL_INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - vllmctl-data:/data:z
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  vllmctl-data:
+    name: vllmctl-data
+    driver: local

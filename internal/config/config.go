@@ -3,45 +3,71 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	ListenAddr         string  `yaml:"listen_addr"`
-	DataDir            string  `yaml:"data_dir"`
-	VLLMPort           int     `yaml:"vllm_port"`
-	VLLMHost           string  `yaml:"vllm_host"`
-	ExternalURL        string  `yaml:"external_url"`
-	HFToken            string  `yaml:"hf_token"`
-	APIKey             string  `yaml:"api_key"`
-	LogLevel           string  `yaml:"log_level"`
-	ToolUseEnabled     bool    `yaml:"tool_use_enabled"`
-	DefaultToolParser  string  `yaml:"default_tool_parser"`
-	DefaultQuantFormat string  `yaml:"default_quant_format"`
+	// Server
+	ListenAddr string `yaml:"listen_addr"`
+	DataDir    string `yaml:"data_dir"`
+	LogLevel   string `yaml:"log_level"`
+
+	// API
+	APIKey      string `yaml:"api_key"`
+	ExternalURL string `yaml:"external_url"`
+
+	// HuggingFace
+	HFToken string `yaml:"hf_token"`
+
+	// vLLM connection
+	VLLMPort int    `yaml:"vllm_port"`
+	VLLMHost string `yaml:"vllm_host"`
+
+	// vLLM defaults
+	GPUMemoryUtil      float64 `yaml:"gpu_memory_util"`
 	MaxModelLen        int     `yaml:"max_model_len"`
 	TensorParallelSize int     `yaml:"tensor_parallel_size"`
-	GPUMemoryUtil      float64 `yaml:"gpu_memory_util"`
 	EnforceEager       bool    `yaml:"enforce_eager"`
+	EnablePrefixCache  bool    `yaml:"enable_prefix_cache"`
+	MaxNumSeqs         int     `yaml:"max_num_seqs"`
+	DefaultDtype       string  `yaml:"default_dtype"`
+	AttentionBackend   string  `yaml:"attention_backend"`
+
+	// Tool use
+	ToolUseEnabled    bool   `yaml:"tool_use_enabled"`
+	DefaultToolParser string `yaml:"default_tool_parser"`
+
+	// Quantization
+	DefaultQuantFormat string `yaml:"default_quant_format"`
+	PreferMarlin       bool   `yaml:"prefer_marlin"`
+	DefaultKVCacheDtype string `yaml:"default_kv_cache_dtype"`
+
+	// Process management
+	AutoRestart      bool `yaml:"auto_restart"`
+	StartupTimeoutS  int  `yaml:"startup_timeout_s"`
+	ShutdownTimeoutS int  `yaml:"shutdown_timeout_s"`
+
+	// Theme
+	Theme string `yaml:"theme"`
+
+	// Model storage
+	ModelDir string `yaml:"model_dir"`
+
+	// Internal: path this config was loaded from (not serialized)
+	configPath string `yaml:"-"`
 }
 
 func Load(path string) (*Config, error) {
-	cfg := &Config{
-		ListenAddr:         ":3000",
-		DataDir:            "/data",
-		VLLMPort:           8000,
-		VLLMHost:           "127.0.0.1",
-		ExternalURL:        "http://localhost:3000",
-		LogLevel:           "info",
-		ToolUseEnabled:     true,
-		DefaultToolParser:  "hermes",
-		TensorParallelSize: 1,
-		GPUMemoryUtil:      0.90,
-	}
+	cfg := defaults()
+	cfg.configPath = path
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			applyEnvOverrides(cfg)
 			return cfg, nil
 		}
 		return nil, err
@@ -50,10 +76,73 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+
+	applyEnvOverrides(cfg)
 	return cfg, nil
 }
 
+func defaults() *Config {
+	return &Config{
+		ListenAddr:         ":3000",
+		DataDir:            "/data",
+		LogLevel:           "info",
+		ExternalURL:        "http://localhost:3000",
+		VLLMPort:           8000,
+		VLLMHost:           "127.0.0.1",
+		GPUMemoryUtil:      0.90,
+		TensorParallelSize: 1,
+		MaxNumSeqs:         16,
+		DefaultDtype:       "auto",
+		AttentionBackend:   "TRITON_FLASH_ATTN",
+		ToolUseEnabled:     true,
+		DefaultToolParser:  "hermes",
+		PreferMarlin:       true,
+		DefaultKVCacheDtype: "auto",
+		AutoRestart:        true,
+		StartupTimeoutS:    300,
+		ShutdownTimeoutS:   30,
+		EnablePrefixCache:  true,
+		Theme:              "dark",
+	}
+}
+
+func applyEnvOverrides(cfg *Config) {
+	envStr(&cfg.ListenAddr, "VLLMCTL_LISTEN_ADDR")
+	envStr(&cfg.DataDir, "VLLMCTL_DATA_DIR")
+	envStr(&cfg.LogLevel, "VLLMCTL_LOG_LEVEL")
+	envStr(&cfg.APIKey, "VLLMCTL_API_KEY")
+	envStr(&cfg.ExternalURL, "VLLMCTL_EXTERNAL_URL")
+
+	// HF token: check both our prefix and the standard HF_TOKEN
+	envStr(&cfg.HFToken, "VLLMCTL_HF_TOKEN")
+	envStr(&cfg.HFToken, "HF_TOKEN")
+
+	envInt(&cfg.VLLMPort, "VLLMCTL_VLLM_PORT")
+	envStr(&cfg.VLLMHost, "VLLMCTL_VLLM_HOST")
+	envFloat(&cfg.GPUMemoryUtil, "VLLMCTL_GPU_MEMORY_UTIL")
+	envInt(&cfg.MaxModelLen, "VLLMCTL_MAX_MODEL_LEN")
+	envInt(&cfg.TensorParallelSize, "VLLMCTL_TENSOR_PARALLEL_SIZE")
+	envBool(&cfg.EnforceEager, "VLLMCTL_ENFORCE_EAGER")
+	envBool(&cfg.EnablePrefixCache, "VLLMCTL_ENABLE_PREFIX_CACHE")
+	envInt(&cfg.MaxNumSeqs, "VLLMCTL_MAX_NUM_SEQS")
+	envStr(&cfg.DefaultDtype, "VLLMCTL_DEFAULT_DTYPE")
+	envStr(&cfg.AttentionBackend, "VLLMCTL_ATTENTION_BACKEND")
+	envBool(&cfg.ToolUseEnabled, "VLLMCTL_TOOL_USE_ENABLED")
+	envStr(&cfg.DefaultToolParser, "VLLMCTL_TOOL_CALL_PARSER")
+	envStr(&cfg.DefaultQuantFormat, "VLLMCTL_DEFAULT_QUANT_FORMAT")
+	envBool(&cfg.PreferMarlin, "VLLMCTL_PREFER_MARLIN")
+	envStr(&cfg.DefaultKVCacheDtype, "VLLMCTL_DEFAULT_KV_CACHE_DTYPE")
+	envBool(&cfg.AutoRestart, "VLLMCTL_AUTO_RESTART")
+	envInt(&cfg.StartupTimeoutS, "VLLMCTL_STARTUP_TIMEOUT_S")
+	envInt(&cfg.ShutdownTimeoutS, "VLLMCTL_SHUTDOWN_TIMEOUT_S")
+	envStr(&cfg.Theme, "VLLMCTL_THEME")
+	envStr(&cfg.ModelDir, "VLLMCTL_MODEL_DIR")
+}
+
 func (c *Config) Save(path string) error {
+	if path == "" {
+		path = c.configPath
+	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
@@ -63,4 +152,36 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func (c *Config) ConfigPath() string {
+	return c.configPath
+}
+
+func envStr(dst *string, key string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = v
+	}
+}
+
+func envInt(dst *int, key string) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*dst = n
+		}
+	}
+}
+
+func envFloat(dst *float64, key string) {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			*dst = f
+		}
+	}
+}
+
+func envBool(dst *bool, key string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = strings.EqualFold(v, "true") || v == "1"
+	}
 }

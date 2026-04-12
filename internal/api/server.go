@@ -154,7 +154,9 @@ func (s *Server) buildRouter() chi.Router {
 			// Phase 6
 		})
 		r.Route("/settings", func(r chi.Router) {
-			// Phase 7
+			r.Get("/", s.handleGetSettings)
+			r.Put("/", s.handleUpdateSettings)
+			r.Post("/test-connection", s.handleTestConnection)
 		})
 		r.Route("/monitor", func(r chi.Router) {
 			r.Get("/", s.handleMonitorStatus)
@@ -198,25 +200,43 @@ func (s *Server) handleBenchmarksPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
-	proxyEndpoint := strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1"
+	c := s.cfg
 	data := struct {
 		pageData
-		ProxyEndpoint string
-		VLLMPort      int
-		HasAPIKey     bool
-		HasHFToken    bool
-		HasExtURL     bool
-		ExternalURL   string
-		DataDir       string
+		ExternalURL        string
+		VLLMPort           int
+		HasAPIKey          bool
+		HasHFToken         bool
+		DefaultDtype       string
+		GPUMemoryUtil      float64
+		MaxNumSeqs         int
+		AttentionBackend   string
+		EnforceEager       bool
+		EnablePrefixCache  bool
+		ToolUseEnabled     bool
+		DefaultToolParser  string
+		PreferMarlin       bool
+		DefaultKVCacheDtype string
+		AutoRestart        bool
+		Theme              string
 	}{
-		pageData:      pageData{Title: "Settings", Nav: "settings"},
-		ProxyEndpoint: proxyEndpoint,
-		VLLMPort:      s.cfg.VLLMPort,
-		HasAPIKey:     s.cfg.APIKey != "",
-		HasHFToken:    s.cfg.HFToken != "",
-		HasExtURL:     s.cfg.ExternalURL != "",
-		ExternalURL:   s.cfg.ExternalURL,
-		DataDir:       s.cfg.DataDir,
+		pageData:           pageData{Title: "Settings", Nav: "settings"},
+		ExternalURL:        c.ExternalURL,
+		VLLMPort:           c.VLLMPort,
+		HasAPIKey:          c.APIKey != "",
+		HasHFToken:         c.HFToken != "",
+		DefaultDtype:       c.DefaultDtype,
+		GPUMemoryUtil:      c.GPUMemoryUtil,
+		MaxNumSeqs:         c.MaxNumSeqs,
+		AttentionBackend:   c.AttentionBackend,
+		EnforceEager:       c.EnforceEager,
+		EnablePrefixCache:  c.EnablePrefixCache,
+		ToolUseEnabled:     c.ToolUseEnabled,
+		DefaultToolParser:  c.DefaultToolParser,
+		PreferMarlin:       c.PreferMarlin,
+		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
+		AutoRestart:        c.AutoRestart,
+		Theme:              c.Theme,
 	}
 	s.render(w, "settings.html", data)
 }

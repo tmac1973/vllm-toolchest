@@ -1,29 +1,133 @@
 {{define "content"}}
 <h1>Settings</h1>
 
+<form hx-put="/api/settings" hx-target="#save-result" hx-swap="innerHTML">
+
 <article>
-    <header>Connection</header>
+    <header>API &amp; Connection</header>
     <div class="grid">
-        <div>
-            <label>API Endpoint</label>
-            <pre style="user-select:all;">{{.ProxyEndpoint}}</pre>
-        </div>
-        <div>
-            <label>vLLM Port</label>
-            <p>{{.VLLMPort}}</p>
-        </div>
+        <label>External URL
+            <input type="text" name="external_url" value="{{.ExternalURL}}" placeholder="http://localhost:3000">
+        </label>
+        <label>vLLM Port
+            <input type="number" name="vllm_port" value="{{.VLLMPort}}" readonly>
+            <small>Set via docker-compose</small>
+        </label>
     </div>
     <div class="grid">
-        <div>
-            <label>API Key</label>
-            <p>{{if .HasAPIKey}}<ins>Configured</ins>{{else}}Not set{{end}}</p>
-        </div>
-        <div>
-            <label>HuggingFace Token</label>
-            <p>{{if .HasHFToken}}<ins>Configured</ins>{{else}}Not set{{end}}</p>
-        </div>
+        <label>API Key <small>(protects /v1/* endpoints)</small>
+            <input type="password" name="api_key" value="{{if .HasAPIKey}}••••••••{{end}}" placeholder="Leave blank for no auth">
+        </label>
+        <label>HuggingFace Token <small>(for gated models)</small>
+            <input type="password" name="hf_token" value="{{if .HasHFToken}}••••••••{{end}}" placeholder="hf_...">
+        </label>
+    </div>
+    <div style="display:flex;gap:0.5rem;">
+        <button type="button" class="secondary outline" hx-post="/api/settings/test-connection" hx-target="#conn-result" hx-swap="innerHTML">Test Connection</button>
+        <span id="conn-result"></span>
     </div>
 </article>
 
-<p>Full settings management will be available in a future update.</p>
+<article>
+    <header>vLLM Defaults</header>
+    <p><small>Applied to new models. Existing model configs are not changed.</small></p>
+    <div class="grid">
+        <label>Default dtype
+            <select name="default_dtype">
+                <option value="auto"{{if eq .DefaultDtype "auto"}} selected{{end}}>auto</option>
+                <option value="float16"{{if eq .DefaultDtype "float16"}} selected{{end}}>float16</option>
+                <option value="bfloat16"{{if eq .DefaultDtype "bfloat16"}} selected{{end}}>bfloat16</option>
+            </select>
+        </label>
+        <label>GPU memory utilization
+            <input type="number" name="gpu_memory_util" value="{{printf "%.2f" .GPUMemoryUtil}}" min="0.1" max="0.99" step="0.01">
+        </label>
+    </div>
+    <div class="grid">
+        <label>Max concurrent sequences
+            <input type="number" name="max_num_seqs" value="{{.MaxNumSeqs}}" min="1" max="256">
+        </label>
+        <label>Attention backend
+            <select name="attention_backend">
+                <option value="TRITON_FLASH_ATTN"{{if eq .AttentionBackend "TRITON_FLASH_ATTN"}} selected{{end}}>Triton Flash Attention</option>
+                <option value="FLASH_ATTN"{{if eq .AttentionBackend "FLASH_ATTN"}} selected{{end}}>Flash Attention</option>
+                <option value="XFORMERS"{{if eq .AttentionBackend "XFORMERS"}} selected{{end}}>xFormers</option>
+            </select>
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            <input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}>
+            Enforce eager mode <small>(disable graph compilation)</small>
+        </label>
+        <label>
+            <input type="checkbox" name="enable_prefix_cache" role="switch"{{if .EnablePrefixCache}} checked{{end}}>
+            Enable prefix caching
+        </label>
+    </div>
+</article>
+
+<article>
+    <header>Tool Use / Function Calling</header>
+    <div class="grid">
+        <label>
+            <input type="checkbox" name="tool_use_enabled" role="switch"{{if .ToolUseEnabled}} checked{{end}}>
+            Enable tool use by default
+        </label>
+        <label>Default tool call parser
+            <select name="default_tool_parser">
+                <option value=""{{if eq .DefaultToolParser ""}} selected{{end}}>(none)</option>
+                <option value="hermes"{{if eq .DefaultToolParser "hermes"}} selected{{end}}>hermes</option>
+                <option value="llama3_json"{{if eq .DefaultToolParser "llama3_json"}} selected{{end}}>llama3_json</option>
+                <option value="mistral"{{if eq .DefaultToolParser "mistral"}} selected{{end}}>mistral</option>
+                <option value="granite"{{if eq .DefaultToolParser "granite"}} selected{{end}}>granite</option>
+                <option value="internlm"{{if eq .DefaultToolParser "internlm"}} selected{{end}}>internlm</option>
+                <option value="jamba"{{if eq .DefaultToolParser "jamba"}} selected{{end}}>jamba</option>
+                <option value="pythonic"{{if eq .DefaultToolParser "pythonic"}} selected{{end}}>pythonic</option>
+            </select>
+        </label>
+    </div>
+</article>
+
+<article>
+    <header>Quantization</header>
+    <div class="grid">
+        <label>
+            <input type="checkbox" name="prefer_marlin" role="switch"{{if .PreferMarlin}} checked{{end}}>
+            Prefer Marlin kernels <small>(auto-upgrade compatible GPTQ/AWQ)</small>
+        </label>
+        <label>Default KV cache dtype
+            <select name="default_kv_cache_dtype">
+                <option value="auto"{{if eq .DefaultKVCacheDtype "auto"}} selected{{end}}>auto (FP16)</option>
+                <option value="fp8"{{if eq .DefaultKVCacheDtype "fp8"}} selected{{end}}>FP8</option>
+                <option value="fp8_e4m3"{{if eq .DefaultKVCacheDtype "fp8_e4m3"}} selected{{end}}>FP8 E4M3</option>
+                <option value="fp8_e5m2"{{if eq .DefaultKVCacheDtype "fp8_e5m2"}} selected{{end}}>FP8 E5M2</option>
+            </select>
+        </label>
+    </div>
+</article>
+
+<article>
+    <header>Process Management</header>
+    <label>
+        <input type="checkbox" name="auto_restart" role="switch"{{if .AutoRestart}} checked{{end}}>
+        Auto-restart vLLM on crash
+    </label>
+</article>
+
+<article>
+    <header>Theme</header>
+    <select name="theme">
+        <option value="dark"{{if eq .Theme "dark"}} selected{{end}}>Dark</option>
+        <option value="light"{{if eq .Theme "light"}} selected{{end}}>Light</option>
+        <option value="terminal-green"{{if eq .Theme "terminal-green"}} selected{{end}}>Terminal Green</option>
+        <option value="terminal-amber"{{if eq .Theme "terminal-amber"}} selected{{end}}>Terminal Amber</option>
+        <option value="cyberpunk"{{if eq .Theme "cyberpunk"}} selected{{end}}>Cyberpunk</option>
+    </select>
+</article>
+
+<button type="submit">Save Settings</button>
+<span id="save-result" style="margin-left:0.5rem;"></span>
+
+</form>
 {{end}}
