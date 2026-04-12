@@ -183,7 +183,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `</tbody></table></details>`)
 
 	// Download button
-	sid := strings.ReplaceAll(detail.ID, "/", "--")
+	sid := safeID(detail.ID)
 	disabled := ""
 	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		disabled = ` disabled`

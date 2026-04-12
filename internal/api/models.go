@@ -414,7 +414,13 @@ func vramLabelHTML(est models.VRAMEstimate) string {
 }
 
 func safeID(id string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(id, "/", "--"), ".", "_")
+	r := strings.NewReplacer(
+		"/", "--",
+		".", "-",
+		":", "-",
+		" ", "-",
+	)
+	return r.Replace(id)
 }
 
 func checked(v bool) string {
