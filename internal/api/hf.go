@@ -56,35 +56,28 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;">
-  <header style="padding:0.5rem 1rem;cursor:pointer;"
-          hx-get="/api/hf/model?id=%s"
-          hx-target="#detail-%s"
-          hx-swap="innerHTML">
+  <header style="padding:0.5rem 1rem;">
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
         <strong>%s</strong>%s
         <br><small style="opacity:0.7;">%s &middot; %s downloads &middot; %s likes</small>
       </div>
-      <div>`,
-			primary.ID, sid,
+      <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">`,
 			primary.ID, gatedBadge,
 			primary.Author,
 			formatCount(primary.Downloads), formatCount(primary.Likes))
 
-		// Variant badges
-		seen := map[string]bool{}
+		// Variant badges -- each is clickable and loads that specific variant
 		for _, v := range g.Variants {
 			label := v.QuantFormat
 			if label == "" {
 				label = "FP16"
 			}
-			if seen[label] {
-				continue
-			}
-			seen[label] = true
 			color := quantBadgeColor(label)
-			fmt.Fprintf(w, `<span style="display:inline-block;padding:0.1rem 0.4rem;margin:0.05rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;">%s</span>`,
-				color, label)
+			vSid := safeID(v.ID)
+			fmt.Fprintf(w, `<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#detail-%s" hx-swap="innerHTML" title="%s" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;text-decoration:none;cursor:pointer;">%s</a>`,
+				v.ID, sid, v.ID, color, label)
+			_ = vSid
 		}
 
 		fmt.Fprintf(w, `</div>
@@ -92,6 +85,10 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
   </header>
   <div id="detail-%s" style="padding:0 1rem;"></div>
 </article>`, sid)
+
+		if len(g.Variants) == 0 {
+			continue
+		}
 	}
 }
 
