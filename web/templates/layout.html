@@ -9,7 +9,11 @@
     <script src="/static/htmx.min.js"></script>
     <script src="/static/htmx-sse.js"></script>
     <script src="/static/log-panel.js" defer></script>
-    <meta name="htmx-config" content='{"historyCacheSize": 0}'>
+    <meta name="htmx-config" content='{"historyCacheSize": 0, "refreshOnHistoryMiss": true}'>
+    <script>
+    // Clear stale htmx history cache from localStorage
+    try { localStorage.removeItem('htmx-history-cache'); } catch(e) {}
+    </script>
     <style>
         body { display: flex; min-height: 100vh; margin: 0; }
         nav.sidebar {
