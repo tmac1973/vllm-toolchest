@@ -105,21 +105,23 @@ func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult,
 	return results, nil
 }
 
-// GroupResults groups search results by normalized base model name.
+// GroupResults groups search results by author + normalized base model name.
+// Only repos from the same author are grouped together, so third-party
+// repacks don't appear as variants of the original model.
 func GroupResults(results []ModelSearchResult) []ModelGroup {
 	groups := make(map[string]*ModelGroup)
 	var order []string
 
 	for _, r := range results {
-		base := normalizeBaseName(r.ID)
-		if g, ok := groups[base]; ok {
+		key := r.Author + "/" + normalizeBaseName(r.ID)
+		if g, ok := groups[key]; ok {
 			g.Variants = append(g.Variants, r)
 		} else {
-			groups[base] = &ModelGroup{
-				BaseName: base,
+			groups[key] = &ModelGroup{
+				BaseName: key,
 				Variants: []ModelSearchResult{r},
 			}
-			order = append(order, base)
+			order = append(order, key)
 		}
 	}
 
