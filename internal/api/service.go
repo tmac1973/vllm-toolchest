@@ -45,6 +45,11 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `<p><small><del>%s</del></small></p>`, status.Error)
 	}
 	fmt.Fprint(w, `</div>`)
+
+	// Clear the stale action result message via OOB swap when state settles
+	if status.State != process.StateStarting && status.State != process.StateStopping {
+		fmt.Fprint(w, `<div id="service-action-result" hx-swap-oob="innerHTML"></div>`)
+	}
 }
 
 func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
