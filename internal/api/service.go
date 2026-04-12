@@ -185,6 +185,11 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, map[string]string{"status": "restarting"})
 }
 
+func (s *Server) handleClearServiceLogs(w http.ResponseWriter, r *http.Request) {
+	s.process.ClearLogs()
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	lines := s.process.RecentLogs(200)
 

@@ -146,6 +146,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/stop", s.handleServiceStop)
 			r.Post("/restart", s.handleServiceRestart)
 			r.Get("/logs", s.handleServiceLogs)
+			r.Delete("/logs", s.handleClearServiceLogs)
 			r.Get("/log-stream", s.handleServiceLogStream)
 			r.Get("/health", s.handleServiceHealth)
 		})

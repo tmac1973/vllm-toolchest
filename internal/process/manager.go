@@ -205,6 +205,13 @@ func (m *Manager) Restart(modelID, modelPath string, args []string, env []string
 	return m.Start(modelID, modelPath, args, env)
 }
 
+// ClearLogs empties the log buffer.
+func (m *Manager) ClearLogs() {
+	m.logMu.Lock()
+	m.logBuf = m.logBuf[:0]
+	m.logMu.Unlock()
+}
+
 // RecentLogs returns the most recent log lines.
 func (m *Manager) RecentLogs(n int) []string {
 	m.logMu.Lock()
