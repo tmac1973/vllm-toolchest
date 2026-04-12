@@ -1,12 +1,10 @@
 # ── Stage 1: Go builder ─────────────────────────────────────────────
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.26-bookworm AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN go mod download
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
+RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 
 # ── Stage 2: vLLM runtime (Fedora 43 + TheRock ROCm) ───────────────
 FROM registry.fedoraproject.org/fedora:43
