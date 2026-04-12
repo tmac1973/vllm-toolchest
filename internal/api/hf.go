@@ -33,6 +33,22 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply quant filter if specified
+	quantFilter := strings.ToUpper(r.URL.Query().Get("quant"))
+	if quantFilter != "" {
+		var filtered []huggingface.ModelSearchResult
+		for _, res := range results {
+			format := strings.ToUpper(res.QuantFormat)
+			if format == "" {
+				format = "FP16"
+			}
+			if format == quantFilter || (quantFilter == "FP16" && format == "") {
+				filtered = append(filtered, res)
+			}
+		}
+		results = filtered
+	}
+
 	if !isHTMX(r) {
 		respondJSON(w, results)
 		return
@@ -42,7 +58,11 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 	respondHTML(w)
 
 	if len(groups) == 0 {
-		fmt.Fprint(w, `<p>No models found.</p>`)
+		if quantFilter != "" {
+			fmt.Fprintf(w, `<p>No %s models found. Try a different format or broaden your search.</p>`, quantFilter)
+		} else {
+			fmt.Fprint(w, `<p>No models found.</p>`)
+		}
 		return
 	}
 
