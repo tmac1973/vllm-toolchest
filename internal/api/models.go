@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +293,45 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	p(`<fieldset><legend>Advanced</legend>`)
 	p(`<label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"%s> Trust remote code <small>(security risk)</small></label>`, checked(c.TrustRemoteCode))
 	p(`<label title="Raw CLI flags appended to vllm serve. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4"></label>`, c.ExtraFlags)
-	p(`</fieldset></form>`)
+	p(`</fieldset>`)
+
+	// ── Effective flags (read-only) ──
+	effParser := c.ToolCallParser
+	if effParser == "" && c.EnableAutoToolChoice {
+		effParser = m.ToolUse.ToolCallParser
+	}
+	effCfg := process.VLLMStartConfig{
+		Dtype:                c.Dtype,
+		MaxModelLen:          modelLen,
+		TensorParallelSize:   c.TensorParallelSize,
+		GPUMemoryUtilization: c.GPUMemoryUtilization,
+		EnforceEager:         c.EnforceEager,
+		TrustRemoteCode:      c.TrustRemoteCode,
+		MaxNumSeqs:           c.MaxNumSeqs,
+		Quantization:         c.Quantization,
+		LoadFormat:           c.LoadFormat,
+		EnablePrefixCaching:  c.EnablePrefixCaching,
+		KVCacheDtype:         c.KVCacheDtype,
+		EnableChunkedPrefill: c.EnableChunkedPrefill,
+		MaxNumBatchedTokens:  c.MaxNumBatchedTokens,
+		EnableAutoToolChoice: c.EnableAutoToolChoice,
+		ToolCallParser:       effParser,
+		Tokenizer:            c.Tokenizer,
+		ChatTemplate:         c.ChatTemplate,
+		ExtraFlags:           c.ExtraFlags,
+	}
+	args := process.BuildArgs(effCfg)
+	modelPath := process.ResolveModelPath(m.LocalPath)
+	cmdLine := "vllm serve " + modelPath + " --host 0.0.0.0 --port 8000"
+	for _, a := range args {
+		cmdLine += " " + a
+	}
+
+	p(`<fieldset><legend>Effective Command</legend>`)
+	p(`<pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">%s</pre>`, cmdLine)
+	p(`</fieldset>`)
+
+	p(`</form>`)
 
 	// ── Quant help modal ──
 	p(`<dialog id="quant-help-%s"><article style="max-width:600px;">`, sid)
