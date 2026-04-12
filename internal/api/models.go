@@ -118,7 +118,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> %.1f GB weights + %.1f GB overhead = <strong>%.1f GB</strong> &mdash; %s
   </div>
-  <form hx-put="/api/models/config?id=%s" hx-trigger="change" hx-target="#save-status-%s" hx-swap="innerHTML" hx-include="closest form">`,
+  <form hx-put="/api/models/config?id=%s" hx-trigger="change" hx-target="#config-%s" hx-swap="innerHTML" hx-include="closest form">`,
 		m.DisplayName, sid,
 		m.VRAMEstimate.WeightMemoryGB, m.VRAMEstimate.ActivationGB, m.VRAMEstimate.TotalSingleGPUGB, m.VRAMEstimate.FitLabel,
 		m.ID, sid)
@@ -413,8 +413,8 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 	s.registry.Register(m)
 
 	if isHTMX(r) {
-		respondHTML(w)
-		fmt.Fprint(w, `<small style="color:var(--pico-ins-color);">Saved</small>`)
+		// Re-render the full config panel so effective command updates
+		s.handleModelConfigPanel(w, r)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
