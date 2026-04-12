@@ -113,7 +113,14 @@ func GroupResults(results []ModelSearchResult) []ModelGroup {
 	var order []string
 
 	for _, r := range results {
-		key := r.Author + "/" + normalizeBaseName(r.ID)
+		author := r.Author
+		if author == "" {
+			// Extract author from model ID (e.g., "Qwen/Qwen3.5-9B" -> "Qwen")
+			if parts := strings.SplitN(r.ID, "/", 2); len(parts) == 2 {
+				author = parts[0]
+			}
+		}
+		key := author + "/" + normalizeBaseName(r.ID)
 		if g, ok := groups[key]; ok {
 			g.Variants = append(g.Variants, r)
 		} else {
