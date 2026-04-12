@@ -188,21 +188,25 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		disabled = ` disabled`
 	}
-	fmt.Fprintf(w, `<form hx-post="/api/hf/download" hx-target="#dl-%s" hx-swap="innerHTML" style="margin:0;">
-  <input type="hidden" name="model_id" value="%s">
-  <button type="submit" style="margin:0;"%s>Download (%s)</button>
-</form>
-<div id="dl-%s"></div>`,
-		sid, detail.ID, disabled,
-		huggingface.FormatBytes(detail.TotalSize), sid)
+	fmt.Fprintf(w, `<div id="dl-%s">
+  <button hx-post="/api/hf/download?model_id=%s"
+          hx-target="#dl-%s"
+          hx-swap="innerHTML"
+          style="margin:0;"%s>Download (%s)</button>
+</div>`,
+		sid,
+		detail.ID, sid, disabled,
+		huggingface.FormatBytes(detail.TotalSize))
 }
 
 func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	modelID := r.FormValue("model_id")
-
+	// Accept model_id from query param, form body, or JSON body
+	modelID := r.URL.Query().Get("model_id")
 	if modelID == "" {
-		// Try JSON body
+		r.ParseForm()
+		modelID = r.FormValue("model_id")
+	}
+	if modelID == "" {
 		var req struct {
 			ModelID string `json:"model_id"`
 		}
@@ -278,7 +282,8 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		// Return a polling div that checks progress every 2s
+		// Show inline progress polling + trigger the active-downloads section to refresh
+		w.Header().Set("HX-Trigger", "download-started")
 		fmt.Fprintf(w, `<div hx-get="/api/hf/download/%s/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
   <progress value="0" max="100" style="margin:0;"></progress>
   <small>Starting download...</small>
