@@ -326,6 +326,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	tmpl, ok := s.pages[name]
 	if !ok {
 		slog.Error("template not found", "name", name)
