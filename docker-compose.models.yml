@@ -1,0 +1,7 @@
+# Override to bind-mount a host directory for model storage.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.models.yml up -d
+services:
+  vllm-toolchest:
+    volumes:
+      - vllmctl-data:/data:z
+      - ${VLLMCTL_MODELS_DIR:-./.models}:/data/models:z

@@ -1,0 +1,29 @@
+{{define "content"}}
+<h1>Settings</h1>
+
+<article>
+    <header>Connection</header>
+    <div class="grid">
+        <div>
+            <label>API Endpoint</label>
+            <pre style="user-select:all;">{{.ProxyEndpoint}}</pre>
+        </div>
+        <div>
+            <label>vLLM Port</label>
+            <p>{{.VLLMPort}}</p>
+        </div>
+    </div>
+    <div class="grid">
+        <div>
+            <label>API Key</label>
+            <p>{{if .HasAPIKey}}<ins>Configured</ins>{{else}}Not set{{end}}</p>
+        </div>
+        <div>
+            <label>HuggingFace Token</label>
+            <p>{{if .HasHFToken}}<ins>Configured</ins>{{else}}Not set{{end}}</p>
+        </div>
+    </div>
+</article>
+
+<p>Full settings management will be available in a future update.</p>
+{{end}}

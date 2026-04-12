@@ -1,0 +1,36 @@
+services:
+  vllm-toolchest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        THEROCK_DATE: "${THEROCK_DATE:-2026-04-10}"
+        VLLM_VERSION: "${VLLM_VERSION:-main}"
+    container_name: vllm-toolchest
+    ports:
+      - "${VLLMCTL_PORT:-3000}:3000"
+      - "${VLLMCTL_INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - vllmctl-data:/data:z
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${HOST_VIDEO_GID:-video}"
+      - "${HOST_RENDER_GID:-render}"
+    ipc: host
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  vllmctl-data:
+    name: vllmctl-data
+    driver: local

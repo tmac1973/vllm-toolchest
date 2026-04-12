@@ -1,0 +1,261 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" id="html-root">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>vLLM Toolchest{{if .Title}} — {{.Title}}{{end}}</title>
+    <link rel="stylesheet" href="/static/pico.min.css">
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/htmx-sse.js"></script>
+    <script src="/static/log-panel.js" defer></script>
+    <style>
+        body { display: flex; min-height: 100vh; margin: 0; }
+        nav.sidebar {
+            width: 220px;
+            min-width: 220px;
+            padding: 1rem;
+            border-right: 1px solid var(--pico-muted-border-color);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: stretch;
+        }
+        nav.sidebar ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        nav.sidebar li { padding: 0; }
+        nav.sidebar a {
+            display: block;
+            padding: 0.4rem 0.6rem;
+            border-radius: 0.25rem;
+            text-decoration: none;
+        }
+        nav.sidebar a:hover { background: var(--pico-card-background-color); }
+        nav.sidebar a[aria-current="page"] {
+            font-weight: bold;
+            background: var(--pico-primary-background);
+            color: var(--pico-primary-inverse);
+        }
+        main { flex: 1; padding: 1.5rem; max-width: 1200px; overflow-y: auto; max-height: 100vh; }
+
+        /* ── Theme: Terminal Green ── */
+        [data-custom-theme="terminal-green"] {
+            --pico-background-color: #0a0a0a;
+            --pico-color: #33ff33;
+            --pico-h1-color: #33ff33;
+            --pico-h2-color: #33ff33;
+            --pico-h3-color: #33ff33;
+            --pico-h4-color: #33ff33;
+            --pico-muted-color: #1a9a1a;
+            --pico-muted-border-color: #1a5a1a;
+            --pico-primary: #33ff33;
+            --pico-primary-hover: #66ff66;
+            --pico-primary-background: #1a5a1a;
+            --pico-primary-hover-background: #2a7a2a;
+            --pico-primary-focus: rgba(51, 255, 51, 0.25);
+            --pico-primary-inverse: #0a0a0a;
+            --pico-card-background-color: #0f1a0f;
+            --pico-card-border-color: #1a5a1a;
+            --pico-card-sectioning-background-color: #0a140a;
+            --pico-form-element-background-color: #0a140a;
+            --pico-form-element-border-color: #1a5a1a;
+            --pico-form-element-color: #33ff33;
+            --pico-form-element-focus-color: #66ff66;
+            --pico-switch-color: #1a5a1a;
+            --pico-switch-checked-background-color: #33ff33;
+            --pico-table-border-color: #1a5a1a;
+            --pico-table-row-stripped-background-color: #0f1a0f;
+            --pico-code-background-color: #0f1a0f;
+            --pico-code-color: #66ff66;
+            --pico-mark-background-color: #1a5a1a;
+            --pico-mark-color: #33ff33;
+            --pico-ins-color: #66ff66;
+            --pico-del-color: #ff3333;
+            --pico-secondary: #1a9a1a;
+            --pico-secondary-background: #1a5a1a;
+            --pico-secondary-hover: #33bb33;
+            --pico-secondary-hover-background: #2a7a2a;
+            --pico-secondary-focus: rgba(26, 154, 26, 0.25);
+            --pico-secondary-inverse: #0a0a0a;
+            --pico-contrast: #33ff33;
+            --pico-contrast-hover: #66ff66;
+            --pico-contrast-background: #33ff33;
+            --pico-contrast-hover-background: #66ff66;
+            --pico-contrast-focus: rgba(51, 255, 51, 0.25);
+            --pico-contrast-inverse: #0a0a0a;
+            color-scheme: dark;
+        }
+        [data-custom-theme="terminal-green"] * {
+            font-family: "Courier New", "Lucida Console", monospace !important;
+            text-shadow: 0 0 3px rgba(51, 255, 51, 0.3);
+        }
+        [data-custom-theme="terminal-green"] progress::-webkit-progress-value { background-color: #33ff33; }
+        [data-custom-theme="terminal-green"] progress::-moz-progress-bar { background-color: #33ff33; }
+
+        /* ── Theme: Terminal Amber ── */
+        [data-custom-theme="terminal-amber"] {
+            --pico-background-color: #0a0800;
+            --pico-color: #ffb000;
+            --pico-h1-color: #ffb000;
+            --pico-h2-color: #ffb000;
+            --pico-h3-color: #ffb000;
+            --pico-h4-color: #ffb000;
+            --pico-muted-color: #996a00;
+            --pico-muted-border-color: #5a3f00;
+            --pico-primary: #ffb000;
+            --pico-primary-hover: #ffc633;
+            --pico-primary-background: #5a3f00;
+            --pico-primary-hover-background: #7a5500;
+            --pico-primary-focus: rgba(255, 176, 0, 0.25);
+            --pico-primary-inverse: #0a0800;
+            --pico-card-background-color: #1a1400;
+            --pico-card-border-color: #5a3f00;
+            --pico-card-sectioning-background-color: #140f00;
+            --pico-form-element-background-color: #140f00;
+            --pico-form-element-border-color: #5a3f00;
+            --pico-form-element-color: #ffb000;
+            --pico-form-element-focus-color: #ffc633;
+            --pico-switch-color: #5a3f00;
+            --pico-switch-checked-background-color: #ffb000;
+            --pico-table-border-color: #5a3f00;
+            --pico-table-row-stripped-background-color: #1a1400;
+            --pico-code-background-color: #1a1400;
+            --pico-code-color: #ffc633;
+            --pico-mark-background-color: #5a3f00;
+            --pico-mark-color: #ffb000;
+            --pico-ins-color: #ffc633;
+            --pico-del-color: #ff3333;
+            --pico-secondary: #996a00;
+            --pico-secondary-background: #5a3f00;
+            --pico-secondary-hover: #bb8800;
+            --pico-secondary-hover-background: #7a5500;
+            --pico-secondary-focus: rgba(153, 106, 0, 0.25);
+            --pico-secondary-inverse: #0a0800;
+            --pico-contrast: #ffb000;
+            --pico-contrast-hover: #ffc633;
+            --pico-contrast-background: #ffb000;
+            --pico-contrast-hover-background: #ffc633;
+            --pico-contrast-focus: rgba(255, 176, 0, 0.25);
+            --pico-contrast-inverse: #0a0800;
+            color-scheme: dark;
+        }
+        [data-custom-theme="terminal-amber"] * {
+            font-family: "Courier New", "Lucida Console", monospace !important;
+            text-shadow: 0 0 3px rgba(255, 176, 0, 0.3);
+        }
+        [data-custom-theme="terminal-amber"] progress::-webkit-progress-value { background-color: #ffb000; }
+        [data-custom-theme="terminal-amber"] progress::-moz-progress-bar { background-color: #ffb000; }
+
+        /* ── Theme: Cyberpunk ── */
+        [data-custom-theme="cyberpunk"] {
+            --pico-background-color: #0a0014;
+            --pico-color: #e0d0ff;
+            --pico-h1-color: #ff00ff;
+            --pico-h2-color: #ff00ff;
+            --pico-h3-color: #ff00ff;
+            --pico-h4-color: #ff00ff;
+            --pico-muted-color: #8866aa;
+            --pico-muted-border-color: #4a2a6a;
+            --pico-primary: #ff00ff;
+            --pico-primary-hover: #ff66ff;
+            --pico-primary-background: #5a005a;
+            --pico-primary-hover-background: #7a007a;
+            --pico-primary-focus: rgba(255, 0, 255, 0.25);
+            --pico-primary-inverse: #0a0014;
+            --pico-card-background-color: #140020;
+            --pico-card-border-color: #4a2a6a;
+            --pico-card-sectioning-background-color: #0f001a;
+            --pico-form-element-background-color: #0f001a;
+            --pico-form-element-border-color: #4a2a6a;
+            --pico-form-element-color: #e0d0ff;
+            --pico-form-element-focus-color: #ff66ff;
+            --pico-switch-color: #4a2a6a;
+            --pico-switch-checked-background-color: #ff00ff;
+            --pico-table-border-color: #4a2a6a;
+            --pico-table-row-stripped-background-color: #140020;
+            --pico-code-background-color: #140020;
+            --pico-code-color: #00ffff;
+            --pico-mark-background-color: #5a005a;
+            --pico-mark-color: #ff00ff;
+            --pico-ins-color: #00ffff;
+            --pico-del-color: #ff3366;
+            --pico-secondary: #00bbcc;
+            --pico-secondary-background: #004a50;
+            --pico-secondary-hover: #00ddee;
+            --pico-secondary-hover-background: #006a70;
+            --pico-secondary-focus: rgba(0, 187, 204, 0.25);
+            --pico-secondary-inverse: #0a0014;
+            --pico-contrast: #00ffff;
+            --pico-contrast-hover: #66ffff;
+            --pico-contrast-background: #00ffff;
+            --pico-contrast-hover-background: #66ffff;
+            --pico-contrast-focus: rgba(0, 255, 255, 0.25);
+            --pico-contrast-inverse: #0a0014;
+            color-scheme: dark;
+        }
+        [data-custom-theme="cyberpunk"] progress::-webkit-progress-value { background-color: #ff00ff; }
+        [data-custom-theme="cyberpunk"] progress::-moz-progress-bar { background-color: #ff00ff; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <hgroup>
+            <h3>vLLM Toolchest</h3>
+            <p>vLLM Inference Manager</p>
+        </hgroup>
+        <ul>
+            <li><a href="/"{{if eq .Nav "home"}} aria-current="page"{{end}}>Dashboard</a></li>
+            <li><a href="/models"{{if eq .Nav "models"}} aria-current="page"{{end}}>Models</a></li>
+            <li><a href="/models/browse"{{if eq .Nav "browse"}} aria-current="page"{{end}}>Search HF</a></li>
+            <li><a href="/service"{{if eq .Nav "service"}} aria-current="page"{{end}}>Service</a></li>
+            <li><a href="/benchmarks"{{if eq .Nav "benchmarks"}} aria-current="page"{{end}}>Benchmarks</a></li>
+            <li><a href="/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
+        </ul>
+        <div>
+            <details>
+                <summary style="font-size:0.75rem;">Theme</summary>
+                <ul style="list-style:none;padding:0;font-size:0.75rem;">
+                    <li><a href="#" onclick="setTheme('dark');return false;">Dark</a></li>
+                    <li><a href="#" onclick="setTheme('light');return false;">Light</a></li>
+                    <li><a href="#" onclick="setTheme('terminal-green');return false;">Terminal Green</a></li>
+                    <li><a href="#" onclick="setTheme('terminal-amber');return false;">Terminal Amber</a></li>
+                    <li><a href="#" onclick="setTheme('cyberpunk');return false;">Cyberpunk</a></li>
+                </ul>
+            </details>
+            <div id="monitor-bar"
+                 hx-get="/api/monitor"
+                 hx-trigger="load, every 3s"
+                 hx-swap="innerHTML"
+                 style="font-size:0.75rem;opacity:0.8;border-top:1px solid var(--pico-muted-border-color);padding-top:0.5rem;">
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        {{template "content" .}}
+    </main>
+<script>
+(function() {
+    var saved = localStorage.getItem('vllmctl-theme');
+    if (saved) setTheme(saved);
+})();
+function setTheme(theme) {
+    var el = document.getElementById('html-root');
+    if (theme === 'dark' || theme === 'light') {
+        el.setAttribute('data-theme', theme);
+        el.removeAttribute('data-custom-theme');
+    } else {
+        el.setAttribute('data-theme', 'dark');
+        el.setAttribute('data-custom-theme', theme);
+    }
+    localStorage.setItem('vllmctl-theme', theme);
+}
+</script>
+</body>
+</html>
+{{end}}
