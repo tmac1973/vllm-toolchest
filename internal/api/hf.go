@@ -67,31 +67,29 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 			primary.Author,
 			formatCount(primary.Downloads), formatCount(primary.Likes))
 
-		// Variant badges -- each is clickable and loads that specific variant
+		// Variant badges -- one per unique quant format, prefer primary author
+		// Deduplicate: keep one repo per quant format, preferring the primary author
+		type badge struct {
+			id, author, format string
+		}
+		seen := map[string]bool{}
+		var badges []badge
 		for _, v := range g.Variants {
 			label := v.QuantFormat
 			if label == "" {
 				label = "FP16"
 			}
-			// Show author if different from primary to distinguish same-format variants
-			badgeLabel := label
-			if v.Author != primary.Author {
-				badgeLabel = v.Author + "/" + label
-			} else if label == "FP16" {
-				// Count how many FP16 variants exist to decide if we need disambiguation
-				fp16Count := 0
-				for _, v2 := range g.Variants {
-					if v2.QuantFormat == "" || v2.QuantFormat == "FP16" {
-						fp16Count++
-					}
-				}
-				if fp16Count > 1 {
-					badgeLabel = v.Author + "/" + label
-				}
+			if seen[label] {
+				continue
 			}
-			color := quantBadgeColor(label)
+			seen[label] = true
+			badges = append(badges, badge{id: v.ID, author: v.Author, format: label})
+		}
+
+		for _, b := range badges {
+			color := quantBadgeColor(b.format)
 			fmt.Fprintf(w, `<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#detail-%s" hx-swap="innerHTML" title="%s" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;text-decoration:none;cursor:pointer;">%s</a>`,
-				v.ID, sid, v.ID, color, badgeLabel)
+				b.id, sid, b.id, color, b.format)
 		}
 
 		fmt.Fprintf(w, `</div>
