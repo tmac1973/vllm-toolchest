@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
@@ -25,18 +26,28 @@ type Server struct {
 	monitor    *monitor.Monitor
 	hfClient   *huggingface.Client
 	downloader *huggingface.Downloader
+	registry   *models.Registry
 }
 
 func NewServer(cfg *config.Config) *Server {
 	mon := monitor.New(3 * time.Second)
 	mon.Start()
 
+	reg := models.NewRegistry(cfg.DataDir)
+	dl := huggingface.NewDownloader(cfg.DataDir, cfg.HFToken)
+	dl.SetOnComplete(func(downloadID, modelID, modelDir string) {
+		reg.RegisterFromDownload(modelID, modelDir)
+	})
+
 	s := &Server{
 		cfg:        cfg,
 		monitor:    mon,
 		hfClient:   huggingface.NewClient(cfg.HFToken),
-		downloader: huggingface.NewDownloader(cfg.DataDir, cfg.HFToken),
+		downloader: dl,
+		registry:   reg,
 	}
+
+	reg.Maintenance()
 	s.pages = s.parseTemplates()
 	s.router = s.buildRouter()
 	return s
@@ -111,7 +122,13 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/dashboard", s.handleDashboard)
 
 		r.Route("/models", func(r chi.Router) {
-			// Phase 4
+			r.Get("/", s.handleListModels)
+			r.Post("/scan", s.handleScanModels)
+			r.Get("/{id}", s.handleGetModel)
+			r.Get("/{id}/config-panel", s.handleModelConfigPanel)
+			r.Put("/{id}/config", s.handleUpdateModelConfig)
+			r.Patch("/{id}/toggle", s.handleToggleModel)
+			r.Delete("/{id}", s.handleDeleteModel)
 		})
 		r.Route("/hf", func(r chi.Router) {
 			r.Get("/search", s.handleHFSearch)
@@ -249,7 +266,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     </article>
     <article>
         <header>Models</header>
-        <p><strong>0</strong> models registered</p>
+        <p><strong>%d</strong> models registered</p>
         <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
     </article>
     <article>
@@ -258,7 +275,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
         <p>Tool use: %s</p>
         <p><a href="/settings">Settings &rarr;</a></p>
     </article>
-</div>`, gpuHTML, apiURL, toolUseLabel)
+</div>`, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

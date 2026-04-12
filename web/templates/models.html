@@ -1,5 +1,16 @@
 {{define "content"}}
 <h1>Models</h1>
-<p>Model registry and configuration will be available in a future update.</p>
-<p><a href="/models/browse">Search HuggingFace for models &rarr;</a></p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+    <a href="/models/browse"><button class="outline">Download New Models</button></a>
+    <button class="secondary outline" hx-post="/api/models/scan" hx-target="#scan-result" hx-swap="innerHTML">Rescan Disk</button>
+    <span id="scan-result"></span>
+</div>
+
+<div id="model-list"
+     hx-get="/api/models"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <p aria-busy="true">Loading models...</p>
+</div>
 {{end}}
