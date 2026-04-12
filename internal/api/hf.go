@@ -80,10 +80,11 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
         <strong>%s</strong>%s
+        <a href="https://huggingface.co/%s" target="_blank" rel="noopener" style="font-size:0.75rem;margin-left:0.5rem;text-decoration:none;" title="View on HuggingFace">&#8599;</a>
         <br><small style="opacity:0.7;">%s &middot; %s downloads &middot; %s likes</small>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">`,
-			primary.ID, gatedBadge,
+			primary.ID, gatedBadge, primary.ID,
 			primary.Author,
 			formatCount(primary.Downloads), formatCount(primary.Likes))
 
