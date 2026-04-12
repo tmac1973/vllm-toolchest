@@ -240,18 +240,53 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	p(`</select></label></div></fieldset>`)
 
 	// ── Tool Use ──
-	p(`<fieldset><legend>Tool Use</legend><div class="grid">`)
-	p(`<label title="Allow the model to autonomously decide when to call tools/functions. Requires a compatible model and a tool call parser."><input type="checkbox" name="enable_auto_tool_choice" role="switch"%s> Enable auto tool choice</label>`, checked(c.EnableAutoToolChoice))
-
-	p(`<label title="Parser for tool calls. Must match model's chat template. hermes: Hermes/Qwen2.5+. llama3_json: Llama 3.1+. mistral: Mistral/Mixtral.">Tool call parser <select name="tool_call_parser">`)
-	for _, opt := range []struct{ val, label string }{
-		{"", "(none)"}, {"hermes", "hermes"}, {"llama3_json", "llama3_json"},
-		{"mistral", "mistral"}, {"granite", "granite"}, {"internlm", "internlm"},
-		{"jamba", "jamba"}, {"pythonic", "pythonic"},
-	} {
-		p(`<option value="%s"%s>%s</option>`, opt.val, selected(c.ToolCallParser == opt.val), opt.label)
+	// Determine effective parser: config override > auto-detected
+	effectiveParser := c.ToolCallParser
+	if effectiveParser == "" {
+		effectiveParser = m.ToolUse.ToolCallParser
 	}
-	p(`</select></label></div></fieldset>`)
+	toolEnabled := c.EnableAutoToolChoice && effectiveParser != ""
+
+	p(`<fieldset><legend>Tool Use</legend>`)
+
+	if m.ToolUse.HasToolSupport {
+		p(`<p style="margin-bottom:0.5rem;"><small>Detected: <strong>%s</strong> parser (via %s)</small></p>`,
+			m.ToolUse.ToolCallParser, m.ToolUse.DetectionMethod)
+	} else {
+		p(`<p style="margin-bottom:0.5rem;"><small style="opacity:0.6;">No tool use support detected in this model's chat template.</small></p>`)
+	}
+
+	p(`<label title="Enable OpenAI-compatible tool/function calling. Sets both --enable-auto-tool-choice and --tool-call-parser. The parser is auto-detected from the model's chat template.">`)
+	p(`<input type="checkbox" name="enable_auto_tool_choice" role="switch"%s`, checked(toolEnabled))
+	// When toggled on, auto-set the parser from detection; when off, clear it
+	p(` onchange="var ps=this.closest('form').querySelector('[name=tool_call_parser]');if(this.checked){ps.value='%s';}else{ps.value='';}">`, m.ToolUse.ToolCallParser)
+	p(` Enable tool use</label>`)
+
+	// Parser override -- collapsed by default, expandable for advanced users
+	p(`<details style="margin-top:0.5rem;"><summary style="font-size:0.85rem;cursor:pointer;">Parser override</summary>`)
+	p(`<label title="Override the auto-detected parser. Only change this if auto-detection got it wrong. Using the wrong parser will break tool calling.">`)
+	p(`<select name="tool_call_parser">`)
+	for _, opt := range []struct{ val, label string }{
+		{"", "(auto: " + m.ToolUse.ToolCallParser + ")"},
+		{"hermes", "hermes — Hermes, NousResearch, Qwen 2.5+, Qwen 3+"},
+		{"llama3_json", "llama3_json — Llama 3.1, 3.2, 3.3"},
+		{"mistral", "mistral — Mistral, Mixtral"},
+		{"granite", "granite — IBM Granite"},
+		{"internlm", "internlm — InternLM"},
+		{"jamba", "jamba — Jamba"},
+		{"pythonic", "pythonic — Python-style function calls"},
+	} {
+		// For the auto option, check if no manual override is set
+		isSelected := false
+		if opt.val == "" {
+			isSelected = c.ToolCallParser == "" || c.ToolCallParser == m.ToolUse.ToolCallParser
+		} else {
+			isSelected = c.ToolCallParser == opt.val && c.ToolCallParser != m.ToolUse.ToolCallParser
+		}
+		p(`<option value="%s"%s>%s</option>`, opt.val, selected(isSelected), opt.label)
+	}
+	p(`</select></label></details>`)
+	p(`</fieldset>`)
 
 	// ── Advanced ──
 	p(`<fieldset><legend>Advanced</legend>`)
@@ -316,6 +351,15 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 		if cfg.Dtype == "" {
 			cfg.Dtype = "auto"
 		}
+	}
+
+	// Auto-fill parser from model detection when tool use is enabled
+	if cfg.EnableAutoToolChoice && cfg.ToolCallParser == "" {
+		cfg.ToolCallParser = m.ToolUse.ToolCallParser
+	}
+	// Clear parser when tool use is disabled
+	if !cfg.EnableAutoToolChoice {
+		cfg.ToolCallParser = ""
 	}
 
 	if err := s.registry.UpdateConfig(id, cfg); err != nil {
