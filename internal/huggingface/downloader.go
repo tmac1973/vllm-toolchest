@@ -450,6 +450,18 @@ func (d *Downloader) Unsubscribe(downloadID string, ch chan DownloadProgress) {
 	dl.subMu.Unlock()
 }
 
+// GetProgress returns progress for a specific download, or nil if not found.
+func (d *Downloader) GetProgress(downloadID string) *DownloadProgress {
+	d.mu.Lock()
+	dl, ok := d.active[downloadID]
+	d.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	p := dl.getProgress()
+	return &p
+}
+
 // ActiveDownloads returns progress for all in-progress downloads.
 func (d *Downloader) ActiveDownloads() []DownloadProgress {
 	d.mu.Lock()

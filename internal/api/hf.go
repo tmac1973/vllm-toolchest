@@ -71,7 +71,7 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 			primary.Author,
 			formatCount(primary.Downloads), formatCount(primary.Likes))
 
-		// Variant badges (informational, each is a link to load that variant's detail)
+		// Variant badges
 		seen := map[string]bool{}
 		for _, v := range g.Variants {
 			label := v.QuantFormat
@@ -120,7 +120,6 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 
 	respondHTML(w)
 
-	// Quant info
 	quantInfo := "FP16/BF16 (unquantized)"
 	if detail.QuantFormat != "" {
 		quantInfo = detail.QuantFormat
@@ -132,7 +131,6 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Warnings
 	gatedWarning := ""
 	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		gatedWarning = `<p><mark>This is a gated model. Configure your HF token in <a href="/settings">Settings</a> to download.</mark></p>`
@@ -148,7 +146,6 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Model info grid
 	fmt.Fprintf(w, `%s%s
 <div class="grid" style="margin-bottom:0.5rem;">
   <div><small>Architecture</small><br><strong>%s</strong></div>
@@ -162,13 +159,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		formatVRAM(detail.VRAMEstGB),
 		huggingface.FormatBytes(detail.TotalSize))
 
-	// Show other variants if this is the primary result of a group
-	if len(detail.Tags) > 0 {
-		// Check for known variant repos via search
-		// (We already show badges above, but here we list variants with individual download links)
-	}
-
-	// File list (collapsible)
+	// Collapsible file list
 	downloadableFiles := 0
 	for _, f := range detail.Files {
 		if f.Category != "skip" {
@@ -191,46 +182,45 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprint(w, `</tbody></table></details>`)
 
-	// Download button + progress area
+	// Download button
 	sid := strings.ReplaceAll(detail.ID, "/", "--")
 	disabled := ""
 	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		disabled = ` disabled`
 	}
-	fmt.Fprintf(w, `<div style="display:flex;align-items:center;gap:0.5rem;">
-  <button hx-post="/api/hf/download"
-          hx-vals='{"model_id":"%s"}'
-          hx-target="#dl-%s"
-          hx-swap="innerHTML"
-          style="margin:0;"%s>
-    Download (%s)
-  </button>
-  <div id="dl-%s" style="flex:1;"></div>
-</div>`,
-		detail.ID, sid, disabled,
+	fmt.Fprintf(w, `<form hx-post="/api/hf/download" hx-target="#dl-%s" hx-swap="innerHTML" style="margin:0;">
+  <input type="hidden" name="model_id" value="%s">
+  <button type="submit" style="margin:0;"%s>Download (%s)</button>
+</form>
+<div id="dl-%s"></div>`,
+		sid, detail.ID, disabled,
 		huggingface.FormatBytes(detail.TotalSize), sid)
 }
 
 func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ModelID string   `json:"model_id"`
-		Files   []string `json:"files,omitempty"`
-	}
+	r.ParseForm()
+	modelID := r.FormValue("model_id")
 
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
+	if modelID == "" {
+		// Try JSON body
+		var req struct {
+			ModelID string `json:"model_id"`
+		}
 		json.NewDecoder(r.Body).Decode(&req)
-	} else {
-		r.ParseForm()
-		req.ModelID = r.FormValue("model_id")
+		modelID = req.ModelID
 	}
 
-	if req.ModelID == "" {
+	if modelID == "" {
+		if isHTMX(r) {
+			respondHTML(w)
+			fmt.Fprint(w, `<p><mark>Missing model_id</mark></p>`)
+			return
+		}
 		http.Error(w, "missing model_id", http.StatusBadRequest)
 		return
 	}
 
-	detail, err := s.hfClient.GetModel(r.Context(), req.ModelID)
+	detail, err := s.hfClient.GetModel(r.Context(), modelID)
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
@@ -255,26 +245,12 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		if f.Category == "skip" {
 			continue
 		}
-		// Skip .bin weights if safetensors available
 		if hasSafetensors && f.Category == "weight" &&
 			strings.HasSuffix(strings.ToLower(f.Filename), ".bin") {
 			continue
 		}
-		// Skip GGUF files -- we use safetensors for vLLM
 		if strings.HasSuffix(strings.ToLower(f.Filename), ".gguf") {
 			continue
-		}
-		if len(req.Files) > 0 {
-			found := false
-			for _, name := range req.Files {
-				if name == f.Filename {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
 		}
 		filesToDownload = append(filesToDownload, f)
 	}
@@ -289,7 +265,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	downloadID, err := s.downloader.Start(req.ModelID, filesToDownload)
+	downloadID, err := s.downloader.Start(modelID, filesToDownload)
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
@@ -302,7 +278,8 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		fmt.Fprintf(w, `<div hx-ext="sse" sse-connect="/api/hf/download/%s/progress" sse-swap="progress">
+		// Return a polling div that checks progress every 2s
+		fmt.Fprintf(w, `<div hx-get="/api/hf/download/%s/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
   <progress value="0" max="100" style="margin:0;"></progress>
   <small>Starting download...</small>
 </div>`, downloadID)
@@ -315,68 +292,48 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	ch, err := s.downloader.Subscribe(id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	defer s.downloader.Unsubscribe(id, ch)
-
-	sse, err := NewSSEWriter(w)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	for {
-		select {
-		case progress, ok := <-ch:
-			if !ok {
-				return
-			}
-
-			if isHTMX(r) {
-				pct := 0
-				if progress.TotalBytes > 0 {
-					pct = int(progress.BytesDownloaded * 100 / progress.TotalBytes)
-				}
-				speed := huggingface.FormatBytes(progress.SpeedBPS) + "/s"
-				total := huggingface.FormatBytes(progress.TotalBytes)
-				downloaded := huggingface.FormatBytes(progress.BytesDownloaded)
-
-				switch progress.Status {
-				case "complete":
-					sse.SendEvent("progress",
-						`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
-					return
-				case "failed":
-					sse.SendEvent("progress",
-						fmt.Sprintf(`<p><del>Download failed: %s</del></p>`, progress.Error))
-					return
-				case "cancelled":
-					sse.SendEvent("progress", `<p>Download cancelled.</p>`)
-					return
-				default:
-					html := fmt.Sprintf(`<progress value="%d" max="100" style="margin:0;display:inline-block;width:60%%;vertical-align:middle;"></progress>
-<small> %s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>`,
-						pct, downloaded, total, speed, pct,
-						progress.CompletedFiles, progress.TotalFiles)
-					sse.SendEvent("progress", html)
-				}
-			} else {
-				data, _ := json.Marshal(progress)
-				sse.SendEvent("progress", string(data))
-				if progress.Status == "complete" || progress.Status == "failed" || progress.Status == "cancelled" {
-					return
-				}
-			}
-
-		case <-r.Context().Done():
+	d := s.downloader.GetProgress(id)
+	if d == nil {
+		if isHTMX(r) {
+			respondHTML(w)
+			fmt.Fprint(w, `<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
 			return
 		}
+		http.Error(w, "download not found", http.StatusNotFound)
+		return
+	}
+
+	if !isHTMX(r) {
+		respondJSON(w, d)
+		return
+	}
+
+	respondHTML(w)
+	pct := 0
+	if d.TotalBytes > 0 {
+		pct = int(d.BytesDownloaded * 100 / d.TotalBytes)
+	}
+
+	switch d.Status {
+	case "complete":
+		fmt.Fprint(w, `<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
+	case "failed":
+		fmt.Fprintf(w, `<p><del>Download failed: %s</del></p>`, d.Error)
+	case "cancelled":
+		fmt.Fprint(w, `<p>Download cancelled.</p>`)
+	default:
+		speed := huggingface.FormatBytes(d.SpeedBPS) + "/s"
+		total := huggingface.FormatBytes(d.TotalBytes)
+		downloaded := huggingface.FormatBytes(d.BytesDownloaded)
+		// Keep polling
+		fmt.Fprintf(w, `<div hx-get="/api/hf/download/%s/progress" hx-trigger="every 2s" hx-swap="innerHTML">
+  <progress value="%d" max="100" style="margin:0;"></progress>
+  <small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>
+</div>`, id, pct, downloaded, total, speed, pct, d.CompletedFiles, d.TotalFiles)
 	}
 }
 
+// handleHFActiveDownloads returns progress for all active downloads (used by both browse and models pages).
 func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request) {
 	downloads := s.downloader.ActiveDownloads()
 
@@ -386,31 +343,30 @@ func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondHTML(w)
-	if len(downloads) == 0 {
-		return
-	}
-
+	activeCount := 0
 	for _, dl := range downloads {
 		if dl.Status == "complete" {
 			continue
 		}
+		activeCount++
 		pct := 0
 		if dl.TotalBytes > 0 {
 			pct = int(dl.BytesDownloaded * 100 / dl.TotalBytes)
 		}
-		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;padding:0.5rem 1rem;">
+		speed := huggingface.FormatBytes(dl.SpeedBPS) + "/s"
+		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;padding:0.75rem 1rem;">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <strong>%s</strong>
     <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-            hx-delete="/api/hf/download/%s" hx-swap="none">Cancel</button>
+            hx-delete="/api/hf/download/%s" hx-target="closest article" hx-swap="outerHTML">Cancel</button>
   </div>
   <progress value="%d" max="100" style="margin:0.25rem 0;"></progress>
-  <small>%s / %s &mdash; %d%% &mdash; %d/%d files</small>
+  <small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>
 </article>`,
 			dl.ModelID, dl.ID, pct,
 			huggingface.FormatBytes(dl.BytesDownloaded),
 			huggingface.FormatBytes(dl.TotalBytes),
-			pct, dl.CompletedFiles, dl.TotalFiles)
+			speed, pct, dl.CompletedFiles, dl.TotalFiles)
 	}
 }
 
@@ -419,6 +375,10 @@ func (s *Server) handleHFDownloadCancel(w http.ResponseWriter, r *http.Request) 
 	if err := s.downloader.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+	if isHTMX(r) {
+		respondHTML(w)
+		return // empty = remove the article
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

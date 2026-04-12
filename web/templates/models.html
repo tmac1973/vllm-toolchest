@@ -1,6 +1,12 @@
 {{define "content"}}
 <h1>Models</h1>
 
+<div id="active-downloads"
+     hx-get="/api/hf/downloads"
+     hx-trigger="load, every 2s"
+     hx-swap="innerHTML">
+</div>
+
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
     <a href="/models/browse"><button class="outline">Download New Models</button></a>
     <button class="secondary outline" hx-post="/api/models/scan" hx-target="#scan-result" hx-swap="innerHTML">Rescan Disk</button>
