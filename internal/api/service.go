@@ -191,7 +191,7 @@ func (s *Server) handleClearServiceLogs(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
-	lines := s.process.RecentLogs(200)
+	lines := s.process.RecentLogs(5000)
 
 	if !isHTMX(r) {
 		respondJSON(w, lines)
