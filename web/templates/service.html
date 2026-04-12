@@ -35,7 +35,8 @@
         <pre id="service-logs"
              style="max-height:400px;overflow-y:auto;font-size:0.75rem;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;">No logs yet.</pre>
         <div style="margin-top:0.25rem;display:flex;gap:0.5rem;">
-            <button class="secondary outline log-copy-btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;">Copy</button>
+            <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
+                    onclick="var t=document.getElementById('service-logs').textContent;navigator.clipboard?navigator.clipboard.writeText(t).then(function(){this.textContent='Copied!'}.bind(this)):void 0;var b=this;setTimeout(function(){b.textContent='Copy';},1500);">Copy</button>
             <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
                     onclick="fetch('/api/service/logs',{method:'DELETE'}).then(function(){document.getElementById('service-logs').textContent='';});">Clear</button>
         </div>
