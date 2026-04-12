@@ -9,22 +9,7 @@
     <script src="/static/htmx.min.js"></script>
     <script src="/static/htmx-sse.js"></script>
     <script src="/static/log-panel.js" defer></script>
-    <meta name="htmx-config" content='{"historyCacheSize": 0, "refreshOnHistoryMiss": true}'>
-    <script>
-    try { localStorage.removeItem('htmx-history-cache'); } catch(e) {}
-    // Debug: log all htmx events to console
-    document.addEventListener('DOMContentLoaded', function() {
-        ['htmx:beforeRequest','htmx:afterRequest','htmx:beforeSwap','htmx:afterSwap',
-         'htmx:responseError','htmx:beforeHistorySave','htmx:historyRestore',
-         'htmx:pushedIntoHistory','htmx:replacedInHistory','htmx:load'].forEach(function(evt) {
-            document.body.addEventListener(evt, function(e) {
-                var d = e.detail || {};
-                var path = (d.requestConfig && d.requestConfig.path) || (d.pathInfo && d.pathInfo.requestPath) || '';
-                console.log('[htmx]', evt, path, d.target ? d.target.id || d.target.tagName : '');
-            });
-        });
-    });
-    </script>
+    <meta name="htmx-config" content='{"historyCacheSize": 0}'>
     <style>
         body { display: flex; min-height: 100vh; margin: 0; }
         nav.sidebar {
