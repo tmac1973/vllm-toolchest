@@ -63,8 +63,8 @@ func NewManager(vllmHost string, vllmPort int) *Manager {
 		state:    StateStopped,
 		vllmHost: vllmHost,
 		vllmPort: vllmPort,
-		logBuf:   make([]string, 0, 1000),
-		logMax:   1000,
+		logBuf:   make([]string, 0, 5000),
+		logMax:   5000,
 		subs:     make(map[chan string]struct{}),
 	}
 }
