@@ -16,6 +16,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
 
@@ -27,6 +28,7 @@ type Server struct {
 	hfClient   *huggingface.Client
 	downloader *huggingface.Downloader
 	registry   *models.Registry
+	process    *process.Manager
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -45,6 +47,7 @@ func NewServer(cfg *config.Config) *Server {
 		hfClient:   huggingface.NewClient(cfg.HFToken),
 		downloader: dl,
 		registry:   reg,
+		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
 	}
 
 	reg.Maintenance()
@@ -139,7 +142,13 @@ func (s *Server) buildRouter() chi.Router {
 			r.Delete("/download/{id}", s.handleHFDownloadCancel)
 		})
 		r.Route("/service", func(r chi.Router) {
-			// Phase 5
+			r.Get("/status", s.handleServiceStatus)
+			r.Post("/start", s.handleServiceStart)
+			r.Post("/stop", s.handleServiceStop)
+			r.Post("/restart", s.handleServiceRestart)
+			r.Get("/logs", s.handleServiceLogs)
+			r.Get("/log-stream", s.handleServiceLogStream)
+			r.Get("/health", s.handleServiceHealth)
 		})
 		r.Route("/benchmarks", func(r chi.Router) {
 			// Phase 6
@@ -153,10 +162,11 @@ func (s *Server) buildRouter() chi.Router {
 		})
 	})
 
-	// OpenAI-compatible proxy (Phase 5)
+	// OpenAI-compatible proxy
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(s.apiKeyAuth)
-		// Will proxy to vLLM's /v1 endpoints
+		r.Get("/models", s.handleV1Models)
+		r.Handle("/*", s.newProxyHandler())
 	})
 
 	return r
@@ -253,11 +263,29 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		toolUseLabel = "<ins>enabled</ins>"
 	}
 
+	// Service status
+	svcStatus := s.process.GetStatus()
+	var svcBadge, svcModel string
+	switch svcStatus.State {
+	case "running":
+		svcBadge = "<ins>Running</ins>"
+	case "starting":
+		svcBadge = "<mark>Starting...</mark>"
+	case "error":
+		svcBadge = "<del>Error</del>"
+	default:
+		svcBadge = "Stopped"
+	}
+	if svcStatus.ModelID != "" {
+		svcModel = fmt.Sprintf(`<p>Model: <strong>%s</strong></p>`, svcStatus.ModelID)
+	}
+
 	respondHTML(w)
 	fmt.Fprintf(w, `<div class="grid">
     <article>
         <header>vLLM Service</header>
-        <p>Stopped</p>
+        <p>%s</p>
+        %s
         <p><a href="/service">Manage &rarr;</a></p>
     </article>
     <article>
@@ -275,7 +303,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
         <p>Tool use: %s</p>
         <p><a href="/settings">Settings &rarr;</a></p>
     </article>
-</div>`, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
+</div>`, svcBadge, svcModel, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
