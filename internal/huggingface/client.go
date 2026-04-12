@@ -51,9 +51,12 @@ type ModelGroup struct {
 	Variants []ModelSearchResult
 }
 
-// Search queries HuggingFace for text-generation models.
+// Search queries HuggingFace for models compatible with vLLM.
+// We don't filter by pipeline_tag because models may be tagged as
+// text-generation, image-text-to-text, or other tags that vLLM supports.
+// Instead we filter by the transformers library tag and sort by downloads.
 func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult, error) {
-	u := fmt.Sprintf("%s/models?search=%s&filter=text-generation&sort=downloads&direction=-1&limit=50",
+	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50",
 		apiURL, url.QueryEscape(query))
 
 	var results []ModelSearchResult
