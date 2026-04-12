@@ -33,10 +33,7 @@
     </header>
     <div class="log-panel">
         <pre id="service-logs"
-             style="max-height:400px;overflow-y:auto;font-size:0.75rem;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;"
-             hx-get="/api/service/logs"
-             hx-trigger="every 5s"
-             hx-swap="innerHTML">No logs yet.</pre>
+             style="max-height:400px;overflow-y:auto;font-size:0.75rem;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;">No logs yet.</pre>
         <div style="margin-top:0.25rem;display:flex;gap:0.5rem;">
             <button class="secondary outline log-copy-btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;">Copy</button>
             <button class="secondary outline log-clear-btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;">Clear</button>
@@ -45,6 +42,31 @@
 </article>
 
 <script>
+// Log polling that respects auto-scroll toggle
+(function() {
+    var pre = document.getElementById('service-logs');
+    var toggle = document.querySelector('.log-tail-toggle');
+    var lastContent = '';
+
+    function fetchLogs() {
+        fetch('/api/service/logs', {headers: {'HX-Request': 'true'}})
+            .then(function(r) { return r.text(); })
+            .then(function(text) {
+                if (text !== lastContent) {
+                    lastContent = text;
+                    pre.textContent = text || 'No logs yet.';
+                    if (toggle && toggle.checked) {
+                        pre.scrollTop = pre.scrollHeight;
+                    }
+                }
+            })
+            .catch(function() {});
+    }
+
+    fetchLogs();
+    setInterval(fetchLogs, 3000);
+})();
+
 // Populate model selector from registry
 fetch('/api/models', {headers: {'Accept': 'application/json'}})
     .then(function(r) { return r.json(); })
