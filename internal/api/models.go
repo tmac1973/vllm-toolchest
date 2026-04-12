@@ -226,13 +226,10 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	// ── Quantization ──
 	p(`<fieldset><legend>Quantization <a href="#" onclick="document.getElementById('quant-help-%s').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend><div class="grid">`, sid)
 
-	p(`<label title="Override the quantization method. 'auto-detect' reads from model config. Only change if auto-detection is wrong or to force a specific kernel (e.g. marlin).">Method <select name="quantization">`)
-	for _, opt := range []string{"", "awq", "gptq", "fp8", "bitsandbytes", "marlin", "squeezellm", "compressed_tensors"} {
-		label := opt
-		if label == "" {
-			label = "auto-detect"
-		}
-		p(`<option value="%s"%s>%s</option>`, opt, selected(c.Quantization == opt), label)
+	quantOpts := compatibleQuantOptions(m.Quantization.Method, m.Quantization.Sym, m.Quantization.Bits)
+	p(`<label title="Quantization method for inference. Options are filtered to what this model supports based on its format.">Method <select name="quantization">`)
+	for _, opt := range quantOpts {
+		p(`<option value="%s"%s>%s</option>`, opt.val, selected(c.Quantization == opt.val), opt.label)
 	}
 	p(`</select></label>`)
 
@@ -363,6 +360,76 @@ func (s *Server) handleScanModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, map[string]int{"count": len(list)})
+}
+
+type quantOption struct {
+	val   string
+	label string
+}
+
+// compatibleQuantOptions returns quantization methods compatible with the model's format.
+func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOption {
+	switch detectedMethod {
+	case "awq":
+		opts := []quantOption{
+			{"", "auto-detect (AWQ)"},
+			{"awq", "AWQ"},
+		}
+		// Marlin works with 4-bit symmetric AWQ
+		if bits == 4 {
+			opts = append(opts, quantOption{"marlin", "Marlin (optimized AWQ kernel)"})
+		}
+		return opts
+
+	case "gptq":
+		opts := []quantOption{
+			{"", "auto-detect (GPTQ)"},
+			{"gptq", "GPTQ"},
+		}
+		// Marlin works with 4-bit symmetric GPTQ without desc_act
+		if bits == 4 && sym {
+			opts = append(opts, quantOption{"marlin", "Marlin (optimized GPTQ kernel)"})
+		}
+		return opts
+
+	case "fp8":
+		return []quantOption{
+			{"", "auto-detect (FP8)"},
+			{"fp8", "FP8"},
+		}
+
+	case "bitsandbytes":
+		return []quantOption{
+			{"", "auto-detect (BitsAndBytes)"},
+			{"bitsandbytes", "BitsAndBytes"},
+		}
+
+	case "compressed_tensors":
+		return []quantOption{
+			{"", "auto-detect (compressed_tensors)"},
+			{"compressed_tensors", "compressed_tensors"},
+		}
+
+	case "squeezellm":
+		return []quantOption{
+			{"", "auto-detect (SqueezeLLM)"},
+			{"squeezellm", "SqueezeLLM"},
+		}
+
+	case "gguf":
+		return []quantOption{
+			{"", "auto-detect (GGUF)"},
+			{"gguf", "GGUF"},
+		}
+
+	default:
+		// FP16/BF16 unquantized model -- can do dynamic quantization
+		return []quantOption{
+			{"", "None (full precision)"},
+			{"bitsandbytes", "BitsAndBytes (dynamic 4/8-bit at load)"},
+			{"fp8", "FP8 (dynamic 8-bit, needs GPU support)"},
+		}
+	}
 }
 
 func quantBadgeHTML(q models.QuantMeta) string {
