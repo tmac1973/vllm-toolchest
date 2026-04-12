@@ -39,10 +39,38 @@ type ModelSearchResult struct {
 	Likes        int      `json:"likes"`
 	Tags         []string `json:"tags"`
 	License      string   `json:"license,omitempty"`
-	Private      bool     `json:"private"`
-	Gated        string   `json:"gated,omitempty"`
-	LastModified string   `json:"lastModified,omitempty"`
-	QuantFormat  string   `json:"quant_format,omitempty"`
+	Private      bool       `json:"private"`
+	Gated        GatedField `json:"gated"`
+	LastModified string     `json:"lastModified,omitempty"`
+	QuantFormat  string     `json:"quant_format,omitempty"`
+}
+
+// GatedField handles HF's gated field which can be bool (false) or string ("auto"/"manual").
+type GatedField string
+
+func (g *GatedField) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		*g = GatedField(s)
+		return nil
+	}
+	// Try bool (false = not gated)
+	var b bool
+	if json.Unmarshal(data, &b) == nil {
+		if b {
+			*g = "auto"
+		} else {
+			*g = ""
+		}
+		return nil
+	}
+	*g = ""
+	return nil
+}
+
+func (g GatedField) IsGated() bool {
+	return g != "" && g != "false"
 }
 
 // ModelGroup groups search results by normalized base model name.
@@ -107,7 +135,7 @@ type ModelDetail struct {
 	ID             string           `json:"id"`
 	Author         string           `json:"author"`
 	Tags           []string         `json:"tags"`
-	Gated          string           `json:"gated,omitempty"`
+	Gated          GatedField       `json:"gated"`
 	Files          []ModelFile      `json:"files"`
 	TotalSize      int64            `json:"total_size"`
 	Architecture   string           `json:"architecture,omitempty"`
@@ -141,7 +169,7 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 		ID     string   `json:"id"`
 		Author string   `json:"author"`
 		Tags   []string `json:"tags"`
-		Gated  string   `json:"gated"`
+		Gated  GatedField `json:"gated"`
 	}
 	metaURL := fmt.Sprintf("%s/models/%s", apiURL, modelID)
 	if err := c.getJSON(ctx, metaURL, &meta); err != nil {

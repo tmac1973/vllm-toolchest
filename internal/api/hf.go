@@ -40,23 +40,38 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 
 	groups := huggingface.GroupResults(results)
 	respondHTML(w)
+
+	if len(groups) == 0 {
+		fmt.Fprint(w, `<p>No models found.</p>`)
+		return
+	}
+
 	for _, g := range groups {
 		primary := g.Variants[0]
+		sid := safeID(primary.ID)
+
 		gatedBadge := ""
-		if primary.Gated != "" {
-			gatedBadge = ` <small>[gated]</small>`
+		if primary.Gated.IsGated() {
+			gatedBadge = ` <small style="color:var(--pico-del-color);">[gated]</small>`
 		}
 
 		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;">
-  <header style="padding:0.5rem 1rem;">
-    <strong>%s</strong>%s
-    <small style="opacity:0.7;">%s &middot; %s downloads &middot; %s likes</small>
-  </header>
-  <div style="padding:0.25rem 1rem 0.5rem;">`,
-			primary.ID, gatedBadge, primary.Author,
+  <header style="padding:0.5rem 1rem;cursor:pointer;"
+          hx-get="/api/hf/model?id=%s"
+          hx-target="#detail-%s"
+          hx-swap="innerHTML">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <strong>%s</strong>%s
+        <br><small style="opacity:0.7;">%s &middot; %s downloads &middot; %s likes</small>
+      </div>
+      <div>`,
+			primary.ID, sid,
+			primary.ID, gatedBadge,
+			primary.Author,
 			formatCount(primary.Downloads), formatCount(primary.Likes))
 
-		// Show variant badges
+		// Variant badges (informational, each is a link to load that variant's detail)
 		seen := map[string]bool{}
 		for _, v := range g.Variants {
 			label := v.QuantFormat
@@ -68,15 +83,15 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[label] = true
 			color := quantBadgeColor(label)
-			fmt.Fprintf(w, `<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#model-detail" hx-swap="innerHTML" style="display:inline-block;padding:0.15rem 0.5rem;margin:0.1rem;border-radius:0.25rem;font-size:0.75rem;background:%s;color:#fff;text-decoration:none;">%s</a>`,
-				v.ID, color, label)
+			fmt.Fprintf(w, `<span style="display:inline-block;padding:0.1rem 0.4rem;margin:0.05rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;">%s</span>`,
+				color, label)
 		}
 
-		fmt.Fprint(w, `</div></article>`)
-	}
-
-	if len(groups) == 0 {
-		fmt.Fprint(w, `<p>No models found.</p>`)
+		fmt.Fprintf(w, `</div>
+    </div>
+  </header>
+  <div id="detail-%s" style="padding:0 1rem;"></div>
+</article>`, sid)
 	}
 }
 
@@ -91,7 +106,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<article><p><mark>Error: %s</mark></p></article>`, err)
+			fmt.Fprintf(w, `<p><mark>Error loading model details: %s</mark></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -104,6 +119,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
+
 	// Quant info
 	quantInfo := "FP16/BF16 (unquantized)"
 	if detail.QuantFormat != "" {
@@ -116,8 +132,9 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Warnings
 	gatedWarning := ""
-	if detail.Gated != "" && s.cfg.HFToken == "" {
+	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		gatedWarning = `<p><mark>This is a gated model. Configure your HF token in <a href="/settings">Settings</a> to download.</mark></p>`
 	}
 
@@ -131,61 +148,73 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fmt.Fprintf(w, `<article>
-  <header><strong>%s</strong></header>
-  %s%s
-  <div class="grid">
-    <div>
-      <small>Architecture</small>
-      <p>%s</p>
-    </div>
-    <div>
-      <small>Quantization</small>
-      <p>%s</p>
-    </div>
-    <div>
-      <small>Est. VRAM</small>
-      <p>%s</p>
-    </div>
-    <div>
-      <small>Download Size</small>
-      <p>%s</p>
-    </div>
-  </div>`,
-		detail.ID,
+	// Model info grid
+	fmt.Fprintf(w, `%s%s
+<div class="grid" style="margin-bottom:0.5rem;">
+  <div><small>Architecture</small><br><strong>%s</strong></div>
+  <div><small>Quantization</small><br><strong>%s</strong></div>
+  <div><small>Est. VRAM</small><br><strong>%s</strong></div>
+  <div><small>Download Size</small><br><strong>%s</strong></div>
+</div>`,
 		gatedWarning, vramWarning,
 		orDash(detail.Architecture),
 		quantInfo,
 		formatVRAM(detail.VRAMEstGB),
 		huggingface.FormatBytes(detail.TotalSize))
 
-	// File table
-	fmt.Fprint(w, `<table><thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead><tbody>`)
+	// Show other variants if this is the primary result of a group
+	if len(detail.Tags) > 0 {
+		// Check for known variant repos via search
+		// (We already show badges above, but here we list variants with individual download links)
+	}
+
+	// File list (collapsible)
+	downloadableFiles := 0
+	for _, f := range detail.Files {
+		if f.Category != "skip" {
+			downloadableFiles++
+		}
+	}
+
+	fmt.Fprintf(w, `<details style="margin-bottom:0.5rem;">
+  <summary>%d files to download</summary>
+  <table style="font-size:0.85rem;">
+    <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
+    <tbody>`, downloadableFiles)
+
 	for _, f := range detail.Files {
 		if f.Category == "skip" {
 			continue
 		}
-		fmt.Fprintf(w, `<tr><td>%s</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(w, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
 			f.Filename, huggingface.FormatBytes(f.Size), f.Category)
 	}
-	fmt.Fprint(w, `</tbody></table>`)
+	fmt.Fprint(w, `</tbody></table></details>`)
 
-	// Download button
-	safeID := strings.ReplaceAll(detail.ID, "/", "--")
+	// Download button + progress area
+	sid := strings.ReplaceAll(detail.ID, "/", "--")
 	disabled := ""
-	if detail.Gated != "" && s.cfg.HFToken == "" {
+	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		disabled = ` disabled`
 	}
-	fmt.Fprintf(w, `<button hx-post="/api/hf/download" hx-vals='{"model_id":"%s"}' hx-target="#dl-%s" hx-swap="innerHTML"%s>Download Model (%s)</button>
-  <div id="dl-%s"></div>
-</article>`,
-		detail.ID, safeID, disabled, huggingface.FormatBytes(detail.TotalSize), safeID)
+	fmt.Fprintf(w, `<div style="display:flex;align-items:center;gap:0.5rem;">
+  <button hx-post="/api/hf/download"
+          hx-vals='{"model_id":"%s"}'
+          hx-target="#dl-%s"
+          hx-swap="innerHTML"
+          style="margin:0;"%s>
+    Download (%s)
+  </button>
+  <div id="dl-%s" style="flex:1;"></div>
+</div>`,
+		detail.ID, sid, disabled,
+		huggingface.FormatBytes(detail.TotalSize), sid)
 }
 
 func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ModelID string   `json:"model_id"`
-		Files   []string `json:"files,omitempty"` // optional: specific files
+		Files   []string `json:"files,omitempty"`
 	}
 
 	contentType := r.Header.Get("Content-Type")
@@ -201,7 +230,6 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch file list if not specified
 	detail, err := s.hfClient.GetModel(r.Context(), req.ModelID)
 	if err != nil {
 		if isHTMX(r) {
@@ -232,6 +260,10 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 			strings.HasSuffix(strings.ToLower(f.Filename), ".bin") {
 			continue
 		}
+		// Skip GGUF files -- we use safetensors for vLLM
+		if strings.HasSuffix(strings.ToLower(f.Filename), ".gguf") {
+			continue
+		}
 		if len(req.Files) > 0 {
 			found := false
 			for _, name := range req.Files {
@@ -245,6 +277,16 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		filesToDownload = append(filesToDownload, f)
+	}
+
+	if len(filesToDownload) == 0 {
+		if isHTMX(r) {
+			respondHTML(w)
+			fmt.Fprint(w, `<p><mark>No downloadable weight files found.</mark></p>`)
+			return
+		}
+		http.Error(w, "no downloadable files", http.StatusBadRequest)
+		return
 	}
 
 	downloadID, err := s.downloader.Start(req.ModelID, filesToDownload)
@@ -261,7 +303,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if isHTMX(r) {
 		respondHTML(w)
 		fmt.Fprintf(w, `<div hx-ext="sse" sse-connect="/api/hf/download/%s/progress" sse-swap="progress">
-  <progress value="0" max="100"></progress>
+  <progress value="0" max="100" style="margin:0;"></progress>
   <small>Starting download...</small>
 </div>`, downloadID)
 		return
@@ -305,7 +347,7 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 				switch progress.Status {
 				case "complete":
 					sse.SendEvent("progress",
-						fmt.Sprintf(`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`))
+						`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
 					return
 				case "failed":
 					sse.SendEvent("progress",
@@ -315,8 +357,8 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 					sse.SendEvent("progress", `<p>Download cancelled.</p>`)
 					return
 				default:
-					html := fmt.Sprintf(`<progress value="%d" max="100"></progress>
-<small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>`,
+					html := fmt.Sprintf(`<progress value="%d" max="100" style="margin:0;display:inline-block;width:60%%;vertical-align:middle;"></progress>
+<small> %s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>`,
 						pct, downloaded, total, speed, pct,
 						progress.CompletedFiles, progress.TotalFiles)
 					sse.SendEvent("progress", html)
@@ -345,7 +387,7 @@ func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request)
 
 	respondHTML(w)
 	if len(downloads) == 0 {
-		return // empty is fine for htmx
+		return
 	}
 
 	for _, dl := range downloads {
@@ -359,7 +401,8 @@ func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request)
 		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;padding:0.5rem 1rem;">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <strong>%s</strong>
-    <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;" hx-delete="/api/hf/download/%s" hx-swap="none">Cancel</button>
+    <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
+            hx-delete="/api/hf/download/%s" hx-swap="none">Cancel</button>
   </div>
   <progress value="%d" max="100" style="margin:0.25rem 0;"></progress>
   <small>%s / %s &mdash; %d%% &mdash; %d/%d files</small>
@@ -386,8 +429,6 @@ func quantBadgeColor(format string) string {
 		return "#2d8a4e"
 	case "GPTQ":
 		return "#2d6a8a"
-	case "GGUF":
-		return "#b86e00"
 	case "FP8":
 		return "#7a3db8"
 	case "BNB-4BIT", "BNB-8BIT":
@@ -417,7 +458,7 @@ func formatVRAM(gb float64) string {
 
 func orDash(s string) string {
 	if s == "" {
-		return "—"
+		return "\u2014"
 	}
 	return s
 }
