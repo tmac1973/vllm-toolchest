@@ -18,6 +18,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ipc: host
     env_file:
       - path: .env
