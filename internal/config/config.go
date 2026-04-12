@@ -101,7 +101,7 @@ func defaults() *Config {
 		AutoRestart:        true,
 		StartupTimeoutS:    300,
 		ShutdownTimeoutS:   30,
-		EnablePrefixCache:  true,
+		EnablePrefixCache:  false,
 		Theme:              "dark",
 	}
 }
