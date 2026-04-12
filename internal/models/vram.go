@@ -26,11 +26,19 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 		// Fallback: estimate from file size
 		if m.TotalSizeBytes > 0 {
 			est.WeightMemoryGB = float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
-			est.ParamCountBillion = est.WeightMemoryGB / m.Quantization.BytesPerParam
-			if est.ParamCountBillion == 0 {
-				est.ParamCountBillion = est.WeightMemoryGB / 2.0
+			bpp := m.Quantization.BytesPerParam
+			if bpp <= 0 {
+				bpp = 2.0
 			}
+			est.ParamCountBillion = est.WeightMemoryGB / bpp
 		}
+		// Still compute overhead and totals from weight estimate
+		if est.WeightMemoryGB > 0 {
+			est.ActivationGB = activationOverhead(est.ParamCountBillion)
+			est.TotalSingleGPUGB = est.WeightMemoryGB + est.ActivationGB
+			est.TotalPerGPUTP2GB = est.WeightMemoryGB/2 + est.ActivationGB
+		}
+		computeFitLabels(&est, m.VLLMConfig.GPUMemoryUtilization)
 		return est
 	}
 
@@ -67,10 +75,14 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 	// Per-GPU for TP=2
 	est.TotalPerGPUTP2GB = est.WeightMemoryGB/2 + est.ActivationGB
 
-	// Fit labels (assuming 32GB VRAM per GPU, 0.90 utilization)
-	gpuBudget := 32.0 * 0.90 // 28.8 GB usable
-	if m.VLLMConfig.GPUMemoryUtilization > 0 {
-		gpuBudget = 32.0 * m.VLLMConfig.GPUMemoryUtilization
+	computeFitLabels(&est, m.VLLMConfig.GPUMemoryUtilization)
+	return est
+}
+
+func computeFitLabels(est *VRAMEstimate, gpuMemUtil float64) {
+	gpuBudget := 32.0 * 0.90
+	if gpuMemUtil > 0 {
+		gpuBudget = 32.0 * gpuMemUtil
 	}
 
 	if est.TotalSingleGPUGB <= gpuBudget {
@@ -86,8 +98,6 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 		est.RecommendedTP = 0
 		est.FitLabel = "Too large"
 	}
-
-	return est
 }
 
 // VRAMFitLabel returns a short fit label given an estimated VRAM in GB.

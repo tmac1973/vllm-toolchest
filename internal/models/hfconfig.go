@@ -22,60 +22,82 @@ func ParseHFConfig(modelDir string) HFConfig {
 		return cfg
 	}
 
-	// Architectures
-	jsonField(raw, &cfg.Architectures, "architectures")
-	jsonField(raw, &cfg.ModelType, "model_type")
-	jsonField(raw, &cfg.VocabSize, "vocab_size")
-	jsonField(raw, &cfg.TorchDtype, "torch_dtype")
-	jsonField(raw, &cfg.TieWordEmbeddings, "tie_word_embeddings")
+	// Top-level fields
+	jsonFieldFrom(raw, &cfg.Architectures, "architectures")
+	jsonFieldFrom(raw, &cfg.ModelType, "model_type")
+
+	// For multimodal models (Qwen VL, LLaVA, etc.), architecture fields
+	// are nested under text_config. Try top-level first, fall back to text_config.
+	src := raw
+	if _, ok := raw["text_config"]; ok {
+		var textCfg map[string]json.RawMessage
+		if json.Unmarshal(raw["text_config"], &textCfg) == nil {
+			// Check if the text_config has the fields we need
+			if _, has := textCfg["hidden_size"]; has {
+				src = textCfg
+			}
+		}
+	}
+
+	jsonFieldFrom(src, &cfg.VocabSize, "vocab_size")
+	jsonFieldFrom(src, &cfg.TorchDtype, "torch_dtype")
+	jsonFieldFrom(src, &cfg.TieWordEmbeddings, "tie_word_embeddings")
 
 	// Hidden size (with aliases)
-	if !jsonField(raw, &cfg.HiddenSize, "hidden_size") {
-		if !jsonField(raw, &cfg.HiddenSize, "d_model") {
-			jsonField(raw, &cfg.HiddenSize, "n_embd")
+	if !jsonFieldFrom(src, &cfg.HiddenSize, "hidden_size") {
+		if !jsonFieldFrom(src, &cfg.HiddenSize, "d_model") {
+			jsonFieldFrom(src, &cfg.HiddenSize, "n_embd")
 		}
 	}
 
 	// Num hidden layers (with aliases)
-	if !jsonField(raw, &cfg.NumHiddenLayers, "num_hidden_layers") {
-		if !jsonField(raw, &cfg.NumHiddenLayers, "n_layer") {
-			if !jsonField(raw, &cfg.NumHiddenLayers, "num_layers") {
-				jsonField(raw, &cfg.NumHiddenLayers, "n_layers")
+	if !jsonFieldFrom(src, &cfg.NumHiddenLayers, "num_hidden_layers") {
+		if !jsonFieldFrom(src, &cfg.NumHiddenLayers, "n_layer") {
+			if !jsonFieldFrom(src, &cfg.NumHiddenLayers, "num_layers") {
+				jsonFieldFrom(src, &cfg.NumHiddenLayers, "n_layers")
 			}
 		}
 	}
 
 	// Intermediate size
-	if !jsonField(raw, &cfg.IntermediateSize, "intermediate_size") {
-		jsonField(raw, &cfg.IntermediateSize, "ffn_dim")
+	if !jsonFieldFrom(src, &cfg.IntermediateSize, "intermediate_size") {
+		jsonFieldFrom(src, &cfg.IntermediateSize, "ffn_dim")
 	}
 
 	// Attention heads
-	if !jsonField(raw, &cfg.NumAttentionHeads, "num_attention_heads") {
-		if !jsonField(raw, &cfg.NumAttentionHeads, "n_head") {
-			jsonField(raw, &cfg.NumAttentionHeads, "num_heads")
+	if !jsonFieldFrom(src, &cfg.NumAttentionHeads, "num_attention_heads") {
+		if !jsonFieldFrom(src, &cfg.NumAttentionHeads, "n_head") {
+			jsonFieldFrom(src, &cfg.NumAttentionHeads, "num_heads")
 		}
 	}
 
 	// KV heads
-	if !jsonField(raw, &cfg.NumKeyValueHeads, "num_key_value_heads") {
-		if !jsonField(raw, &cfg.NumKeyValueHeads, "num_kv_heads") {
+	if !jsonFieldFrom(src, &cfg.NumKeyValueHeads, "num_key_value_heads") {
+		if !jsonFieldFrom(src, &cfg.NumKeyValueHeads, "num_kv_heads") {
 			cfg.NumKeyValueHeads = cfg.NumAttentionHeads // MHA default
 		}
 	}
 
 	// Head dim
-	if !jsonField(raw, &cfg.HeadDim, "head_dim") {
+	if !jsonFieldFrom(src, &cfg.HeadDim, "head_dim") {
 		if cfg.HiddenSize > 0 && cfg.NumAttentionHeads > 0 {
 			cfg.HeadDim = cfg.HiddenSize / cfg.NumAttentionHeads
 		}
 	}
 
 	// Max position embeddings
-	if !jsonField(raw, &cfg.MaxPositionEmbeddings, "max_position_embeddings") {
-		if !jsonField(raw, &cfg.MaxPositionEmbeddings, "max_sequence_length") {
-			jsonField(raw, &cfg.MaxPositionEmbeddings, "n_positions")
+	if !jsonFieldFrom(src, &cfg.MaxPositionEmbeddings, "max_position_embeddings") {
+		if !jsonFieldFrom(src, &cfg.MaxPositionEmbeddings, "max_sequence_length") {
+			jsonFieldFrom(src, &cfg.MaxPositionEmbeddings, "n_positions")
 		}
+	}
+
+	// Also check top-level for fields that might only be there
+	if cfg.VocabSize == 0 {
+		jsonFieldFrom(raw, &cfg.VocabSize, "vocab_size")
+	}
+	if cfg.TorchDtype == "" {
+		jsonFieldFrom(raw, &cfg.TorchDtype, "torch_dtype")
 	}
 
 	return cfg
@@ -356,8 +378,8 @@ func ggufBytesPerParam(quantType string) float64 {
 	}
 }
 
-// jsonField tries to unmarshal a field from a raw JSON map.
-func jsonField[T any](raw map[string]json.RawMessage, dst *T, key string) bool {
+// jsonFieldFrom tries to unmarshal a field from a raw JSON map.
+func jsonFieldFrom[T any](raw map[string]json.RawMessage, dst *T, key string) bool {
 	v, ok := raw[key]
 	if !ok {
 		return false
