@@ -415,9 +415,16 @@ func needsTrustRemoteCode(modelDir string, hfCfg HFConfig) bool {
 }
 
 func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
+	// Pick a sensible default context length rather than the model max.
+	// Many models support 128K+ but that requires enormous KV cache.
+	defaultCtx := 8192
+	if h.MaxPositionEmbeddings > 0 && h.MaxPositionEmbeddings < defaultCtx {
+		defaultCtx = h.MaxPositionEmbeddings
+	}
+
 	cfg := VLLMConfig{
 		Dtype:                "auto",
-		MaxModelLen:          0, // use model default
+		MaxModelLen:          defaultCtx,
 		TensorParallelSize:   1,
 		GPUMemoryUtilization: 0.90,
 		MaxNumSeqs:           16,
