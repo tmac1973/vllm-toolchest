@@ -1,25 +1,27 @@
 {{define "content"}}
 <h1>Settings</h1>
 
-<form hx-put="/api/settings" hx-target="#save-result" hx-swap="innerHTML">
+<form hx-put="/api/settings" hx-trigger="change" hx-target="#settings-save-status" hx-swap="innerHTML" hx-include="closest form">
+
+<div id="settings-save-status" style="position:fixed;top:1rem;right:1rem;z-index:100;"></div>
 
 <article>
     <header>API &amp; Connection</header>
     <div class="grid">
-        <label>External URL
+        <label title="The public URL shown to users for connecting API clients. Used in dashboard display and connection info.">External URL
             <input type="text" name="external_url" value="{{.ExternalURL}}" placeholder="http://localhost:3000">
         </label>
-        <label>vLLM Port
+        <label title="The port vLLM listens on inside the container. Configured via docker-compose, not changeable at runtime.">vLLM Port
             <input type="number" name="vllm_port" value="{{.VLLMPort}}" readonly>
             <small>Set via docker-compose</small>
         </label>
     </div>
     <div class="grid">
-        <label>API Key <small>(protects /v1/* endpoints)</small>
-            <input type="password" name="api_key" value="{{if .HasAPIKey}}••••••••{{end}}" placeholder="Leave blank for no auth">
+        <label title="If set, all /v1/* API requests must include this as a Bearer token in the Authorization header. Leave blank for no authentication.">API Key
+            <input type="password" name="api_key" value="{{if .HasAPIKey}}********{{end}}" placeholder="Leave blank for no auth">
         </label>
-        <label>HuggingFace Token <small>(for gated models)</small>
-            <input type="password" name="hf_token" value="{{if .HasHFToken}}••••••••{{end}}" placeholder="hf_...">
+        <label title="HuggingFace API token for downloading gated models (Llama, Mistral, Gemma, etc.). Get one at huggingface.co/settings/tokens">HuggingFace Token
+            <input type="password" name="hf_token" value="{{if .HasHFToken}}********{{end}}" placeholder="hf_...">
         </label>
     </div>
     <div style="display:flex;gap:0.5rem;">
@@ -30,24 +32,24 @@
 
 <article>
     <header>vLLM Defaults</header>
-    <p><small>Applied to new models. Existing model configs are not changed.</small></p>
+    <p><small>Applied to newly downloaded models. Existing model configs are not changed.</small></p>
     <div class="grid">
-        <label>Default dtype
+        <label title="Default data type for model weights. 'auto' uses the model's native dtype. Most models use bfloat16.">Default dtype
             <select name="default_dtype">
                 <option value="auto"{{if eq .DefaultDtype "auto"}} selected{{end}}>auto</option>
                 <option value="float16"{{if eq .DefaultDtype "float16"}} selected{{end}}>float16</option>
                 <option value="bfloat16"{{if eq .DefaultDtype "bfloat16"}} selected{{end}}>bfloat16</option>
             </select>
         </label>
-        <label>GPU memory utilization
+        <label title="Default fraction of GPU memory vLLM can use. 0.90 is safe for most setups. Increase for more KV cache (longer contexts), decrease if you get OOM errors.">GPU memory utilization
             <input type="number" name="gpu_memory_util" value="{{printf "%.2f" .GPUMemoryUtil}}" min="0.1" max="0.99" step="0.01">
         </label>
     </div>
     <div class="grid">
-        <label>Max concurrent sequences
+        <label title="Default max concurrent requests. Lower values use less memory and give more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences
             <input type="number" name="max_num_seqs" value="{{.MaxNumSeqs}}" min="1" max="256">
         </label>
-        <label>Attention backend
+        <label title="Which attention implementation to use. Triton Flash Attention is the default and works on most GPUs. Change only if you have compatibility issues.">Attention backend
             <select name="attention_backend">
                 <option value="TRITON_FLASH_ATTN"{{if eq .AttentionBackend "TRITON_FLASH_ATTN"}} selected{{end}}>Triton Flash Attention</option>
                 <option value="FLASH_ATTN"{{if eq .AttentionBackend "FLASH_ATTN"}} selected{{end}}>Flash Attention</option>
@@ -56,11 +58,11 @@
         </label>
     </div>
     <div class="grid">
-        <label>
+        <label title="Disable HIP/CUDA graph compilation by default. Slower steady-state inference but more compatible. Enable if new models crash during graph compilation.">
             <input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}>
-            Enforce eager mode <small>(disable graph compilation)</small>
+            Enforce eager mode
         </label>
-        <label>
+        <label title="Cache KV blocks for shared prefixes (like system prompts) by default. Speeds up repeated requests with the same prefix.">
             <input type="checkbox" name="enable_prefix_cache" role="switch"{{if .EnablePrefixCache}} checked{{end}}>
             Enable prefix caching
         </label>
@@ -70,11 +72,11 @@
 <article>
     <header>Tool Use / Function Calling</header>
     <div class="grid">
-        <label>
+        <label title="Enable OpenAI-compatible tool/function calling by default for newly downloaded models that support it. The correct parser is auto-detected from the model's chat template.">
             <input type="checkbox" name="tool_use_enabled" role="switch"{{if .ToolUseEnabled}} checked{{end}}>
             Enable tool use by default
         </label>
-        <label>Default tool call parser
+        <label title="Default tool call parser for new models. Usually auto-detected per model, but this sets the fallback. hermes works for most modern models (Qwen, Hermes, NousResearch).">Default tool call parser
             <select name="default_tool_parser">
                 <option value=""{{if eq .DefaultToolParser ""}} selected{{end}}>(none)</option>
                 <option value="hermes"{{if eq .DefaultToolParser "hermes"}} selected{{end}}>hermes</option>
@@ -92,11 +94,14 @@
 <article>
     <header>Quantization</header>
     <div class="grid">
-        <label>
-            <input type="checkbox" name="prefer_marlin" role="switch"{{if .PreferMarlin}} checked{{end}}>
-            Prefer Marlin kernels <small>(auto-upgrade compatible GPTQ/AWQ)</small>
-        </label>
-        <label>Default KV cache dtype
+        <div>
+            <label title="Automatically use the faster Marlin inference kernel for compatible GPTQ and AWQ models (4-bit, symmetric quantization). No model file changes needed -- just a faster kernel.">
+                <input type="checkbox" name="prefer_marlin" role="switch"{{if .PreferMarlin}} checked{{end}}>
+                Prefer Marlin kernels
+            </label>
+            <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Auto-upgrade compatible GPTQ/AWQ to faster Marlin inference</small>
+        </div>
+        <label title="Default KV cache data type. 'auto' uses FP16. FP8 halves KV cache memory allowing longer contexts, with minimal quality impact. Applied to new models.">Default KV cache dtype
             <select name="default_kv_cache_dtype">
                 <option value="auto"{{if eq .DefaultKVCacheDtype "auto"}} selected{{end}}>auto (FP16)</option>
                 <option value="fp8"{{if eq .DefaultKVCacheDtype "fp8"}} selected{{end}}>FP8</option>
@@ -109,7 +114,7 @@
 
 <article>
     <header>Process Management</header>
-    <label>
+    <label title="Automatically restart the vLLM process if it crashes unexpectedly. Recommended for production use.">
         <input type="checkbox" name="auto_restart" role="switch"{{if .AutoRestart}} checked{{end}}>
         Auto-restart vLLM on crash
     </label>
@@ -117,17 +122,16 @@
 
 <article>
     <header>Theme</header>
-    <select name="theme">
-        <option value="dark"{{if eq .Theme "dark"}} selected{{end}}>Dark</option>
-        <option value="light"{{if eq .Theme "light"}} selected{{end}}>Light</option>
-        <option value="terminal-green"{{if eq .Theme "terminal-green"}} selected{{end}}>Terminal Green</option>
-        <option value="terminal-amber"{{if eq .Theme "terminal-amber"}} selected{{end}}>Terminal Amber</option>
-        <option value="cyberpunk"{{if eq .Theme "cyberpunk"}} selected{{end}}>Cyberpunk</option>
-    </select>
+    <label title="Color theme for the web UI. Saved in your browser.">
+        <select name="theme" onchange="setTheme(this.value);">
+            <option value="dark"{{if eq .Theme "dark"}} selected{{end}}>Dark</option>
+            <option value="light"{{if eq .Theme "light"}} selected{{end}}>Light</option>
+            <option value="terminal-green"{{if eq .Theme "terminal-green"}} selected{{end}}>Terminal Green</option>
+            <option value="terminal-amber"{{if eq .Theme "terminal-amber"}} selected{{end}}>Terminal Amber</option>
+            <option value="cyberpunk"{{if eq .Theme "cyberpunk"}} selected{{end}}>Cyberpunk</option>
+        </select>
+    </label>
 </article>
-
-<button type="submit">Save Settings</button>
-<span id="save-result" style="margin-left:0.5rem;"></span>
 
 </form>
 {{end}}

@@ -219,16 +219,6 @@
             <li><a href="/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
         </ul>
         <div>
-            <details>
-                <summary style="font-size:0.75rem;">Theme</summary>
-                <ul style="list-style:none;padding:0;font-size:0.75rem;">
-                    <li><a href="#" onclick="setTheme('dark');return false;">Dark</a></li>
-                    <li><a href="#" onclick="setTheme('light');return false;">Light</a></li>
-                    <li><a href="#" onclick="setTheme('terminal-green');return false;">Terminal Green</a></li>
-                    <li><a href="#" onclick="setTheme('terminal-amber');return false;">Terminal Amber</a></li>
-                    <li><a href="#" onclick="setTheme('cyberpunk');return false;">Cyberpunk</a></li>
-                </ul>
-            </details>
             <div id="monitor-bar"
                  hx-get="/api/monitor"
                  hx-trigger="load, every 3s"
