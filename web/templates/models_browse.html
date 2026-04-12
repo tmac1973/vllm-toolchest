@@ -1,4 +1,25 @@
 {{define "content"}}
 <h1>Search HuggingFace</h1>
-<p>Model browsing and download will be available in a future update.</p>
+
+<div id="active-downloads"
+     hx-get="/api/hf/downloads"
+     hx-trigger="load, every 3s"
+     hx-swap="innerHTML">
+</div>
+
+<input type="search"
+       name="q"
+       placeholder="Search models (e.g., llama 3.1 8b, qwen2.5, mistral nemo...)"
+       hx-get="/api/hf/search"
+       hx-trigger="input changed delay:400ms, search"
+       hx-target="#search-results"
+       hx-indicator="#search-spinner"
+       style="margin-bottom:0.5rem;">
+<span id="search-spinner" class="htmx-indicator" aria-busy="true">Searching...</span>
+
+<div id="search-results"></div>
+
+<hr>
+
+<div id="model-detail"></div>
 {{end}}

@@ -13,15 +13,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
 
 type Server struct {
-	cfg     *config.Config
-	pages   map[string]*template.Template
-	router  chi.Router
-	monitor *monitor.Monitor
+	cfg        *config.Config
+	pages      map[string]*template.Template
+	router     chi.Router
+	monitor    *monitor.Monitor
+	hfClient   *huggingface.Client
+	downloader *huggingface.Downloader
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -29,8 +32,10 @@ func NewServer(cfg *config.Config) *Server {
 	mon.Start()
 
 	s := &Server{
-		cfg:     cfg,
-		monitor: mon,
+		cfg:        cfg,
+		monitor:    mon,
+		hfClient:   huggingface.NewClient(cfg.HFToken),
+		downloader: huggingface.NewDownloader(cfg.DataDir, cfg.HFToken),
 	}
 	s.pages = s.parseTemplates()
 	s.router = s.buildRouter()
@@ -52,6 +57,7 @@ func (s *Server) parseTemplates() map[string]*template.Template {
 			}
 			return (value / max) * 100
 		},
+		"formatBytes": huggingface.FormatBytes,
 	}
 
 	base := template.Must(template.New("").Funcs(funcMap).ParseFS(web.Templates,
@@ -108,7 +114,12 @@ func (s *Server) buildRouter() chi.Router {
 			// Phase 4
 		})
 		r.Route("/hf", func(r chi.Router) {
-			// Phase 3
+			r.Get("/search", s.handleHFSearch)
+			r.Get("/model", s.handleHFModel)
+			r.Post("/download", s.handleHFDownload)
+			r.Get("/downloads", s.handleHFActiveDownloads)
+			r.Get("/download/{id}/progress", s.handleHFDownloadProgress)
+			r.Delete("/download/{id}", s.handleHFDownloadCancel)
 		})
 		r.Route("/service", func(r chi.Router) {
 			// Phase 5
