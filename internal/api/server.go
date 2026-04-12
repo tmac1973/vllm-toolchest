@@ -127,11 +127,11 @@ func (s *Server) buildRouter() chi.Router {
 		r.Route("/models", func(r chi.Router) {
 			r.Get("/", s.handleListModels)
 			r.Post("/scan", s.handleScanModels)
-			r.Get("/{id}", s.handleGetModel)
-			r.Get("/{id}/config-panel", s.handleModelConfigPanel)
-			r.Put("/{id}/config", s.handleUpdateModelConfig)
-			r.Patch("/{id}/toggle", s.handleToggleModel)
-			r.Delete("/{id}", s.handleDeleteModel)
+			r.Get("/get", s.handleGetModel)
+			r.Get("/config-panel", s.handleModelConfigPanel)
+			r.Put("/config", s.handleUpdateModelConfig)
+			r.Patch("/toggle", s.handleToggleModel)
+			r.Delete("/delete", s.handleDeleteModel)
 		})
 		r.Route("/hf", func(r chi.Router) {
 			r.Get("/search", s.handleHFSearch)

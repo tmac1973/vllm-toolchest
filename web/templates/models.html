@@ -15,7 +15,7 @@
 
 <div id="model-list"
      hx-get="/api/models"
-     hx-trigger="load"
+     hx-trigger="load, every 10s"
      hx-swap="innerHTML">
     <p aria-busy="true">Loading models...</p>
 </div>

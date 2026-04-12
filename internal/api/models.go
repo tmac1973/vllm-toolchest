@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
@@ -47,9 +46,10 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			orphanBadge = ` <del>missing</del>`
 		}
 
+		sid := safeID(m.ID)
 		fmt.Fprintf(w, `<tr>
       <td>
-        <a href="#" hx-get="/api/models/%s/config-panel" hx-target="#config-%s" hx-swap="innerHTML">
+        <a href="#" hx-get="/api/models/config-panel?id=%s" hx-target="#config-%s" hx-swap="innerHTML">
           <strong>%s</strong>
         </a>%s
         <br><small style="opacity:0.6;">%s</small>
@@ -60,19 +60,19 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
       <td>%s</td>
       <td>
         <input type="checkbox" role="switch"%s
-               hx-patch="/api/models/%s/toggle"
+               hx-patch="/api/models/toggle?id=%s"
                hx-swap="none">
       </td>
       <td>
         <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-                hx-delete="/api/models/%s"
+                hx-delete="/api/models/delete?id=%s"
                 hx-confirm="Delete %s? This removes all model files."
                 hx-target="closest tr"
                 hx-swap="outerHTML">Delete</button>
       </td>
     </tr>
     <tr id="config-%s-row"><td colspan="7"><div id="config-%s"></div></td></tr>`,
-			m.ID, safeID(m.ID),
+			m.ID, sid,
 			m.DisplayName, orphanBadge,
 			m.ID,
 			quantBadge,
@@ -82,14 +82,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			enabledChecked,
 			m.ID,
 			m.ID, m.DisplayName,
-			safeID(m.ID), safeID(m.ID))
+			sid, sid)
 	}
 
 	fmt.Fprint(w, `</tbody></table>`)
 }
 
 func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.URL.Query().Get("id")
 	m, ok := s.registry.Get(id)
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
@@ -99,7 +99,7 @@ func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.URL.Query().Get("id")
 	m, ok := s.registry.Get(id)
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
@@ -117,7 +117,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
     &mdash; %s
   </div>
 
-  <form hx-put="/api/models/%s/config" hx-swap="none">
+  <form hx-put="/api/models/config?id=%s" hx-swap="none">
     <fieldset>
       <legend>Core</legend>
       <div class="grid">
@@ -283,7 +283,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.URL.Query().Get("id")
 	m, ok := s.registry.Get(id)
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
@@ -343,7 +343,7 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleToggleModel(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.URL.Query().Get("id")
 	m, ok := s.registry.Get(id)
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
@@ -358,7 +358,7 @@ func (s *Server) handleToggleModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.URL.Query().Get("id")
 	if err := s.registry.Delete(id, true); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
