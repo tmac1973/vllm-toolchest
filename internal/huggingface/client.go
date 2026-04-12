@@ -59,13 +59,19 @@ func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult,
 	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50",
 		apiURL, url.QueryEscape(query))
 
-	var results []ModelSearchResult
-	if err := c.getJSON(ctx, u, &results); err != nil {
+	var raw []ModelSearchResult
+	if err := c.getJSON(ctx, u, &raw); err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 
-	for i := range results {
-		results[i].QuantFormat = detectQuantFormat(results[i].ID, results[i].Tags)
+	// Filter out GGUF-only repos (we serve safetensors/AWQ/GPTQ, not GGUF)
+	var results []ModelSearchResult
+	for _, r := range raw {
+		if isGGUFOnly(r.ID, r.Tags) {
+			continue
+		}
+		r.QuantFormat = detectQuantFormat(r.ID, r.Tags)
+		results = append(results, r)
 	}
 
 	return results, nil
@@ -322,6 +328,26 @@ func (c *Client) setAuth(req *http.Request) {
 // DownloadURL returns the direct download URL for a file in a model repo.
 func DownloadURL(modelID, filename string) string {
 	return fmt.Sprintf("%s/%s/resolve/main/%s", baseURL, modelID, filename)
+}
+
+// isGGUFOnly returns true if the model is a GGUF-only repo.
+func isGGUFOnly(modelID string, tags []string) bool {
+	lower := strings.ToLower(modelID)
+	if strings.HasSuffix(lower, "-gguf") || strings.HasSuffix(lower, "_gguf") {
+		return true
+	}
+	for _, t := range tags {
+		if strings.ToLower(t) == "gguf" {
+			// Has gguf tag -- check if it also has safetensors (mixed repo)
+			for _, t2 := range tags {
+				if strings.ToLower(t2) == "safetensors" {
+					return false // mixed repo, keep it
+				}
+			}
+			return true // gguf-only
+		}
+	}
+	return false
 }
 
 // detectQuantFormat detects quantization format from model ID and tags.
