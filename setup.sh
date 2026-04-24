@@ -9,30 +9,35 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CDI_SYSTEM_DIR="/etc/cdi"
 readonly CDI_USER_DIR="${HOME}/.config/containers/cdi"
 
+readonly QUADLET_USER_DIR="${HOME}/.config/containers/systemd"
+readonly QUADLET_SYSTEM_DIR="/etc/containers/systemd"
+readonly PODMAN_SERVICE_NAME="vllm-toolchest"
+
 # ─── Global state (populated by detect_* functions) ──────────────────────────
 
 GPU_VENDOR=""           # cuda, rocm
 GPU_INFO=""             # human-readable GPU description
+AMD_GFX_TARGET=""       # detected gfx target (e.g. gfx1201) — passed as GPU_ARCH build arg
 AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
 HOST_VIDEO_GID=""       # host video group GID
 HOST_RENDER_GID=""      # host render group GID
 
-VLLMCTL_PORT="3000"
-VLLMCTL_INFERENCE_PORT="8000"
-VLLMCTL_MODELS_DIR=""
+VLLMCTL_PORT="3000"            # host port for management UI
+VLLMCTL_INFERENCE_PORT="8000"  # host port for inference API
+VLLMCTL_MODELS_DIR=""          # host path for model storage (empty = use docker volume)
 
 CONTAINER_CMD=""        # docker or podman
 COMPOSE_CMD=""          # "docker compose" or "podman-compose" or "podman compose"
 CONTAINER_VERSION=""
 COMPOSE_VERSION=""
 
-DISTRO_ID=""
-DISTRO_NAME=""
-DISTRO_FAMILY=""
-PKG_MANAGER=""
+DISTRO_ID=""            # debian, ubuntu, fedora, arch, cachyos, opensuse-leap, etc.
+DISTRO_NAME=""          # Pretty name from os-release
+DISTRO_FAMILY=""        # debian, fedora, arch, suse
+PKG_MANAGER=""          # apt, dnf, pacman, zypper
 
-ACTIONS=()
-PREREQS=()
+ACTIONS=()              # list of human-readable actions to perform
+PREREQS=()              # list of prerequisite action keys
 
 # ─── Utility ─────────────────────────────────────────────────────────────────
 
@@ -74,6 +79,9 @@ prompt_confirm() {
 
 # ─── Detection: GPU ──────────────────────────────────────────────────────────
 
+# Detect host video/render group GIDs for container device access.
+# Container group_add needs the host's actual GIDs, not names,
+# because the container's /etc/group may have different GID mappings.
 detect_host_gpu_gids() {
     if need_cmd getent; then
         HOST_VIDEO_GID="$(getent group video 2>/dev/null | cut -d: -f3)" || true
@@ -87,26 +95,38 @@ detect_host_gpu_gids() {
     fi
 }
 
+# Detect AMD gfx target from rocminfo, set AMD_GFX_TARGET and whether
+# HSA_OVERRIDE_GFX_VERSION is needed for ROCm compatibility.
 detect_amd_gfx_version() {
     local gfx_target=""
+
     if need_cmd rocminfo; then
         gfx_target="$(rocminfo 2>/dev/null | grep -oP 'gfx\d+' | head -1)" || true
     fi
+
     [[ -z "$gfx_target" ]] && return
+    AMD_GFX_TARGET="$gfx_target"
+
+    # HSA override is only needed for GPUs not natively supported by ROCm 7.x.
     case "$gfx_target" in
-        gfx1200|gfx1201|gfx1100|gfx1101|gfx1102|gfx1103)
-            AMD_GFX_VERSION="" ;;
+        # RDNA 4 — native in ROCm 7.2+
+        gfx1200|gfx1201)            AMD_GFX_VERSION="" ;;
+        # RDNA 3 — native
+        gfx1100|gfx1101|gfx1102|gfx1103)    AMD_GFX_VERSION="" ;;
+        # RDNA 2 — native
         gfx1030|gfx1031|gfx1032|gfx1033|gfx1034|gfx1035|gfx1036)
-            AMD_GFX_VERSION="" ;;
-        gfx1010|gfx1011|gfx1012|gfx1013)
-            AMD_GFX_VERSION="10.1.0" ;;
+                                    AMD_GFX_VERSION="" ;;
+        # RDNA 1 — needs override
+        gfx1010|gfx1011|gfx1012|gfx1013)    AMD_GFX_VERSION="10.1.0" ;;
+        # Vega — needs override
         gfx900|gfx902|gfx904|gfx906|gfx908|gfx909)
-            AMD_GFX_VERSION="9.0.0" ;;
-        *) AMD_GFX_VERSION="" ;;
+                                    AMD_GFX_VERSION="9.0.0" ;;
+        *)                          AMD_GFX_VERSION="" ;;
     esac
 }
 
 detect_gpu() {
+    # NVIDIA: check for nvidia-smi AND that it can talk to a GPU
     if need_cmd nvidia-smi; then
         if nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null; then
             GPU_VENDOR="cuda"
@@ -115,11 +135,14 @@ detect_gpu() {
             return
         fi
     fi
+    # NVIDIA: fallback — device node exists but nvidia-smi missing/broken
     if [[ -e /dev/nvidia0 ]]; then
         GPU_VENDOR="cuda"
         GPU_INFO="NVIDIA GPU detected (nvidia-smi unavailable)"
         return
     fi
+
+    # AMD: check for ROCm kernel driver
     if [[ -e /dev/kfd ]]; then
         GPU_VENDOR="rocm"
         GPU_INFO="AMD GPU"
@@ -128,11 +151,22 @@ detect_gpu() {
             name="$(rocminfo 2>/dev/null | grep 'Marketing Name' | sed 's/.*: *//' \
                 | grep -iE 'Radeon|Instinct|FirePro' | head -1)" || true
             [[ -n "$name" ]] && GPU_INFO="$name"
+        elif [[ -d /sys/class/drm ]]; then
+            # Sysfs fallback — works without rocminfo installed on host
+            for card_dir in /sys/class/drm/card[0-9]*/device; do
+                if [[ -f "$card_dir/vendor" && "$(cat "$card_dir/vendor")" == "0x1002" ]]; then
+                    GPU_INFO="AMD GPU ($(cat "$card_dir/device" 2>/dev/null || echo "unknown"))"
+                    break
+                fi
+            done
         fi
         detect_amd_gfx_version
         detect_host_gpu_gids
         return
     fi
+
+    # No GPU — vLLM has no meaningful CPU inference path, so fall back to CUDA
+    # (the user probably just doesn't have drivers installed yet).
     GPU_VENDOR="cuda"
     GPU_INFO="No GPU detected (defaulting to CUDA)"
 }
@@ -144,12 +178,22 @@ detect_container_runtime() {
 
     if [[ -n "$user_override" ]]; then
         case "$user_override" in
-            docker) need_cmd docker || fatal "RUNTIME=docker but docker not found"; CONTAINER_CMD="docker" ;;
-            podman) need_cmd podman || fatal "RUNTIME=podman but podman not found"; CONTAINER_CMD="podman" ;;
-            *) fatal "Unknown RUNTIME=$user_override" ;;
+            docker)
+                need_cmd docker || fatal "RUNTIME=docker specified but docker is not installed"
+                CONTAINER_CMD="docker"
+                ;;
+            podman)
+                need_cmd podman || fatal "RUNTIME=podman specified but podman is not installed"
+                CONTAINER_CMD="podman"
+                ;;
+            *)
+                fatal "Unknown RUNTIME=$user_override (expected: docker or podman)"
+                ;;
         esac
     else
+        # Auto-detect: prefer docker if available, fall back to podman
         if need_cmd docker && docker info &>/dev/null 2>&1; then
+            # Make sure it's real Docker, not podman emulating docker
             if docker --version 2>/dev/null | grep -qi podman; then
                 CONTAINER_CMD="podman"
             else
@@ -158,7 +202,7 @@ detect_container_runtime() {
         elif need_cmd podman; then
             CONTAINER_CMD="podman"
         else
-            fatal "No container runtime found. Install Docker or Podman."
+            fatal "No container runtime found. Install Docker or Podman first."
         fi
     fi
 
@@ -168,39 +212,50 @@ detect_container_runtime() {
     if [[ "$CONTAINER_CMD" == "docker" ]]; then
         if docker compose version &>/dev/null 2>&1; then
             COMPOSE_CMD="docker compose"
+            COMPOSE_VERSION="$(docker compose version 2>/dev/null || true)"
         elif need_cmd docker-compose; then
             COMPOSE_CMD="docker-compose"
+            COMPOSE_VERSION="$(docker-compose --version 2>/dev/null || true)"
         else
-            fatal "Docker found but no compose plugin"
+            fatal "Docker is installed but neither 'docker compose' plugin nor 'docker-compose' found"
         fi
     else
         if podman compose version &>/dev/null 2>&1; then
             COMPOSE_CMD="podman compose"
+            COMPOSE_VERSION="$(podman compose version 2>/dev/null || true)"
         elif need_cmd podman-compose; then
             COMPOSE_CMD="podman-compose"
+            COMPOSE_VERSION="$(podman-compose --version 2>/dev/null || true)"
         else
-            fatal "Podman found but no compose command"
+            fatal "Podman is installed but neither 'podman compose' nor 'podman-compose' found"
         fi
     fi
-    COMPOSE_VERSION="$($COMPOSE_CMD version 2>/dev/null || $COMPOSE_CMD --version 2>/dev/null || true)"
     COMPOSE_VERSION="${COMPOSE_VERSION%%$'\n'*}"
 }
 
 # ─── Detection: Linux distribution ───────────────────────────────────────────
 
 detect_distro() {
-    [[ ! -f /etc/os-release ]] && fatal "Cannot detect distribution"
+    if [[ ! -f /etc/os-release ]]; then
+        fatal "Cannot detect distribution: /etc/os-release not found"
+    fi
+
     # shellcheck disable=SC1091
     source /etc/os-release
+
     DISTRO_ID="${ID:-unknown}"
     DISTRO_NAME="${PRETTY_NAME:-$DISTRO_ID}"
     local id_like="${ID_LIKE:-}"
 
     case "$DISTRO_ID" in
-        debian|ubuntu|pop|linuxmint) DISTRO_FAMILY="debian"; PKG_MANAGER="apt" ;;
-        fedora|rhel|centos|rocky|alma|nobara) DISTRO_FAMILY="fedora"; PKG_MANAGER="dnf" ;;
-        arch|cachyos|endeavouros|manjaro) DISTRO_FAMILY="arch"; PKG_MANAGER="pacman" ;;
-        opensuse-leap|opensuse-tumbleweed) DISTRO_FAMILY="suse"; PKG_MANAGER="zypper" ;;
+        debian|ubuntu|pop|linuxmint|elementary|zorin|kali)
+            DISTRO_FAMILY="debian"; PKG_MANAGER="apt" ;;
+        fedora|rhel|centos|rocky|alma|nobara)
+            DISTRO_FAMILY="fedora"; PKG_MANAGER="dnf" ;;
+        arch|cachyos|endeavouros|manjaro|garuda|artix)
+            DISTRO_FAMILY="arch"; PKG_MANAGER="pacman" ;;
+        opensuse-leap|opensuse-tumbleweed|sles)
+            DISTRO_FAMILY="suse"; PKG_MANAGER="zypper" ;;
         *)
             if [[ "$id_like" == *"debian"* || "$id_like" == *"ubuntu"* ]]; then
                 DISTRO_FAMILY="debian"; PKG_MANAGER="apt"
@@ -208,18 +263,30 @@ detect_distro() {
                 DISTRO_FAMILY="fedora"; PKG_MANAGER="dnf"
             elif [[ "$id_like" == *"arch"* ]]; then
                 DISTRO_FAMILY="arch"; PKG_MANAGER="pacman"
+            elif [[ "$id_like" == *"suse"* ]]; then
+                DISTRO_FAMILY="suse"; PKG_MANAGER="zypper"
             else
+                warn "Unknown distro: $DISTRO_ID (ID_LIKE=$id_like)"
+                warn "Will skip automatic prerequisite installation"
                 DISTRO_FAMILY="unknown"; PKG_MANAGER=""
             fi
             ;;
     esac
 }
 
-# ─── Prerequisites ────────────────────────────────────────────────────────────
+# ─── Prerequisite checks ─────────────────────────────────────────────────────
 
 has_nvidia_toolkit() { need_cmd nvidia-ctk; }
 has_cdi_spec() { [[ -f "$CDI_SYSTEM_DIR/nvidia.yaml" ]] || [[ -f "$CDI_USER_DIR/nvidia.yaml" ]]; }
 docker_has_nvidia_runtime() { docker info 2>/dev/null | grep -qi "nvidia"; }
+
+selinux_enforcing() {
+    need_cmd getenforce && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]
+}
+
+selinux_device_bool_set() {
+    need_cmd getsebool && getsebool container_use_devices 2>/dev/null | grep -q "on"
+}
 
 check_prerequisites() {
     PREREQS=()
@@ -230,12 +297,18 @@ check_prerequisites() {
             PREREQS+=("install_nvidia_toolkit")
             ACTIONS+=("Install NVIDIA Container Toolkit")
         fi
+
         if [[ "$CONTAINER_CMD" == "docker" ]]; then
-            if ! docker_has_nvidia_runtime; then
+            if has_nvidia_toolkit && ! docker_has_nvidia_runtime; then
                 PREREQS+=("configure_docker_nvidia")
-                ACTIONS+=("Configure Docker NVIDIA runtime")
+                ACTIONS+=("Configure Docker NVIDIA runtime + restart Docker daemon")
+            elif ! has_nvidia_toolkit; then
+                PREREQS+=("configure_docker_nvidia")
+                ACTIONS+=("Configure Docker NVIDIA runtime + restart Docker daemon")
             fi
-        elif [[ "$CONTAINER_CMD" == "podman" ]]; then
+        fi
+
+        if [[ "$CONTAINER_CMD" == "podman" ]]; then
             if ! has_cdi_spec; then
                 PREREQS+=("generate_cdi_spec")
                 ACTIONS+=("Generate NVIDIA CDI spec for Podman")
@@ -243,40 +316,71 @@ check_prerequisites() {
         fi
     fi
 
-    ACTIONS+=("Build container image (Dockerfile.${GPU_VENDOR})")
-    ACTIONS+=("Start vllm-toolchest")
+    # SELinux: needed for ROCm device access on Fedora/RHEL
+    if [[ "$GPU_VENDOR" == "rocm" ]] && selinux_enforcing && ! selinux_device_bool_set; then
+        PREREQS+=("selinux_device_bool")
+        ACTIONS+=("Enable SELinux container_use_devices boolean")
+    fi
+
+    ACTIONS+=("Build container image ($(dockerfile))")
+    ACTIONS+=("Start vllm-toolchest service")
+}
+
+# ─── Prerequisite installation ───────────────────────────────────────────────
+
+install_nvidia_toolkit_apt() {
+    log "Adding NVIDIA Container Toolkit apt repository..."
+    run_sudo apt-get update -qq
+    run_sudo apt-get install -y -qq curl gpg
+
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | run_sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        | run_sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+
+    run_sudo apt-get update -qq
+    run_sudo apt-get install -y nvidia-container-toolkit
+    ok "NVIDIA Container Toolkit installed"
+}
+
+install_nvidia_toolkit_dnf() {
+    log "Adding NVIDIA Container Toolkit dnf repository..."
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+        | run_sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo > /dev/null
+    run_sudo dnf install -y nvidia-container-toolkit
+    ok "NVIDIA Container Toolkit installed"
+}
+
+install_nvidia_toolkit_pacman() {
+    log "Installing NVIDIA Container Toolkit via pacman..."
+    run_sudo pacman -Sy --noconfirm nvidia-container-toolkit
+    ok "NVIDIA Container Toolkit installed"
+}
+
+install_nvidia_toolkit_zypper() {
+    log "Adding NVIDIA Container Toolkit zypper repository..."
+    run_sudo zypper ar -f \
+        https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+        nvidia-container-toolkit 2>/dev/null || true
+    run_sudo zypper --gpg-auto-import-keys install -y nvidia-container-toolkit
+    ok "NVIDIA Container Toolkit installed"
 }
 
 install_nvidia_toolkit() {
     case "$PKG_MANAGER" in
-        apt)
-            log "Adding NVIDIA Container Toolkit apt repo..."
-            run_sudo apt-get update -qq
-            run_sudo apt-get install -y -qq curl gpg
-            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-                | run_sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-                | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-                | run_sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-            run_sudo apt-get update -qq
-            run_sudo apt-get install -y nvidia-container-toolkit ;;
-        dnf)
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
-                | run_sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo > /dev/null
-            run_sudo dnf install -y nvidia-container-toolkit ;;
-        pacman)
-            run_sudo pacman -Sy --noconfirm nvidia-container-toolkit ;;
-        zypper)
-            run_sudo zypper ar -f https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo nvidia-container-toolkit 2>/dev/null || true
-            run_sudo zypper --gpg-auto-import-keys install -y nvidia-container-toolkit ;;
-        *) fatal "Cannot install NVIDIA Container Toolkit: unsupported package manager" ;;
+        apt)    install_nvidia_toolkit_apt ;;
+        dnf)    install_nvidia_toolkit_dnf ;;
+        pacman) install_nvidia_toolkit_pacman ;;
+        zypper) install_nvidia_toolkit_zypper ;;
+        *)      fatal "Cannot install NVIDIA Container Toolkit: unsupported package manager" ;;
     esac
-    ok "NVIDIA Container Toolkit installed"
 }
 
 configure_docker_nvidia() {
     log "Configuring Docker NVIDIA runtime..."
     run_sudo nvidia-ctk runtime configure --runtime=docker
+    log "Restarting Docker daemon..."
     run_sudo systemctl restart docker
     ok "Docker NVIDIA runtime configured"
 }
@@ -286,6 +390,17 @@ generate_cdi_spec() {
     run_sudo mkdir -p "$CDI_SYSTEM_DIR"
     run_sudo nvidia-ctk cdi generate --output="$CDI_SYSTEM_DIR/nvidia.yaml"
     ok "CDI spec written to $CDI_SYSTEM_DIR/nvidia.yaml"
+
+    if need_cmd nvidia-ctk; then
+        log "Verifying CDI devices..."
+        nvidia-ctk cdi list 2>/dev/null | head -5 || true
+    fi
+}
+
+selinux_device_bool() {
+    log "Enabling SELinux container_use_devices..."
+    run_sudo setsebool -P container_use_devices 1
+    ok "SELinux boolean set"
 }
 
 install_prerequisites() {
@@ -294,6 +409,8 @@ install_prerequisites() {
             install_nvidia_toolkit)  install_nvidia_toolkit ;;
             configure_docker_nvidia) configure_docker_nvidia ;;
             generate_cdi_spec)       generate_cdi_spec ;;
+            selinux_device_bool)     selinux_device_bool ;;
+            *)                       warn "Unknown prerequisite: $prereq" ;;
         esac
     done
 }
@@ -304,9 +421,109 @@ is_port_available() {
     local port="$1"
     if need_cmd ss; then
         ! ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .
+    elif need_cmd netstat; then
+        ! netstat -tln 2>/dev/null | grep -q ":${port} "
     else
         return 0
     fi
+}
+
+prompt_ports() {
+    echo ""
+    echo -e "${BOLD}Port configuration${NC}"
+    echo ""
+    echo "  Current ports:"
+    echo "    Management UI:  ${VLLMCTL_PORT}"
+    echo "    Inference API:  ${VLLMCTL_INFERENCE_PORT}"
+    echo ""
+
+    local ports_ok=true
+    if ! is_port_available "$VLLMCTL_PORT"; then
+        warn "Port ${VLLMCTL_PORT} is already in use"
+        ports_ok=false
+    fi
+    if ! is_port_available "$VLLMCTL_INFERENCE_PORT"; then
+        warn "Port ${VLLMCTL_INFERENCE_PORT} is already in use"
+        ports_ok=false
+    fi
+
+    if [[ "$ports_ok" == true ]]; then
+        if prompt_confirm "Use these ports?"; then
+            return
+        fi
+    else
+        echo ""
+        echo "  One or more ports are in use. Please choose alternative ports."
+    fi
+
+    echo ""
+    local port
+    while true; do
+        read -rp "$(echo -e "  ${BOLD}Management UI port${NC} [${VLLMCTL_PORT}]: ")" port
+        port="${port:-$VLLMCTL_PORT}"
+        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+            VLLMCTL_PORT="$port"
+            break
+        fi
+        err "Invalid port number: $port"
+    done
+
+    while true; do
+        read -rp "$(echo -e "  ${BOLD}Inference API port${NC} [${VLLMCTL_INFERENCE_PORT}]: ")" port
+        port="${port:-$VLLMCTL_INFERENCE_PORT}"
+        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+            if [[ "$port" == "$VLLMCTL_PORT" ]]; then
+                err "Cannot use the same port as management UI ($VLLMCTL_PORT)"
+                continue
+            fi
+            VLLMCTL_INFERENCE_PORT="$port"
+            break
+        fi
+        err "Invalid port number: $port"
+    done
+}
+
+prompt_models_dir() {
+    echo ""
+    echo -e "${BOLD}Model storage${NC}"
+    echo ""
+    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
+        echo "  Current: ${VLLMCTL_MODELS_DIR} (host directory)"
+    else
+        echo "  Current: Docker volume (default)"
+    fi
+    echo ""
+    echo "  Mount a host directory so models persist even if the"
+    echo "  container volume is removed."
+    echo ""
+
+    local path
+    read -rp "$(echo -e "  ${BOLD}Host path${NC} [${VLLMCTL_MODELS_DIR:-none}]: ")" path
+
+    if [[ -z "$path" ]]; then
+        return
+    fi
+
+    if [[ "$path" == "none" || "$path" == "-" ]]; then
+        VLLMCTL_MODELS_DIR=""
+        echo "  → Models will use Docker volume"
+        return
+    fi
+
+    path="${path/#\~/$HOME}"
+
+    if [[ "$path" != /* ]]; then
+        path="$(cd "$SCRIPT_DIR" && realpath -m "$path" 2>/dev/null || echo "$SCRIPT_DIR/$path")"
+    fi
+
+    if [[ ! -d "$path" ]]; then
+        log "Creating directory: $path"
+        mkdir -p "$path" || { err "Cannot create $path"; return; }
+    fi
+
+    VLLMCTL_MODELS_DIR="$path"
+    export VLLMCTL_MODELS_DIR
+    echo "  → Models will be stored at: $path"
 }
 
 load_env_ports() {
@@ -322,78 +539,17 @@ load_env_ports() {
     fi
 }
 
-prompt_ports() {
-    echo ""
-    echo -e "${BOLD}Port configuration${NC}"
-    echo "  Management UI:  ${VLLMCTL_PORT}"
-    echo "  Inference API:  ${VLLMCTL_INFERENCE_PORT}"
-
-    local ports_ok=true
-    if ! is_port_available "$VLLMCTL_PORT"; then
-        warn "Port ${VLLMCTL_PORT} is already in use"
-        ports_ok=false
-    fi
-    if ! is_port_available "$VLLMCTL_INFERENCE_PORT"; then
-        warn "Port ${VLLMCTL_INFERENCE_PORT} is already in use"
-        ports_ok=false
-    fi
-
-    if [[ "$ports_ok" == true ]] && prompt_confirm "Use these ports?"; then
-        return
-    fi
-
-    local port
-    while true; do
-        read -rp "  Management UI port [${VLLMCTL_PORT}]: " port
-        port="${port:-$VLLMCTL_PORT}"
-        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
-            VLLMCTL_PORT="$port"; break
-        fi
-        err "Invalid port"
-    done
-    while true; do
-        read -rp "  Inference API port [${VLLMCTL_INFERENCE_PORT}]: " port
-        port="${port:-$VLLMCTL_INFERENCE_PORT}"
-        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
-            VLLMCTL_INFERENCE_PORT="$port"; break
-        fi
-        err "Invalid port"
-    done
-}
-
-prompt_models_dir() {
-    echo ""
-    echo -e "${BOLD}Model storage${NC}"
-    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
-        echo "  Current: ${VLLMCTL_MODELS_DIR}"
-    else
-        echo "  Current: Docker volume (default)"
-    fi
-    echo "  Mount a host directory so models persist across container rebuilds."
-
-    local path
-    read -rp "  Host path [${VLLMCTL_MODELS_DIR:-none}]: " path
-    if [[ -z "$path" ]]; then return; fi
-    if [[ "$path" == "none" || "$path" == "-" ]]; then
-        VLLMCTL_MODELS_DIR=""; return
-    fi
-    path="${path/#\~/$HOME}"
-    [[ "$path" != /* ]] && path="$(cd "$SCRIPT_DIR" && realpath -m "$path")"
-    [[ ! -d "$path" ]] && mkdir -p "$path"
-    VLLMCTL_MODELS_DIR="$path"
-    export VLLMCTL_MODELS_DIR
-}
-
 # ─── Container operations ────────────────────────────────────────────────────
 
 compose_file() {
-    if [[ "$GPU_VENDOR" == "rocm" ]]; then
-        echo "docker-compose.yml"
-    else
-        echo "docker-compose.cuda.yml"
-    fi
+    echo "docker-compose.${GPU_VENDOR}.yml"
 }
 
+dockerfile() {
+    echo "Dockerfile.${GPU_VENDOR}"
+}
+
+# compose_cmd builds the full compose command with all required -f flags.
 compose_cmd() {
     local cmd="$COMPOSE_CMD -f $(compose_file)"
     if [[ -n "${VLLMCTL_MODELS_DIR:-}" ]]; then
@@ -402,16 +558,29 @@ compose_cmd() {
     echo "$cmd"
 }
 
+has_quadlet() {
+    [[ "$CONTAINER_CMD" == "podman" && $EUID -ne 0 ]] \
+        && [[ -f "${QUADLET_USER_DIR}/${PODMAN_SERVICE_NAME}.container" ]]
+}
+
+# Write .env file for docker-compose variable substitution
 write_env_file() {
     local env_file="${SCRIPT_DIR}/.env"
     : > "$env_file"
+
     echo "VLLMCTL_PORT=${VLLMCTL_PORT}" >> "$env_file"
     echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}" >> "$env_file"
+
     if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
         echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}" >> "$env_file"
+        export VLLMCTL_MODELS_DIR
     fi
+
     if [[ -n "$AMD_GFX_VERSION" ]]; then
         echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}" >> "$env_file"
+    fi
+    if [[ -n "$AMD_GFX_TARGET" ]]; then
+        echo "GPU_ARCH=${AMD_GFX_TARGET}" >> "$env_file"
     fi
     if [[ -n "$HOST_VIDEO_GID" ]]; then
         echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}" >> "$env_file"
@@ -421,27 +590,47 @@ write_env_file() {
     fi
 }
 
+container_up() {
+    if has_quadlet; then
+        log "Starting vllm-toolchest via systemd (Quadlet)..."
+        systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+    else
+        $(compose_cmd) up -d
+    fi
+}
+
+container_down() {
+    if has_quadlet; then
+        log "Stopping vllm-toolchest via systemd (Quadlet)..."
+        systemctl_cmd stop "${PODMAN_SERVICE_NAME}.service"
+    else
+        $(compose_cmd) down
+    fi
+}
+
 container_install() {
     write_env_file
     $(compose_cmd) up -d --build
 }
 
-container_up() {
-    $(compose_cmd) up -d
-}
-
-container_down() {
-    $(compose_cmd) down
-}
-
 container_rebuild() {
+    local quadlet_active=false
+    has_quadlet && quadlet_active=true
+
     container_down
     $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
     write_env_file
     $(compose_cmd) build --no-cache
-    $(compose_cmd) up -d
+
+    if [[ "$quadlet_active" == true ]]; then
+        log "Starting via systemd (Quadlet)..."
+        systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+    else
+        $(compose_cmd) up -d
+    fi
 }
 
+# Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
 container_quick_rebuild() {
     container_down
     write_env_file
@@ -449,12 +638,278 @@ container_quick_rebuild() {
 }
 
 container_logs() {
-    $(compose_cmd) logs -f
+    if has_quadlet; then
+        journalctl --user -u "${PODMAN_SERVICE_NAME}.service" -n 100 -f
+    else
+        $(compose_cmd) logs -f
+    fi
+}
+
+# ─── Auto-start (enable/disable) ─────────────────────────────────────────────
+
+quadlet_dir() {
+    if [[ $EUID -eq 0 ]]; then
+        echo "$QUADLET_SYSTEM_DIR"
+    else
+        echo "$QUADLET_USER_DIR"
+    fi
+}
+
+systemctl_cmd() {
+    if [[ $EUID -eq 0 ]]; then
+        systemctl "$@"
+    else
+        systemctl --user "$@"
+    fi
+}
+
+get_restart_policy() {
+    $CONTAINER_CMD inspect --format '{{.HostConfig.RestartPolicy.Name}}' vllm-toolchest 2>/dev/null || echo ""
+}
+
+is_autostart_enabled() {
+    if [[ "$CONTAINER_CMD" == "docker" ]]; then
+        local policy
+        policy="$(get_restart_policy)"
+        [[ "$policy" == "always" || "$policy" == "unless-stopped" ]]
+    else
+        if [[ $EUID -eq 0 ]]; then
+            local policy
+            policy="$(get_restart_policy)"
+            [[ "$policy" == "always" || "$policy" == "unless-stopped" ]]
+        else
+            [[ -f "$(quadlet_dir)/${PODMAN_SERVICE_NAME}.container" ]]
+        fi
+    fi
+}
+
+get_volume_name() {
+    $CONTAINER_CMD inspect --format '{{range .Mounts}}{{.Name}}{{end}}' vllm-toolchest 2>/dev/null \
+        || echo "vllmctl-data"
+}
+
+generate_quadlet() {
+    local image_name="localhost/vllm-toolchest:latest"
+    local volume_name
+    volume_name="$(get_volume_name)"
+    local gpu_args=""
+
+    if [[ "$GPU_VENDOR" == "cuda" ]]; then
+        gpu_args="AddDevice=nvidia.com/gpu=all"
+    elif [[ "$GPU_VENDOR" == "rocm" ]]; then
+        local hsa_env=""
+        if [[ -n "$AMD_GFX_VERSION" ]]; then
+            hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
+        fi
+        gpu_args="AddDevice=/dev/kfd
+AddDevice=/dev/dri
+SecurityLabelDisable=true
+PodmanArgs=--ipc=host
+GroupAdd=${HOST_VIDEO_GID:-video}
+GroupAdd=${HOST_RENDER_GID:-render}
+${hsa_env}"
+    fi
+
+    cat <<EOF
+# Auto-generated by vllm-toolchest setup.sh
+# GPU backend: ${GPU_VENDOR}
+# Runtime: ${CONTAINER_CMD}
+
+[Unit]
+Description=vllm-toolchest - local vLLM management
+After=network-online.target
+
+[Container]
+Image=${image_name}
+ContainerName=vllm-toolchest
+PublishPort=${VLLMCTL_PORT}:3000
+PublishPort=${VLLMCTL_INFERENCE_PORT}:8000
+Volume=${volume_name}:/data:z
+${gpu_args}
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+autostart_enable() {
+    if is_autostart_enabled; then
+        ok "Auto-start is already enabled"
+        return
+    fi
+
+    if [[ "$CONTAINER_CMD" == "docker" ]]; then
+        if ! docker inspect vllm-toolchest &>/dev/null; then
+            fatal "Container 'vllm-toolchest' not found. Run './setup.sh install' first."
+        fi
+        log "Setting restart policy to 'unless-stopped'..."
+        docker update --restart unless-stopped vllm-toolchest
+        ok "Auto-start enabled"
+    elif [[ $EUID -eq 0 ]]; then
+        if ! podman container exists vllm-toolchest 2>/dev/null; then
+            fatal "Container 'vllm-toolchest' not found. Run './setup.sh install' first."
+        fi
+        log "Setting restart policy to 'unless-stopped'..."
+        podman update --restart unless-stopped vllm-toolchest
+        ok "Auto-start enabled"
+    else
+        # Podman rootless: need Quadlet + linger to survive reboot
+        local qdir
+        qdir="$(quadlet_dir)"
+
+        # If the container is already running outside of systemd, stop it first
+        # so the Quadlet service can take over without a name conflict.
+        local was_running=false
+        if podman container exists vllm-toolchest 2>/dev/null; then
+            was_running=true
+            log "Stopping existing container so systemd can take over..."
+            podman stop vllm-toolchest 2>/dev/null || true
+            podman rm vllm-toolchest 2>/dev/null || true
+        fi
+
+        log "Installing Quadlet unit: ${qdir}/${PODMAN_SERVICE_NAME}.container"
+
+        mkdir -p "$qdir"
+        generate_quadlet > "${qdir}/${PODMAN_SERVICE_NAME}.container"
+
+        systemctl_cmd daemon-reload
+
+        # Enable lingering so user services run without an active login session
+        local linger_status
+        linger_status="$(loginctl show-user "$USER" --property=Linger 2>/dev/null || true)"
+        if [[ "$linger_status" != *"yes"* ]]; then
+            log "Enabling loginctl linger for user $USER..."
+            if ! loginctl enable-linger "$USER" 2>/dev/null; then
+                run_sudo loginctl enable-linger "$USER"
+            fi
+        fi
+
+        if [[ "$was_running" == true ]]; then
+            log "Starting vllm-toolchest via systemd..."
+            systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+        fi
+
+        # Quadlet units are auto-activated by systemd's generator via
+        # WantedBy= in the [Install] section — no explicit enable needed.
+        ok "Auto-start enabled via Podman Quadlet"
+
+        echo ""
+        echo "  vllm-toolchest will auto-start on boot."
+        echo "  Manage with: systemctl --user {start,stop,status} ${PODMAN_SERVICE_NAME}"
+    fi
+}
+
+autostart_disable() {
+    if ! is_autostart_enabled; then
+        ok "Auto-start is already disabled"
+        return
+    fi
+
+    if [[ "$CONTAINER_CMD" == "docker" ]]; then
+        log "Setting restart policy to 'no'..."
+        docker update --restart no vllm-toolchest
+        ok "Auto-start disabled"
+    elif [[ $EUID -eq 0 ]]; then
+        log "Setting restart policy to 'no'..."
+        podman update --restart no vllm-toolchest
+        ok "Auto-start disabled"
+    else
+        local qdir
+        qdir="$(quadlet_dir)"
+
+        log "Removing Quadlet unit: ${qdir}/${PODMAN_SERVICE_NAME}.container"
+
+        systemctl_cmd stop "${PODMAN_SERVICE_NAME}.service" 2>/dev/null || true
+        rm -f "${qdir}/${PODMAN_SERVICE_NAME}.container"
+        systemctl_cmd daemon-reload
+        ok "Auto-start disabled"
+    fi
+}
+
+# ─── Uninstall ───────────────────────────────────────────────────────────────
+
+container_uninstall() {
+    local actions=()
+    local has_autostart=false
+    local has_container=false
+    local has_image=false
+    local image_name="localhost/vllm-toolchest:latest"
+
+    if is_autostart_enabled; then
+        has_autostart=true
+        actions+=("Disable auto-start on boot")
+    fi
+
+    if $CONTAINER_CMD container exists vllm-toolchest 2>/dev/null; then
+        has_container=true
+        actions+=("Stop and remove container 'vllm-toolchest'")
+    fi
+
+    if $CONTAINER_CMD image exists "$image_name" 2>/dev/null; then
+        has_image=true
+        actions+=("Remove image '${image_name}'")
+    fi
+
+    if [[ ${#actions[@]} -eq 0 ]]; then
+        ok "Nothing to uninstall — vllm-toolchest is not installed"
+        return
+    fi
+
+    echo ""
+    echo -e "${BOLD}The following will be removed:${NC}"
+    echo ""
+    local i=1
+    for action in "${actions[@]}"; do
+        echo -e "  ${i}. ${action}"
+        ((i++))
+    done
+    echo ""
+
+    local volume_name
+    volume_name="$($CONTAINER_CMD inspect --format '{{range .Mounts}}{{.Name}}{{end}}' vllm-toolchest 2>/dev/null || echo "vllmctl-data")"
+    echo -e "  ${YELLOW}Note:${NC} The data volume (models, config) will be kept."
+    echo -e "        To remove it: ${CONTAINER_CMD} volume rm ${volume_name}"
+    echo ""
+
+    if ! prompt_confirm "Proceed with uninstall?"; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    echo ""
+
+    if [[ "$has_autostart" == true ]]; then
+        autostart_disable
+    fi
+
+    if [[ "$has_container" == true ]]; then
+        log "Stopping and removing container..."
+        $CONTAINER_CMD stop vllm-toolchest 2>/dev/null || true
+        $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
+        ok "Container removed"
+    fi
+
+    if [[ "$has_image" == true ]]; then
+        log "Removing image..."
+        $CONTAINER_CMD rmi "$image_name" 2>/dev/null || true
+        ok "Image removed"
+    fi
+
+    echo ""
+    ok "vllm-toolchest uninstalled"
 }
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 print_summary() {
+    local cf df
+    cf="$(compose_file)"
+    df="$(dockerfile)"
+
     echo ""
     echo -e "${BOLD}════════════════════════════════════════════════${NC}"
     echo -e "${BOLD}  vllm-toolchest setup${NC}"
@@ -465,32 +920,52 @@ print_summary() {
     echo -e "  ${CYAN}Runtime${NC}       ${CONTAINER_VERSION}"
     echo -e "  ${CYAN}Compose${NC}       ${COMPOSE_VERSION}"
     echo -e "  ${CYAN}Distro${NC}        ${DISTRO_NAME}"
-    echo -e "  ${CYAN}Compose file${NC}  $(compose_file)"
+    echo -e "  ${CYAN}Dockerfile${NC}    ${df}"
+    echo -e "  ${CYAN}Compose file${NC}  ${cf}"
     echo -e "  ${CYAN}UI port${NC}       ${VLLMCTL_PORT}"
     echo -e "  ${CYAN}Inference port${NC} ${VLLMCTL_INFERENCE_PORT}"
     if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
         echo -e "  ${CYAN}Models dir${NC}    ${VLLMCTL_MODELS_DIR}"
     fi
+    if [[ -n "$AMD_GFX_TARGET" ]]; then
+        echo -e "  ${CYAN}GPU arch${NC}      ${AMD_GFX_TARGET}"
+    fi
     if [[ -n "$AMD_GFX_VERSION" ]]; then
         echo -e "  ${CYAN}HSA Override${NC}  ${AMD_GFX_VERSION}"
     fi
+
+    local autostart_status="disabled"
+    if is_autostart_enabled; then
+        autostart_status="enabled"
+    fi
+    echo -e "  ${CYAN}Auto-start${NC}    ${autostart_status}"
     echo ""
+
+    if [[ ! -f "${SCRIPT_DIR}/${cf}" ]]; then
+        err "Compose file ${cf} not found!"
+        echo "  Available compose files:"
+        ls -1 "${SCRIPT_DIR}"/docker-compose.*.yml 2>/dev/null | sed 's|.*/|    |' || echo "    (none)"
+        echo ""
+        fatal "Cannot proceed without compose file"
+    fi
+
     if [[ ${#ACTIONS[@]} -gt 0 ]]; then
         echo -e "  ${BOLD}Actions:${NC}"
         local i=1
         for action in "${ACTIONS[@]}"; do
-            echo "    ${i}. ${action}"
+            echo -e "    ${i}. ${action}"
             ((i++))
         done
         echo ""
     fi
+
     if [[ ${#PREREQS[@]} -gt 0 ]]; then
         echo -e "  ${YELLOW}Note:${NC} Prerequisite steps require sudo"
         echo ""
     fi
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Main ────────────────────────────────────────────────────────────────────
 
 usage() {
     cat <<'USAGE'
@@ -499,24 +974,49 @@ vllm-toolchest setup — auto-detect GPU + container runtime, build & run
 Usage: ./setup.sh <command>
 
 Lifecycle:
-  install     Detect everything, install prerequisites, build image, start
-  quick       Fast rebuild — reuse cached base layers, rebuild Go code only
-  rebuild     Full rebuild with no cache
-  uninstall   Stop and remove container + image
+  install     Detect GPU/runtime/distro, install prerequisites, build image,
+              and start the container
+  uninstall   Stop container, disable auto-start, and remove container + image
+  quick       Fast rebuild — only recompile Go code, reuse cached base layers
+  rebuild     Full rebuild with no cache, then start
 
 Runtime:
   up          Start a stopped container
   down        Stop the container
-  logs        Follow container logs
+  logs        Follow container logs (Ctrl-C to stop)
+
+Auto-start:
+  enable      Enable auto-start on boot
+                Docker:       sets restart policy to 'unless-stopped'
+                Podman root:  sets restart policy to 'unless-stopped'
+                Podman user:  installs a Quadlet systemd unit and enables
+                              loginctl linger so the service survives logout
+  disable     Disable auto-start on boot
+                Docker:       sets restart policy to 'no'
+                Podman root:  sets restart policy to 'no'
+                Podman user:  removes the Quadlet systemd unit
 
 Info:
-  status      Show detected environment, then exit
+  status      Show detected environment and planned actions, then exit
   detect      Print detected GPU backend (cuda/rocm) and exit
-  help        Show this help
+  help        Show this help message
 
-Environment:
-  GPU=cuda|rocm          Override GPU detection
-  RUNTIME=docker|podman  Override runtime detection
+Environment variables:
+  GPU=cuda|rocm            Override GPU auto-detection
+  RUNTIME=docker|podman    Override container runtime auto-detection
+
+Port configuration is stored in .env (see .env.example for details).
+You can edit .env directly instead of using the interactive setup.
+
+Examples:
+  ./setup.sh install              # detect everything, install prereqs, build & run
+  ./setup.sh status               # dry run — show what would happen
+  ./setup.sh enable               # start on boot
+  ./setup.sh disable              # stop starting on boot
+  ./setup.sh uninstall            # remove everything
+  ./setup.sh quick                # fast rebuild (code changes only)
+  ./setup.sh rebuild              # full clean rebuild (no cache)
+  RUNTIME=podman ./setup.sh install  # force Podman runtime
 USAGE
 }
 
@@ -525,9 +1025,14 @@ main() {
     cd "$SCRIPT_DIR"
 
     case "$command" in
-        install|quick|rebuild|uninstall|up|down|logs|detect|status) ;;
+        install|uninstall|up|down|rebuild|quick|logs|detect|status|enable|disable) ;;
         -h|--help|help) usage; exit 0 ;;
-        *) err "Unknown command: $command"; usage; exit 1 ;;
+        *)
+            err "Unknown command: $command"
+            echo ""
+            usage
+            exit 1
+            ;;
     esac
 
     if [[ -n "${GPU:-}" ]]; then
@@ -547,20 +1052,19 @@ main() {
     load_env_ports
 
     case "$command" in
-        up)     container_up;   ok "vllm-toolchest started"; exit 0 ;;
-        down)   container_down; ok "vllm-toolchest stopped"; exit 0 ;;
-        logs)   container_logs; exit 0 ;;
+        up)        container_up;   ok "vllm-toolchest started"; exit 0 ;;
+        down)      container_down; ok "vllm-toolchest stopped"; exit 0 ;;
+        logs)      container_logs; exit 0 ;;
+        enable)    autostart_enable;  exit 0 ;;
+        disable)   autostart_disable; exit 0 ;;
+        uninstall) container_uninstall; exit 0 ;;
         quick)
             log "Quick rebuild (cached)..."
             container_quick_rebuild
             ok "vllm-toolchest is running"
-            echo "  Web UI: http://localhost:${VLLMCTL_PORT}"
-            exit 0
-            ;;
-        uninstall)
-            container_down
-            $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
-            ok "vllm-toolchest removed"
+            echo ""
+            echo "  Web UI:     http://localhost:${VLLMCTL_PORT}"
+            echo ""
             exit 0
             ;;
     esac
@@ -569,17 +1073,21 @@ main() {
     check_prerequisites
     print_summary
 
-    [[ "$command" == "status" ]] && exit 0
+    if [[ "$command" == "status" ]]; then
+        exit 0
+    fi
 
     prompt_ports
     prompt_models_dir
 
     if [[ ${#PREREQS[@]} -gt 0 ]]; then
-        if prompt_confirm "Install prerequisites?"; then
-            echo ""
-            install_prerequisites
-            echo ""
+        if ! prompt_confirm "Install prerequisites?"; then
+            echo "Aborted."
+            exit 0
         fi
+        echo ""
+        install_prerequisites
+        echo ""
     fi
 
     if ! prompt_confirm "Build and start vllm-toolchest?"; then
@@ -589,8 +1097,8 @@ main() {
 
     echo ""
     case "$command" in
-        install) container_install ;;
-        rebuild) container_rebuild ;;
+        install)  container_install ;;
+        rebuild)  container_rebuild ;;
     esac
 
     echo ""
@@ -601,7 +1109,7 @@ main() {
     echo ""
     echo "  Logs:       ./setup.sh logs"
     echo "  Stop:       ./setup.sh down"
-    echo "  Quick rebuild: ./setup.sh quick"
+    echo "  Auto-start: ./setup.sh enable"
     echo ""
 }
 

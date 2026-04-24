@@ -2,9 +2,10 @@ services:
   vllm-toolchest:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.rocm
       args:
-        THEROCK_DATE: "${THEROCK_DATE:-2026-04-10}"
+        ROCM_VERSION: "${ROCM_VERSION:-7.2.1}"
+        GPU_ARCH: "${GPU_ARCH:-gfx1201;gfx1100}"
         VLLM_VERSION: "${VLLM_VERSION:-main}"
     container_name: vllm-toolchest
     ports:

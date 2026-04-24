@@ -1,0 +1,172 @@
+# ── Stage 1: Go builder ─────────────────────────────────────────────
+FROM golang:1.26-bookworm AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
+
+# ── Stage 2: vLLM runtime (Fedora 43 + AMD ROCm 7.2.1) ─────────────
+FROM registry.fedoraproject.org/fedora:43
+
+# ── AMD ROCm 7.2.1 repo ────────────────────────────────────────────
+ARG ROCM_VERSION=7.2.1
+RUN tee /etc/yum.repos.d/rocm.repo <<REPO
+[ROCm-${ROCM_VERSION}]
+name=ROCm${ROCM_VERSION}
+baseurl=https://repo.radeon.com/rocm/el9/${ROCM_VERSION}/main
+enabled=1
+priority=50
+gpgcheck=1
+gpgkey=https://repo.radeon.com/rocm/rocm.gpg.key
+REPO
+
+# ── System + ROCm packages ─────────────────────────────────────────
+RUN dnf -y --nodocs --setopt=install_weak_deps=False \
+    --exclude='*sdk*' --exclude='*samples*' --exclude='*-doc*' --exclude='*-docs*' \
+    install \
+    python3.12 python3.12-devel python3-pip \
+    gcc gcc-c++ make cmake ninja-build lld \
+    clang clang-devel compiler-rt libomp libomp-devel \
+    openssl-devel zlib-devel gperftools-libs \
+    git-core curl wget \
+    rocm-llvm rocm-device-libs rocm-cmake \
+    hip-runtime-amd hip-devel \
+    rocblas rocblas-devel hipblas hipblas-devel \
+    hipblaslt hipblaslt-devel \
+    hipsparselt hipsparselt-devel \
+    miopen-hip miopen-hip-devel \
+    hipsparse hipsparse-devel \
+    hipsolver hipsolver-devel \
+    rocsolver rocsolver-devel \
+    hipfft hipfft-devel \
+    hiprand hiprand-devel \
+    rocrand rocrand-devel \
+    rocprim-devel rocthrust-devel hipcub-devel \
+    rccl rccl-devel \
+    rocminfo amd-smi \
+    && dnf clean all
+
+# ── GPU architecture (semicolon-separated for PyTorch, e.g. "gfx1201;gfx1100") ─
+# Defaults build for both RDNA3 (7900/W7900) and RDNA4 (R9700/RX 9070). Override
+# at build time to trim build time / wheel size for a specific card.
+ARG GPU_ARCH="gfx1201;gfx1100"
+ENV PYTORCH_ROCM_ARCH=${GPU_ARCH} \
+    HIP_ARCHITECTURES=${GPU_ARCH} \
+    AMDGPU_TARGETS=${GPU_ARCH}
+
+# ── ROCm environment ───────────────────────────────────────────────
+ENV ROCM_PATH=/opt/rocm \
+    HIP_PATH=/opt/rocm \
+    HIP_PLATFORM=amd \
+    HIP_CLANG_PATH=/opt/rocm/llvm/bin \
+    HIP_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode \
+    PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH \
+    LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64 \
+    CMAKE_PREFIX_PATH=/opt/rocm
+
+# ── Python venv ────────────────────────────────────────────────────
+RUN python3.12 -m venv /opt/vllm-venv
+ENV PATH=/opt/vllm-venv/bin:/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH \
+    VIRTUAL_ENV=/opt/vllm-venv
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging ninja
+
+# ── Expose amd-smi's system python bindings into the venv ──────────
+# Fedora's amdsmi RPM ships the ctypes bindings under the system Python's
+# site-packages (e.g. /usr/lib/python3.14/site-packages/amdsmi). The package
+# bundles its own libamd_smi.so and is Python-version-agnostic, so we can
+# copy it into our 3.12 venv as-is. vLLM's platform detection requires it.
+RUN set -e; \
+    src="$(find /usr/lib /usr/lib64 -maxdepth 4 -type d -name amdsmi 2>/dev/null | head -1)"; \
+    if [ -n "$src" ]; then \
+        cp -r "$src" /opt/vllm-venv/lib/python3.12/site-packages/amdsmi; \
+        echo "Installed amdsmi from $src"; \
+    else \
+        echo "WARNING: amdsmi Python bindings not found on host; vLLM ROCm platform detection will fail" >&2; \
+    fi
+
+# ── PyTorch (AMD ROCm) ─────────────────────────────────────────────
+# Match PyTorch's ROCm major version to the system ROCm installed above —
+# mismatched versions cause HSA symbol resolution failures at runtime when
+# PyTorch's bundled libs are mixed with the system libamdhip64.so.
+RUN pip install --no-cache-dir --pre \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/nightly/rocm7.2
+
+# ── Flash Attention (ROCm fork, Triton backend) ───────────────────
+ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+    FLASH_ATTENTION_INTERNAL_USE_RTN=1
+
+RUN git clone --depth 1 -b main_perf \
+        https://github.com/ROCm/flash-attention.git /tmp/flash-attention && \
+    cd /tmp/flash-attention && \
+    python setup.py install && \
+    rm -rf /tmp/flash-attention
+
+# ── bitsandbytes (ROCm fork) ──────────────────────────────────────
+ENV BNB_ROCM_ARCH=${GPU_ARCH}
+RUN git clone --depth 1 -b rocm_enabled_multi_backend \
+        https://github.com/ROCm/bitsandbytes.git /tmp/bitsandbytes && \
+    cd /tmp/bitsandbytes && \
+    cmake -S . -B build \
+        -DCOMPUTE_BACKEND=hip \
+        -DBNB_ROCM_ARCH="${GPU_ARCH}" \
+        -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
+        -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ && \
+    cmake --build build -j4 && \
+    pip install --no-cache-dir . && \
+    rm -rf /tmp/bitsandbytes
+
+# ── valgrind headers ──────────────────────────────────────────────
+# PyTorch's rocm7.2 wheel baked /usr/include/valgrind into its cmake
+# INTERFACE_INCLUDE_DIRECTORIES; cmake errors if the path doesn't exist.
+RUN dnf -y --nodocs --setopt=install_weak_deps=False install valgrind-devel && dnf clean all
+
+# ── vLLM from source ──────────────────────────────────────────────
+ARG VLLM_VERSION=main
+
+ENV VLLM_TARGET_DEVICE=rocm \
+    TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
+    VLLM_USE_TRITON_AWQ=1 \
+    CC=/opt/rocm/llvm/bin/clang \
+    CXX=/opt/rocm/llvm/bin/clang++ \
+    MAX_JOBS=4
+
+RUN git clone --depth 1 -b ${VLLM_VERSION} \
+        https://github.com/vllm-project/vllm.git /tmp/vllm && \
+    cd /tmp/vllm && \
+    pip install --no-cache-dir -r requirements/rocm.txt && \
+    pip wheel --no-build-isolation --no-deps -w /tmp/vllm-wheel . && \
+    pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
+    rm -rf /tmp/vllm /tmp/vllm-wheel
+
+RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
+
+# ── Runtime environment ────────────────────────────────────────────
+ENV LD_PRELOAD=/usr/lib64/libtcmalloc.so.4 \
+    HIP_FORCE_DEV_KERNARG=1 \
+    RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1 \
+    ROCBLAS_USE_HIPBLASLT=1
+
+# ── Go management binary ──────────────────────────────────────────
+COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
+
+# ── Data directories ──────────────────────────────────────────────
+RUN mkdir -p /data/config /data/models
+
+RUN cat > /data/config/vllmctl.yaml << 'EOF'
+listen_addr: ":3000"
+data_dir: "/data"
+vllm_port: 8000
+log_level: "info"
+tool_use_enabled: true
+gpu_memory_util: 0.90
+EOF
+
+VOLUME ["/data"]
+
+EXPOSE 3000
+EXPOSE 8000
+
+ENTRYPOINT ["vllmctl", "--config", "/data/config/vllmctl.yaml"]

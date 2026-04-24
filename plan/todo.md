@@ -29,6 +29,8 @@
 - Model delete confirmation should check if the model is currently running
 - Improve error messages when model files are corrupted or incomplete
 - Loading states for long operations (model scan, large downloads)
+- Wire `startup_timeout_s` config through to `internal/process/manager.go` (currently hardcoded to 10 minutes); bump default for ROCm first-boot JIT (20–30 minutes reasonable)
+- Relocate Triton/Inductor kernel caches onto the `/data` volume (e.g. `TRITON_CACHE_DIR=/data/cache/triton`, `TORCHINDUCTOR_CACHE_DIR=/data/cache/inductor`) so first-boot kernel compilation only happens once per image rather than every container recreate
 
 ## Setup script enhancements
 - Add `enable` / `disable` commands for auto-start (from llama-toolchest)
