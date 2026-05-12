@@ -31,6 +31,7 @@ type Server struct {
 	registry   *models.Registry
 	process    *process.Manager
 	bench      *benchmark.Store
+	benchSvc   *benchmark.Service
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -50,8 +51,9 @@ func NewServer(cfg *config.Config) *Server {
 		downloader: dl,
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
-		bench:      benchmark.NewStore(cfg.DataDir),
 	}
+	s.bench = benchmark.NewStore(cfg.DataDir)
+	s.benchSvc = benchmark.NewService(s.bench)
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -155,6 +157,12 @@ func (s *Server) buildRouter() chi.Router {
 		})
 		r.Route("/benchmarks", func(r chi.Router) {
 			r.Get("/", s.handleListBenchmarks)
+			r.Post("/", s.handleStartBenchmark)
+			r.Get("/form", s.handleBenchmarkForm)
+			r.Get("/{id}", s.handleGetBenchmark)
+			r.Delete("/{id}", s.handleDeleteBenchmark)
+			r.Post("/{id}/cancel", s.handleCancelBenchmark)
+			r.Get("/{id}/progress", s.handleBenchmarkProgress)
 		})
 		r.Route("/settings", func(r chi.Router) {
 			r.Get("/", s.handleGetSettings)

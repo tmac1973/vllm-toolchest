@@ -5,10 +5,29 @@
 Benchmark inference performance with structured results, multi-run comparison, and engine-agnostic measurement via <a href="https://github.com/eugr/llama-benchy" target="_blank" rel="noopener">llama-benchy</a>.
 </p>
 
+<section id="bench-form"
+         hx-get="/api/benchmarks/form"
+         hx-trigger="load"
+         hx-swap="innerHTML"></section>
+
+<h2 style="margin-top:1.5rem;">Runs</h2>
 <section id="bench-runs"
          hx-get="/api/benchmarks/"
-         hx-trigger="load"
+         hx-trigger="load, benchStarted from:body"
          hx-swap="innerHTML">
   <p style="opacity:0.6;">Loading benchmarks…</p>
 </section>
+
+<script>
+  // Refresh the runs list when a new benchmark starts.
+  document.body.addEventListener('htmx:afterRequest', function(evt) {
+    if (evt.detail && evt.detail.xhr &&
+        evt.detail.xhr.status === 202 &&
+        evt.detail.requestConfig &&
+        evt.detail.requestConfig.path === '/api/benchmarks/' &&
+        evt.detail.requestConfig.verb === 'post') {
+      htmx.trigger('body', 'benchStarted');
+    }
+  });
+</script>
 {{end}}
