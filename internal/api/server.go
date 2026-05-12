@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -29,6 +30,7 @@ type Server struct {
 	downloader *huggingface.Downloader
 	registry   *models.Registry
 	process    *process.Manager
+	bench      *benchmark.Store
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -48,6 +50,7 @@ func NewServer(cfg *config.Config) *Server {
 		downloader: dl,
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
+		bench:      benchmark.NewStore(cfg.DataDir),
 	}
 
 	reg.Maintenance()
@@ -151,7 +154,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/health", s.handleServiceHealth)
 		})
 		r.Route("/benchmarks", func(r chi.Router) {
-			// Phase 6
+			r.Get("/", s.handleListBenchmarks)
 		})
 		r.Route("/settings", func(r chi.Router) {
 			r.Get("/", s.handleGetSettings)

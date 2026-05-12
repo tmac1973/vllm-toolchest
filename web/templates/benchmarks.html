@@ -1,4 +1,14 @@
 {{define "content"}}
 <h1>Benchmarks</h1>
-<p>Inference benchmarking will be available in a future update.</p>
+
+<p style="opacity:0.7;">
+Benchmark inference performance with structured results, multi-run comparison, and engine-agnostic measurement via <a href="https://github.com/eugr/llama-benchy" target="_blank" rel="noopener">llama-benchy</a>.
+</p>
+
+<section id="bench-runs"
+         hx-get="/api/benchmarks/"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+  <p style="opacity:0.6;">Loading benchmarks…</p>
+</section>
 {{end}}
