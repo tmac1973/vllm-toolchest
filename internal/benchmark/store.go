@@ -32,13 +32,16 @@ type benchmarkFile struct {
 // it's loaded whole at startup and rewritten atomically on every save.
 //
 // Timing samples (passive proxy capture) live in memory only — they're
-// added in Step 5 and aren't part of the persisted envelope.
+// a live view of recent inference activity, not benchmark history, and
+// shouldn't bloat the on-disk envelope.
 type Store struct {
 	mu       sync.RWMutex
 	dataDir  string
 	filePath string
 	runs     []BenchmarkRun
 	jobs     []BenchmarkJob
+
+	timing *timingStore
 }
 
 // NewStore creates a store and loads persisted benchmarks. A missing
@@ -47,6 +50,7 @@ func NewStore(dataDir string) *Store {
 	s := &Store{
 		dataDir:  dataDir,
 		filePath: filepath.Join(dataDir, "config", benchmarksFileName),
+		timing:   newTimingStore(),
 	}
 	s.load()
 	return s

@@ -161,6 +161,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/", s.handleStartBenchmark)
 			r.Get("/form", s.handleBenchmarkForm)
 			r.Get("/about", s.handleBenchmarksAbout)
+			r.Get("/timings", s.handleTimingsList)
+			r.Get("/timings/*", s.handleTimingsForModel)
 			r.Get("/{id}", s.handleGetBenchmark)
 			r.Delete("/{id}", s.handleDeleteBenchmark)
 			r.Post("/{id}/cancel", s.handleCancelBenchmark)
@@ -346,6 +348,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
         <p><a href="/settings">Settings &rarr;</a></p>
     </article>
 </div>`, svcBadge, svcModel, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
+
+	if avgs := s.bench.RunningAverages(); len(avgs) > 0 {
+		fmt.Fprint(w, `<article style="margin-top:1rem;">
+    <header>Live inference activity <small style="opacity:0.6;">(passive timing from the OpenAI proxy)</small></header>
+    <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
+		for _, a := range avgs {
+			fmt.Fprintf(w, `<tr><td><small>%s</small></td><td>%.1f t/s</td><td>%d</td><td><small>%s</small></td></tr>`,
+				htmlEscape(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+		}
+		fmt.Fprint(w, `</tbody></table>
+</article>`)
+	}
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

@@ -15,6 +15,46 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
+// handleTimingsList returns running averages for every model that has
+// passed the minimum-samples threshold.
+func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
+	avgs := s.bench.RunningAverages()
+	if !isHTMX(r) {
+		respondJSON(w, map[string]any{"averages": avgs, "total": len(avgs)})
+		return
+	}
+	respondHTML(w)
+	if len(avgs) == 0 {
+		fmt.Fprint(w, `<p style="opacity:0.6;"><small>No active inference traffic captured yet. Recent /v1/chat/completions activity will populate this.</small></p>`)
+		return
+	}
+	fmt.Fprint(w, `<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
+	for _, a := range avgs {
+		fmt.Fprintf(w, `<tr>
+  <td><small>%s</small></td>
+  <td>%.1f t/s</td>
+  <td>%d</td>
+  <td><small>%s</small></td>
+</tr>`,
+			htmlEscape(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+	}
+	fmt.Fprint(w, `</tbody></table>`)
+}
+
+// handleTimingsForModel returns recent timing samples plus the running
+// average for one model. The model ID can contain slashes (HF repo ids
+// like "owner/repo"), so we capture it via chi's `*` wildcard.
+func (s *Server) handleTimingsForModel(w http.ResponseWriter, r *http.Request) {
+	modelID := chi.URLParam(r, "*")
+	samples := s.bench.RecentTimings(modelID, 100)
+	avg, _ := s.bench.RunningAverage(modelID)
+	respondJSON(w, map[string]any{
+		"model_id": modelID,
+		"average":  avg,
+		"samples":  samples,
+	})
+}
+
 // handleBenchmarkForm renders the new-run form partial. The form lists
 // all registered models and presets; the model selector is disabled when
 // vLLM isn't currently serving (or is serving a different model).
