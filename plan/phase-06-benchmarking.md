@@ -1,1357 +1,945 @@
 # Phase 6: Benchmarking
 
-Benchmark inference performance with structured results, comparison across runs, context length probing, and passive timing capture from the proxy.
+Adapt the benchmarking subsystem from [llama-toolchest](https://github.com/tmlabonte/llama-toolchest) to vllm-toolchest. The goal is feature parity with llama-toolchest's benchmark UI and data model, plus vLLM-specific additions (context-length probing, vLLM-process-aware job execution).
+
+Two benchmark sources, mirroring llama-toolchest:
+
+- **internal-*** presets — Go HTTP loop that streams `/v1/chat/completions`, measures TTFT from the first SSE chunk, and reports per-test-point progress live.
+- **benchy-*** presets — Shell out to [`llama-benchy`](https://github.com/eugr/llama-benchy) via `uvx`. Engine-agnostic, gives apples-to-apples comparison against llama.cpp / Ollama / other OpenAI-compatible engines.
+
+Plus three vLLM-specific features:
+
+- **Jobs / matrices** — Sweep `{models} × {presets}` with model-grouped execution (load each model once, run all its cells, then swap).
+- **Context-length probing** — Binary-search the maximum `--max-model-len` that doesn't OOM across multiple `gpu_memory_utilization` and `max_num_seqs` levels. Stores verified values per model.
+- **Passive timing capture** — The OpenAI proxy records timing from every real chat completion and maintains per-model running averages, surfaced as badges on the dashboard and model cards.
 
 ---
 
-## Benchmark Engine Architecture (`internal/benchmark/`)
-
-### File Organization
+## File Layout
 
 ```
 internal/benchmark/
-  benchmark.go      -- Orchestration: run lifecycle, storage, preset management
-  runner.go         -- HTTP-based test execution against /v1/chat/completions
-  stats.go          -- Statistical computation (mean, min, max, median, percentiles, stddev)
-  context_probe.go  -- Max context length probing (binary search for OOM boundary)
-```
+  benchmark.go       -- Store, BenchmarkRun, BenchmarkSummary, Preset, GPUSnapshot, ConfigSnapshot
+  runner.go          -- Internal HTTP runner (streaming SSE for TTFT), warmup, prompt generation
+  benchy.go          -- llama-benchy shell-out via uvx, JSON result parsing
+  stats.go           -- ComputeSummary, BuildComparison (port from llama-toolchest)
+  job.go             -- BenchmarkJob, JobCell, ConfigOverrides, status constants
+  job_runner.go      -- JobQueue (single-job-at-a-time), JobEnv interface, model-grouped execution
+  context_probe.go   -- ProbeMaxContext, binary search, tryStartVLLM, OOM log detection
+  timing.go          -- TimingSample, per-model ring buffer, running averages (passive capture)
 
-### Core Types
+internal/api/
+  bench.go           -- Run handlers: list, get, start, cancel, delete, batch-delete, progress SSE
+  bench_jobs.go      -- Job handlers: list, get, create, cancel, retry-failed, delete (cascade/orphan)
+  bench_about.go     -- "About benchmarks" disclosure modal (presets, prompt text, benchy command)
+  bench_export.go    -- CSV / JSON export (single run, multi-run)
+  bench_probe.go     -- Context probe handlers (start, progress SSE, results)
+  jobs_env.go        -- *Server -> JobEnv adapter
 
-```
-BenchmarkRun struct:
-  ID              string             // UUID
-  Status          RunStatus          // Pending, Running, Completed, Failed, Cancelled
-  Preset          string             // "quick", "standard", "thorough", "custom"
-  ModelID         string             // Registry model ID
-  ModelConfig     ModelConfigSnapshot // Frozen copy of vLLM config at run time
-  Hardware        HardwareSnapshot
-  Config          RunConfig          // What to test
-  Progress        RunProgress        // Current progress (for SSE)
-  Results         []TestPoint        // Individual test results
-  Summary         RunSummary         // Computed statistics
-  VLLMBench       *VLLMBenchResults  // Optional: vllm CLI benchmark results
-  StartedAt       time.Time
-  CompletedAt     time.Time
-  Error           string
+web/templates/
+  benchmarks.html               -- Page with job-grouped table, ad-hoc job, multi-select actions
+  partials/
+    bench_job_list.html         -- Job-grouped tables (one tbody per job, expandable runs)
+    bench_run_row.html          -- Single run row (used inside job tbody)
+    bench_detail.html           -- Expanded run detail (results table, summary, config snapshot)
+    bench_compare.html          -- Side-by-side comparison of selected runs
+    bench_progress.html         -- Active run progress panel (SSE-driven)
+    bench_about.html            -- "About benchmarks" modal contents
+    bench_form.html             -- New-benchmark form (single run)
+    bench_job_form.html         -- New-job form (matrix selector)
+    bench_probe.html            -- Context probe modal + results display
 
-RunStatus: Pending | Running | Completed | Failed | Cancelled
+internal/process/        -- (existing) extended with secondary-port spawn for context probing
 
-HardwareSnapshot struct:
-  GPUs           []GPUInfo    // Name, VRAM total, VRAM used at start, device ID
-  GPUCount       int
-  GPUDriver      string       // ROCm version string
-  ROCmVersion    string       // e.g. "6.4.0"
-  CPUModel       string
-  CPUCores       int
-  RAMTotalGB     float64
-  Hostname       string
-
-GPUInfo struct:
-  Index          int
-  Name           string       // e.g. "AMD Radeon RX 9070 XT"
-  VRAMTotalMB    int          // 32768
-  VRAMUsedMB     int          // At snapshot time
-  GFXVersion     string       // "gfx1201"
-
-ModelConfigSnapshot struct:
-  // Full copy of the model's vllm_config at run time
-  // Plus key model metadata: architecture, param count, quant method
-  ModelID              string
-  Architecture         string
-  ParamCountBillion    float64
-  QuantMethod          string
-  QuantBits            int
-  Dtype                string
-  MaxModelLen          int
-  TensorParallelSize   int
-  GPUMemoryUtilization float64
-  EnforceEager         bool
-  EnablePrefixCaching  bool
-  KVCacheDtype         string
-  MaxNumSeqs           int
-  EnableAutoToolChoice bool
-  ToolCallParser       string
-  ExtraFlags           string
-
-RunConfig struct:
-  PromptLengths       []int    // Target prompt token counts
-  GenerationTokens    int      // Max tokens to generate per test
-  Repetitions         int      // Number of repetitions per prompt length
-  WarmupRequests      int      // Warmup requests before timing (default 1)
-  IncludeVLLMBench    bool     // Run vllm CLI benchmarks after HTTP tests
-  VLLMBenchQPS        []float64 // QPS levels for vllm bench serve (e.g. [1.0, 4.0, 8.0])
-  ConcurrentRequests  int      // For throughput testing (default 1 for latency tests)
-
-RunProgress struct:
-  Phase           string   // "warmup", "testing", "vllm_bench", "computing_stats"
-  CurrentTest     int      // 1-indexed
-  TotalTests      int      // prompt_lengths * repetitions
-  CurrentPromptLen int
-  CurrentRep      int
-  LastMetrics     *TestPoint // Most recent test result (for live display)
-  ElapsedSeconds  float64
-  EstRemainingS   float64
+Dockerfile.rocm
+Dockerfile.cuda          -- Both add: install uv so `uvx llama-benchy` works inside the container
 ```
 
 ---
 
-## Benchmark Presets
+## Data Model
 
-### Quick (~30 seconds)
+Closely mirrors llama-toolchest. Differences are flagged with **vLLM** annotations.
 
-```
-RunConfig{
-  PromptLengths:    [512],
-  GenerationTokens: 128,
-  Repetitions:      1,
-  WarmupRequests:   1,
-  IncludeVLLMBench: false,
-  ConcurrentRequests: 1,
+### BenchmarkRun
+
+```go
+type BenchmarkRun struct {
+    ID        string    `json:"id"`             // uuid
+    JobID     string    `json:"job_id,omitempty"` // owning job; "adhoc" for single-run path
+    CreatedAt time.Time `json:"created_at"`
+    Status    string    `json:"status"`         // running | completed | failed
+    Error     string    `json:"error,omitempty"`
+
+    ModelID     string  `json:"model_id"`       // HF repo id from registry
+    ModelName   string  `json:"model_name"`     // display name
+    Quant       string  `json:"quant"`          // "awq" | "gptq" | "fp8" | "bf16" | "none"
+    SizeGB      float64 `json:"size_gb"`        // on-disk size
+
+    Config ConfigSnapshot `json:"config"`
+
+    // vLLM: no Build snapshot (vLLM ships pre-built in the container image).
+    // Instead, freeze the container image tag and vLLM version reported by the running process.
+    VLLMVersion string `json:"vllm_version,omitempty"` // from /v1/models or proc startup log
+    ImageTag    string `json:"image_tag,omitempty"`    // from env or /etc/os-release
+
+    GPUs []GPUSnapshot `json:"gpus"`
+
+    Preset       string `json:"preset"`
+    PromptTokens []int  `json:"prompt_tokens"`
+    GenTokens    int    `json:"gen_tokens"`
+
+    Results    []BenchmarkResult   `json:"results,omitempty"`
+    Summary    *BenchmarkSummary   `json:"summary,omitempty"`
+    LlamaBenchy []LlamaBenchyResult `json:"llama_benchy,omitempty"` // benchy-* presets
+
+    BenchyCommand string `json:"benchy_command,omitempty"`
+
+    Warnings []string `json:"warnings,omitempty"`
+
+    ProgressDetail string `json:"progress_detail,omitempty"` // transient, polled by HTMX
+    DurationMs     int64  `json:"duration_ms,omitempty"`
 }
 ```
 
-Purpose: Fast sanity check. Is the model working? Roughly how fast is it? Use after model switch or config change.
+### ConfigSnapshot (vLLM-specific)
 
-Total test points: 1 prompt length x 1 rep = 1 test. Plus warmup.
+Per the answered scope: capture only fields that meaningfully affect perf.
 
-### Standard (~3 minutes)
-
-```
-RunConfig{
-  PromptLengths:    [128, 512, 2048],
-  GenerationTokens: 128,
-  Repetitions:      3,
-  WarmupRequests:   2,
-  IncludeVLLMBench: false,
-  ConcurrentRequests: 1,
+```go
+type ConfigSnapshot struct {
+    MaxModelLen          int     `json:"max_model_len"`
+    TensorParallelSize   int     `json:"tensor_parallel_size"`
+    GPUMemoryUtilization float64 `json:"gpu_memory_utilization"`
+    KVCacheDtype         string  `json:"kv_cache_dtype"`           // "auto" | "fp8" | "fp8_e5m2"
+    EnforceEager         bool    `json:"enforce_eager"`
+    Dtype                string  `json:"dtype"`                    // "auto" | "bfloat16" | "float16"
+    QuantMethod          string  `json:"quant_method,omitempty"`   // "awq" | "gptq" | "fp8" | ""
 }
 ```
 
-Purpose: Meaningful performance profile across different prompt lengths. Captures prefill speed scaling and generation stability.
+### BenchmarkResult (per test point)
 
-Total test points: 3 prompt lengths x 3 reps = 9 tests. Plus warmup.
-
-### Thorough (~15 minutes)
-
-```
-RunConfig{
-  PromptLengths:    [128, 512, 2048, 8192],
-  GenerationTokens: 256,
-  Repetitions:      5,
-  WarmupRequests:   3,
-  IncludeVLLMBench: true,
-  VLLMBenchQPS:     [1.0, 4.0, 8.0],
-  ConcurrentRequests: 1,
+```go
+type BenchmarkResult struct {
+    PromptTokens    int     `json:"prompt_tokens"`    // from usage.prompt_tokens
+    GenTokens       int     `json:"gen_tokens"`       // from usage.completion_tokens
+    Repetition      int     `json:"repetition"`
+    PromptTokPerSec float64 `json:"prompt_tok_per_sec"` // PromptTokens / (TTFT/1000)
+    GenTokPerSec    float64 `json:"gen_tok_per_sec"`    // GenTokens / ((TotalMs-TTFT)/1000)
+    TTFTMs          float64 `json:"ttft_ms"`            // measured from first SSE chunk
+    TotalMs         float64 `json:"total_ms"`           // wall clock for full request
 }
 ```
 
-Purpose: Comprehensive performance characterization. Includes long-context behavior and vLLM's built-in benchmark suite.
+### BenchmarkSummary
 
-Total test points: 4 prompt lengths x 5 reps = 20 tests. Plus warmup, plus vllm bench throughput, plus vllm bench serve at 3 QPS levels.
+```go
+type BenchmarkSummary struct {
+    AvgPromptTokPerSec float64 `json:"avg_prompt_tok_per_sec"`
+    AvgGenTokPerSec    float64 `json:"avg_gen_tok_per_sec"`
+    AvgTTFTMs          float64 `json:"avg_ttft_ms"`
+    MinGenTokPerSec    float64 `json:"min_gen_tok_per_sec"`
+    MaxGenTokPerSec    float64 `json:"max_gen_tok_per_sec"`
+}
+```
 
-Note: If `max_model_len` is < 8192, the 8192 prompt length is skipped (with a note in results). Similarly for 2048 if context is shorter.
+### GPUSnapshot
 
-### Custom
+```go
+type GPUSnapshot struct {
+    Index       int    `json:"index"`
+    Name        string `json:"name"`          // "AMD Radeon RX 9070 XT"
+    VRAMTotalMB int    `json:"vram_total_mb"` // 32768
+}
+```
 
-User specifies all RunConfig fields via the UI. Validation:
-- `PromptLengths`: each must be > 0 and < `max_model_len - GenerationTokens`
-- `GenerationTokens`: must be > 0 and < `max_model_len`
-- `Repetitions`: 1-20
-- `ConcurrentRequests`: 1-64 (higher values test throughput under load)
+Built from `monitor.Metrics` via a `GPUSnapshotsFromMetrics` helper (same pattern as llama-toolchest).
+
+### LlamaBenchyResult
+
+Copy verbatim from `llama-toolchest/internal/benchmark/benchy.go`. Same upstream schema (`pp_throughput`, `tg_throughput`, `ttfr`, `e2e_ttft`, etc.).
 
 ---
 
-## Test Execution Flow
+## Presets
 
-### Step 1: Snapshot Hardware State
+Mirrors llama-toolchest's pattern: an `internal-*` family and a `benchy-*` family. Different token counts because vLLM typically handles larger contexts than CPU-bound llama.cpp builds.
 
-Before any test runs:
-
-```
-func snapshotHardware() HardwareSnapshot:
-  // Parse rocm-smi for GPU info
-  //   rocm-smi --showproductname --showmeminfo vram --showdriverversion --json
-  // Parse /proc/cpuinfo for CPU model + cores
-  // Parse /proc/meminfo for total RAM
-  // Get hostname
-```
-
-This snapshot is frozen for the entire run. If GPU VRAM changes during the run (it will, as KV cache grows), the snapshot reflects the state BEFORE testing.
-
-### Step 2: Snapshot Model Config
-
-Deep copy the current model's `vllm_config` and relevant metadata from the registry. This ensures the benchmark results are tied to the exact configuration, even if the user changes config later.
-
-### Step 3: Warmup
-
-```
-func warmup(config RunConfig) error:
-  for i := 0; i < config.WarmupRequests; i++:
-    prompt := generatePrompt(256)  // Short prompt for warmup
-    resp, err := sendCompletionRequest(prompt, 32)  // Short generation
-    if err != nil:
-      // Retry with backoff
-      for retry := 0; retry < 3; retry++:
-        time.Sleep(time.Duration(math.Pow(2, float64(retry))) * time.Second)
-        resp, err = sendCompletionRequest(prompt, 32)
-        if err == nil: break
-      if err != nil:
-        return fmt.Errorf("warmup failed after retries: %w", err)
-    // Discard result -- just warming up KV cache allocation, graph compilation, etc.
-```
-
-Warmup is critical because:
-- First request after model load triggers graph compilation (if not eager mode)
-- KV cache block allocation happens lazily
-- CUDA/HIP kernels are JIT-compiled on first invocation
-- Triton kernels are compiled on first use
-
-### Step 4: Test Matrix Execution
-
-```
-func runTests(config RunConfig, progress chan<- RunProgress) []TestPoint:
-  results := []TestPoint{}
-  totalTests := len(config.PromptLengths) * config.Repetitions
-  testNum := 0
-
-  for _, promptLen := range config.PromptLengths:
-    // Skip if prompt length exceeds model's configured context
-    if promptLen + config.GenerationTokens > modelConfig.MaxModelLen:
-      // Record skip
-      continue
-
-    for rep := 0; rep < config.Repetitions; rep++:
-      testNum++
-
-      // Generate prompt of target token count
-      prompt := generatePromptTokens(promptLen)
-
-      // Report progress
-      progress <- RunProgress{
-        Phase:           "testing",
-        CurrentTest:     testNum,
-        TotalTests:      totalTests,
-        CurrentPromptLen: promptLen,
-        CurrentRep:      rep + 1,
-      }
-
-      // Execute single test
-      point := runSingleTest(prompt, config.GenerationTokens)
-      results = append(results, point)
-
-      // Report live metrics
-      progress <- RunProgress{
-        ...
-        LastMetrics: &point,
-      }
-
-  return results
+```go
+func Presets() []Preset {
+    return []Preset{
+        {
+            Name:         "internal-quick",
+            Label:        "internal-quick — 1 rep, 512-token prompt (~15s)",
+            Description:  "Single streaming chat completion at 512-token prompt / 128 gen tokens. Sanity check after model load.",
+            Source:       PresetSourceInternal,
+            PromptTokens: []int{512}, GenTokens: 128, Repetitions: 1,
+        },
+        {
+            Name:         "internal-standard",
+            Label:        "internal-standard — 3 reps × 3 prompt sizes (~2 min)",
+            Description:  "Three streaming chat completions at 128 / 512 / 2048-token prompts (128 gen tokens). Captures TTFT and gen-TPS scaling across short contexts.",
+            Source:       PresetSourceInternal,
+            PromptTokens: []int{128, 512, 2048}, GenTokens: 128, Repetitions: 3,
+        },
+        {
+            Name:         "internal-thorough",
+            Label:        "internal-thorough — 5 reps × 4 prompt sizes up to 8K (~8 min)",
+            Description:  "Five repetitions at 128 / 512 / 2048 / 8192-token prompts with 256 generated tokens. Stresses long-context prefill.",
+            Source:       PresetSourceInternal,
+            PromptTokens: []int{128, 512, 2048, 8192}, GenTokens: 256, Repetitions: 5,
+        },
+        {
+            Name:         "internal-long-ctx",
+            Label:        "internal-long-ctx — 1 rep, 32K prompt / 512 gen",
+            Description:  "Single 32768-token prompt with 512 generated tokens. Stresses KV cache, paged attention, and KV-cache dtype on long contexts.",
+            Source:       PresetSourceInternal,
+            PromptTokens: []int{32768}, GenTokens: 512, Repetitions: 1,
+        },
+        {
+            Name:         "benchy-quick",
+            Label:        "benchy-quick — 1 rep, 512 prompt / 32 gen via llama-benchy (~30s)",
+            Description:  "Single-shot llama-benchy run. Smoke test for the engine-agnostic comparison path.",
+            Source:       PresetSourceBenchy,
+            PromptTokens: []int{512}, GenTokens: 32, Repetitions: 1, Concurrency: []int{1},
+        },
+        {
+            Name:         "benchy-standard",
+            Label:        "benchy-standard — 3 reps, 2048 prompt / 128 gen via llama-benchy (~2 min)",
+            Description:  "Three-run llama-benchy benchmark at 2048-token prompts. Comparable to llama-toolchest's benchy-standard.",
+            Source:       PresetSourceBenchy,
+            PromptTokens: []int{2048}, GenTokens: 128, Repetitions: 3, Concurrency: []int{1},
+        },
+        {
+            Name:         "benchy-concurrency",
+            Label:        "benchy-concurrency — 3 reps × {1,2,4,8} concurrent via llama-benchy (~5 min)",
+            Description:  "Stress vLLM's continuous batching by sweeping concurrency levels. Highlights where prefill saturates vs. throughput scales.",
+            Source:       PresetSourceBenchy,
+            PromptTokens: []int{1024}, GenTokens: 128, Repetitions: 3, Concurrency: []int{1, 2, 4, 8},
+        },
+    }
+}
 ```
 
-### Single Test Execution
+**Aliases** for backward compatibility (none needed — vllm-toolchest is starting fresh — but reserve the pattern for future renames).
 
-```
-func runSingleTest(prompt string, maxTokens int) TestPoint:
-  reqBody := map[string]interface{}{
-    "model":       pm.modelID,
-    "messages":    []map[string]string{{"role": "user", "content": prompt}},
-    "max_tokens":  maxTokens,
-    "temperature": 0.0,     // Deterministic for benchmarking
-    "stream":      false,   // Non-streaming for accurate total timing
-  }
+Skip rule (same as llama-toolchest): if a preset's largest `PromptTokens + GenTokens` exceeds the loaded model's `max_model_len`, the runner skips that point and adds a warning to `run.Warnings` rather than erroring the whole run.
 
-  startTime := time.Now()
-  resp, err := http.Post(
-    fmt.Sprintf("http://localhost:%d/v1/chat/completions", vllmPort),
-    "application/json",
-    jsonEncode(reqBody),
-  )
-  totalTime := time.Since(startTime)
+---
 
-  // Parse response
-  var result struct {
-    Usage struct {
-      PromptTokens     int `json:"prompt_tokens"`
-      CompletionTokens int `json:"completion_tokens"`
-    } `json:"usage"`
-    Choices []struct {
-      FinishReason string `json:"finish_reason"`
-    } `json:"choices"`
-  }
-  json.Decode(resp.Body, &result)
+## Storage
 
-  promptTokens := result.Usage.PromptTokens
-  completionTokens := result.Usage.CompletionTokens
-  totalMs := totalTime.Milliseconds()
+Single `/data/config/benchmarks.json` file, loaded whole at startup. v1 envelope (no migration needed; we're starting fresh):
 
-  // Estimate TTFT (non-streaming doesn't give us true TTFT)
-  // For accurate TTFT, we'd need streaming -- but streaming adds SSE overhead
-  // Approximate: totalTime * (promptTokens / (promptTokens + completionTokens * genTimeRatio))
-  // Better: run a separate TTFT test with streaming and 1 max_token
-  // For now: record totalMs and note TTFT is estimated
-
-  // Calculate throughput
-  promptTPS := float64(promptTokens) / (float64(totalMs) / 1000.0)  // Rough: includes generation time
-  genTPS := float64(completionTokens) / (float64(totalMs) / 1000.0) // Rough: includes prefill time
-
-  // Better decomposition if we assume prefill dominates for large prompts:
-  // Estimate prefill time ≈ totalTime - (completionTokens / expected_gen_tps)
-  // But we don't know expected_gen_tps yet. Use simpler metrics.
-
-  return TestPoint{
-    PromptTokens:     promptTokens,
-    CompletionTokens: completionTokens,
-    TargetPromptLen:  len(prompt),  // What we asked for (may differ from actual token count)
-    TotalTimeMs:      totalMs,
-    FinishReason:     result.Choices[0].FinishReason,
-    Timestamp:        startTime,
-  }
+```json
+{
+  "version": 1,
+  "jobs": [
+    { /* BenchmarkJob */ }
+  ],
+  "runs": [
+    { /* BenchmarkRun */ }
+  ]
+}
 ```
 
-**TTFT measurement strategy:**
+```go
+type Store struct {
+    mu       sync.RWMutex
+    dataDir  string
+    runs     []BenchmarkRun
+    jobs     []BenchmarkJob
 
-For accurate TTFT, run a separate streaming request:
-```
-func measureTTFT(prompt string) time.Duration:
-  reqBody := map[string]interface{}{
-    "model":      pm.modelID,
-    "messages":   []map[string]string{{"role": "user", "content": prompt}},
-    "max_tokens": 1,       // Only need first token
-    "stream":     true,
-    "temperature": 0.0,
-  }
+    timingsMu sync.RWMutex
+    timings   map[string][]TimingSample  // per-model ring buffer (passive capture)
+}
 
-  startTime := time.Now()
-  resp, _ := http.Post(...)
-  scanner := bufio.NewScanner(resp.Body)
-  for scanner.Scan():
-    line := scanner.Text()
-    if strings.HasPrefix(line, "data: ") && line != "data: [DONE]":
-      return time.Since(startTime)  // Time to first SSE data event
-  return 0  // Should not reach here
+const schemaVersion = 1
+const maxTimingSamples = 1000
 ```
 
-Include TTFT measurement in Standard and Thorough presets (one TTFT test per prompt length, before the non-streaming repetitions).
+**Methods** (port from llama-toolchest verbatim, removing build-related logic):
+
+- `NewStore(dataDir string) *Store` — loads on construction
+- `List() []BenchmarkRun` — newest first
+- `Get(id string) (*BenchmarkRun, error)`
+- `Save(run BenchmarkRun)` — append or update; rewrites file atomically (write to `.tmp`, rename)
+- `Delete(id string) error`
+- `BatchDelete(ids []string) (deleted, notFound int)`
+- `ListJobs() []BenchmarkJob`
+- `GetJob(id string) (*BenchmarkJob, error)`
+- `SaveJob(job BenchmarkJob)`
+- `DeleteJob(id string, disposition DeleteDisposition) error` — cascade deletes runs, orphan reassigns to `AdhocJobID`
+- `RunsForJob(jobID string) []BenchmarkRun`
+- `AddTiming(sample TimingSample)` — passive capture; trims to `maxTimingSamples` per model
+- `RecentTimings(modelID string, n int) []TimingSample`
+- `RunningAverage(modelID string) (avgGenTPS float64, count int, ok bool)`
+
+The `AdhocJobID = "adhoc"` constant is a synthetic catch-all for single-run benchmarks not tied to an explicit job. The store synthesizes an Ad-Hoc Runs pseudo-job for display when there's at least one orphan run.
+
+---
+
+## Internal HTTP Runner (`runner.go`)
+
+Port the shape from llama-toolchest's `runner.go`. Key changes for vLLM:
+
+1. **Streaming SSE for TTFT.** llama.cpp returns a `timings` struct in its non-streaming response; vLLM does not. So every internal-* request is streamed, and we time the first `data:` chunk.
+2. **No router unload/load.** vLLM runs one model per process; switching models is a process restart (see Job Runner below). For single-run benchmarks the model is assumed already loaded; the runner just verifies via `GET /v1/models`.
+3. **Warmup** stays: send a short streaming request (64 prompt / 16 gen) with retry-with-backoff, in case vLLM is mid-startup.
+
+### Streaming Loop
+
+```go
+func (r *Runner) runOneTest(ctx context.Context, vllmURL, model string, promptTokens, genTokens, rep int) (*BenchmarkResult, error) {
+    prompt := buildPrompt(promptTokens, rep)
+    body, _ := json.Marshal(map[string]any{
+        "model":       model,
+        "messages":    []map[string]string{{"role": "user", "content": prompt}},
+        "max_tokens":  genTokens,
+        "temperature": 0.0,
+        "stream":      true,
+        "stream_options": map[string]any{"include_usage": true},
+    })
+
+    req, _ := http.NewRequestWithContext(ctx, "POST", vllmURL+"/v1/chat/completions", bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Accept", "text/event-stream")
+
+    client := &http.Client{Timeout: 10 * time.Minute}
+    startTime := time.Now()
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != 200 {
+        b, _ := io.ReadAll(resp.Body)
+        return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
+    }
+
+    var (
+        ttft        time.Duration
+        firstChunk  = true
+        usagePrompt int
+        usageGen    int
+    )
+
+    scanner := bufio.NewScanner(resp.Body)
+    scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MiB lines for big chunks
+    for scanner.Scan() {
+        line := scanner.Text()
+        if !strings.HasPrefix(line, "data: ") {
+            continue
+        }
+        payload := strings.TrimPrefix(line, "data: ")
+        if payload == "[DONE]" {
+            break
+        }
+        if firstChunk {
+            ttft = time.Since(startTime)
+            firstChunk = false
+        }
+        // Last chunk (with stream_options.include_usage) carries usage
+        var chunk struct {
+            Usage *struct {
+                PromptTokens     int `json:"prompt_tokens"`
+                CompletionTokens int `json:"completion_tokens"`
+            } `json:"usage"`
+        }
+        if json.Unmarshal([]byte(payload), &chunk) == nil && chunk.Usage != nil {
+            usagePrompt = chunk.Usage.PromptTokens
+            usageGen = chunk.Usage.CompletionTokens
+        }
+    }
+    if err := scanner.Err(); err != nil {
+        return nil, err
+    }
+
+    total := time.Since(startTime)
+    if usageGen == 0 {
+        return nil, fmt.Errorf("no usage in response (set stream_options.include_usage)")
+    }
+
+    ttftMs := float64(ttft.Milliseconds())
+    totalMs := float64(total.Milliseconds())
+    genMs := totalMs - ttftMs
+    if genMs < 1 {
+        genMs = 1 // guard for tiny generations
+    }
+
+    return &BenchmarkResult{
+        PromptTokens:    usagePrompt,
+        GenTokens:       usageGen,
+        Repetition:      rep,
+        TTFTMs:          ttftMs,
+        TotalMs:         totalMs,
+        PromptTokPerSec: float64(usagePrompt) / (ttftMs / 1000.0),
+        GenTokPerSec:    float64(usageGen) / (genMs / 1000.0),
+    }, nil
+}
+```
+
+**Note on `stream_options.include_usage`:** vLLM supports this OpenAI extension and emits a final SSE chunk with `usage` populated. If a future vLLM version drops this we fall back to counting tokens client-side (approximate).
 
 ### Prompt Generation
 
-Generate prompts that tokenize to approximately the target token count.
+Copy the exact constants and helper from llama-toolchest so the prompts are byte-for-byte the same and results compare cleanly across engines:
 
-```
-func generatePromptTokens(targetTokens int) string:
-  // Strategy: use a known tokens-per-word ratio for English text
-  // Average English: ~1.3 tokens per word (varies by tokenizer)
-  // Generate extra, then trim
+```go
+const BenchPromptText = `The history of computing is a story of human ingenuity ...`
+const BenchPromptPrefixTemplate = "This is benchmark repetition number %d. Please analyze the following text carefully and provide a detailed response.\n\n"
+const BenchPromptCharsPerToken = 4
 
-  // Use a corpus of varied English text (not just repeated words --
-  // repeated text may compress differently in some tokenizers)
-  // Store a ~100KB text corpus embedded in the binary
-
-  // Approach:
-  // 1. Start with targetTokens * 0.75 words (conservative estimate)
-  // 2. Tokenize using a simple whitespace heuristic (actual tokenization happens server-side)
-  // 3. Adjust if needed (we accept +-10% accuracy; actual token count is recorded from response)
-
-  words := corpus.RandomWords(int(float64(targetTokens) * 0.75))
-  return strings.Join(words, " ")
+func buildPrompt(targetTokens, rep int) string { /* unchanged */ }
 ```
 
-The actual token count is recorded from vLLM's response (`usage.prompt_tokens`), so the prompt generation doesn't need to be perfectly accurate -- we just need to be in the right ballpark.
-
-### Step 5: Optional vLLM CLI Benchmarks
-
-When `IncludeVLLMBench` is true, run vLLM's built-in benchmark tools after the HTTP tests.
-
-#### vllm bench throughput
-
-```bash
-vllm bench throughput \
-  --model /data/models/<path> \
-  --input-len 512 \
-  --output-len 128 \
-  --num-prompts 100 \
-  --dtype auto \
-  --quantization <quant> \
-  --tensor-parallel-size <tp>
-```
-
-Parse stdout for:
-- Total throughput (tokens/sec)
-- Request throughput (requests/sec)
-- Average latency
-
-#### vllm bench serve
-
-Benchmarks against a running vLLM server at multiple QPS levels:
-
-```bash
-# For each QPS level:
-vllm bench serve \
-  --model <model_name> \
-  --host localhost \
-  --port 8000 \
-  --dataset-name sharegpt \
-  --num-prompts 50 \
-  --request-rate <qps>
-```
-
-Parse stdout for per-QPS metrics:
-- Mean/median/p99 TTFT
-- Mean/median/p99 TPOT (time per output token)
-- Mean/median/p99 ITL (inter-token latency)
-- Throughput (output tokens/sec)
-
-**Edge case:** `vllm bench serve` requires a running vLLM server. Since we're running benchmarks, the server should already be running. But verify health before starting.
-
-**Edge case:** ShareGPT dataset download. `vllm bench` may need to download the ShareGPT dataset on first run. Handle this gracefully (detect download, report progress).
-
-```
-VLLMBenchResults struct:
-  Throughput *VLLMThroughputResult
-  Serve      []VLLMServeResult      // One per QPS level
-
-VLLMThroughputResult struct:
-  TotalTokensPerSec   float64
-  RequestsPerSec      float64
-  AvgLatencyMs        float64
-  NumPrompts          int
-  InputLen            int
-  OutputLen           int
-
-VLLMServeResult struct:
-  QPS                float64
-  NumPrompts         int
-  MeanTTFTMs         float64
-  MedianTTFTMs       float64
-  P99TTFTMs          float64
-  MeanTPOTMs         float64
-  MedianTPOTMs       float64
-  P99TPOTMs          float64
-  MeanITLMs          float64
-  MedianITLMs        float64
-  P99ITLMs           float64
-  OutputTokensPerSec float64
-  CompletedRequests  int
-  FailedRequests     int
-```
-
-### Step 6: Compute Summary Statistics
-
-```
-func computeSummary(results []TestPoint) RunSummary:
-  // Group by prompt length
-  grouped := groupByPromptLen(results)
-
-  perPromptLen := []PromptLenSummary{}
-  for promptLen, points := range grouped:
-    totalTimes := extractField(points, "TotalTimeMs")
-    genTokens := extractField(points, "CompletionTokens")
-    promptTokens := extractField(points, "PromptTokens")
-
-    // Compute gen_tps for each point
-    genTPS := []float64{}
-    for _, p := range points:
-      genTPS = append(genTPS, float64(p.CompletionTokens) / (float64(p.TotalTimeMs) / 1000.0))
-
-    perPromptLen = append(perPromptLen, PromptLenSummary{
-      PromptTokens: promptLen,
-      NumTests:     len(points),
-      TotalTime:    computeStats(totalTimes),
-      GenTPS:       computeStats(genTPS),
-      // TTFT stats if measured separately
-    })
-
-  // Overall summary across all prompt lengths
-  allGenTPS := []float64{} // All gen_tps values across all tests
-  // ...
-
-  return RunSummary{
-    PerPromptLen: perPromptLen,
-    Overall: OverallSummary{
-      TotalTests:     len(results),
-      TotalDuration:  ...,
-      GenTPS:         computeStats(allGenTPS),
-      AvgGenTPS:      mean(allGenTPS),
-      BestGenTPS:     max(allGenTPS),
-      WorstGenTPS:    min(allGenTPS),
-    },
-  }
-```
-
-### Step 7: Store Results
-
-Append to `/data/config/benchmarks.json`:
-
-```json
-{
-  "runs": [
-    { /* BenchmarkRun */ },
-    { /* BenchmarkRun */ }
-  ],
-  "schema_version": 1
-}
-```
-
-File is loaded into memory at startup. Runs are appended and the whole file is rewritten. For a typical user this file will stay small (tens to low hundreds of runs). If it grows large, consider per-run files in a `/data/config/benchmarks/` directory (future optimization).
+The repetition prefix defeats prompt caching (vLLM's prefix cache, like llama.cpp's, would otherwise inflate prompt TPS on repeated runs).
 
 ---
 
-## Statistics Computation (`internal/benchmark/stats.go`)
+## Benchy Runner (`benchy.go`)
 
-Copy and adapt from llama-toolchest's `stats.go`.
+Copy `benchy.go` from llama-toolchest **almost verbatim**. Only behavioral differences:
 
-```
-Stats struct:
-  Mean    float64
-  Min     float64
-  Max     float64
-  Median  float64  // p50
-  P95     float64
-  P99     float64
-  Stddev  float64
-  Count   int
+- The `BaseURL` points at `http://localhost:<vllm-port>/v1` instead of the llama.cpp router.
+- `--tokenizer` receives the HF repo id from the model registry (same as llama-toolchest).
+- The container has `uv` pre-installed (see Container Changes below) so the `exec.LookPath("uvx")` check should always succeed when running inside the container. When run on the host (development), we surface the error as before.
 
-func computeStats(values []float64) Stats:
-  if len(values) == 0:
-    return Stats{}
+The `BenchyConfig`, `BuildBenchyArgs`, `FormatBenchyCommand`, `summarizeBenchy`, and `runLlamaBenchy` functions copy directly.
 
-  sort.Float64s(values)
-  n := len(values)
-
-  sum := 0.0
-  for _, v := range values:
-    sum += v
-
-  mean := sum / float64(n)
-
-  // Variance
-  sumSqDiff := 0.0
-  for _, v := range values:
-    diff := v - mean
-    sumSqDiff += diff * diff
-  variance := sumSqDiff / float64(n)  // Population variance (not sample)
-  stddev := math.Sqrt(variance)
-
-  return Stats{
-    Mean:   mean,
-    Min:    values[0],
-    Max:    values[n-1],
-    Median: percentile(values, 50),
-    P95:    percentile(values, 95),
-    P99:    percentile(values, 99),
-    Stddev: stddev,
-    Count:  n,
-  }
-
-func percentile(sorted []float64, p float64) float64:
-  if len(sorted) == 0:
-    return 0
-  if len(sorted) == 1:
-    return sorted[0]
-
-  rank := (p / 100.0) * float64(len(sorted) - 1)
-  lower := int(math.Floor(rank))
-  upper := int(math.Ceil(rank))
-  if lower == upper:
-    return sorted[lower]
-
-  // Linear interpolation
-  frac := rank - float64(lower)
-  return sorted[lower] + frac * (sorted[upper] - sorted[lower])
-```
+Result mapping: `summarizeBenchy` picks the `Concurrency: 1` row for the BenchmarkSummary so the badge values are comparable to internal-* runs. The full multi-concurrency report is preserved in `run.LlamaBenchy`.
 
 ---
 
-## Context Length Probing (`internal/benchmark/context_probe.go`)
+## Jobs (`job.go`, `job_runner.go`)
 
-Inspired by kyuz0's `find_max_context.py`. Iteratively find the maximum `--max-model-len` that doesn't OOM for a given model + GPU config.
+### Job Model
 
-### Probe Algorithm
+Mirrors llama-toolchest's job.go. **vLLM-specific change:** no `BuildIDs` dimension (vLLM is monolithic). Matrix is `{ModelIDs} × {Presets}`.
 
-```
-func ProbeMaxContext(modelID string, config ProbeConfig) ProbeResult:
-  model := registry.Get(modelID)
+```go
+type BenchmarkJob struct {
+    ID          string    `json:"id"`
+    Name        string    `json:"name"`
+    Description string    `json:"description,omitempty"`
+    Kind        string    `json:"kind"`   // "batch" | "ad-hoc"
+    Status      string    `json:"status"`
 
-  // Starting point: model's max_position_embeddings
-  maxPossible := model.HFConfig.MaxPositionEmbeddings
-  // Cap at something reasonable to avoid hours of testing
-  if maxPossible > 131072:
-    maxPossible = 131072
+    CreatedAt  time.Time `json:"created_at"`
+    StartedAt  time.Time `json:"started_at,omitempty"`
+    FinishedAt time.Time `json:"finished_at,omitempty"`
 
-  // Test at multiple gpu-memory-utilization levels
-  results := []ProbeUtilResult{}
-  for _, util := range config.UtilizationLevels:  // e.g. [0.98, 0.95, 0.90]
-    maxCtx := binarySearchMaxContext(modelID, maxPossible, util, config.TPSize)
-    results = append(results, ProbeUtilResult{
-      GPUMemoryUtilization: util,
-      MaxContextLength:     maxCtx,
-    })
+    ModelIDs []string  `json:"model_ids,omitempty"`
+    Presets  []string  `json:"presets,omitempty"`
+    Overrides *ConfigOverrides `json:"overrides,omitempty"`
 
-  // Test at different concurrency levels for the best utilization
-  bestUtil := results[0]  // Highest utilization
-  concurrencyResults := []ProbeConcurrencyResult{}
-  for _, concurrency := range config.ConcurrencyLevels:  // e.g. [1, 4, 8, 16]
-    maxCtx := binarySearchMaxContext(
-      modelID, bestUtil.MaxContextLength, bestUtil.GPUMemoryUtilization,
-      config.TPSize, WithMaxNumSeqs(concurrency),
-    )
-    concurrencyResults = append(concurrencyResults, ProbeConcurrencyResult{
-      MaxNumSeqs:       concurrency,
-      MaxContextLength: maxCtx,
-    })
+    Cells []JobCell `json:"cells,omitempty"`
+}
 
-  return ProbeResult{
-    ModelID:            modelID,
-    TPSize:             config.TPSize,
-    UtilizationResults: results,
-    ConcurrencyResults: concurrencyResults,
-    Timestamp:          time.Now(),
-  }
-```
+type ConfigOverrides struct {
+    MaxModelLen          *int     `json:"max_model_len,omitempty"`
+    TensorParallelSize   *int     `json:"tensor_parallel_size,omitempty"`
+    GPUMemoryUtilization *float64 `json:"gpu_memory_utilization,omitempty"`
+    KVCacheDtype         *string  `json:"kv_cache_dtype,omitempty"`
+    EnforceEager         *bool    `json:"enforce_eager,omitempty"`
+    Dtype                *string  `json:"dtype,omitempty"`
+}
 
-### Binary Search Implementation
-
-```
-func binarySearchMaxContext(modelID string, maxPossible int, util float64, tp int) int:
-  low := 256      // Minimum useful context
-  high := maxPossible
-  lastGood := 0
-
-  // Step 1: Quick exponential probe to find approximate upper bound
-  // Start from a known-good baseline and double until OOM
-  test := 1024
-  for test <= high:
-    if tryStartVLLM(modelID, test, util, tp):
-      lastGood = test
-      test *= 2
-    else:
-      high = test
-      break
-
-  // Step 2: Binary search between lastGood and high
-  low = lastGood
-  for high - low > 256:  // 256-token granularity
-    mid := (low + high) / 2
-    // Round to nearest 256 (vLLM allocates KV cache in blocks)
-    mid = (mid / 256) * 256
-
-    if tryStartVLLM(modelID, mid, util, tp):
-      low = mid
-      lastGood = mid
-    else:
-      high = mid
-
-  return lastGood
-```
-
-### tryStartVLLM Implementation
-
-```
-func tryStartVLLM(modelID string, maxModelLen int, util float64, tp int) bool:
-  // Build config with test parameters
-  testConfig := model.VLLMConfig
-  testConfig.MaxModelLen = maxModelLen
-  testConfig.GPUMemoryUtilization = util
-  testConfig.TensorParallelSize = tp
-
-  // Start vLLM with test config
-  // Use a temporary process manager (don't disturb the main one)
-  tmpPM := NewProcessManager(testPort)  // Use different port (8001)
-  err := tmpPM.Start(modelID, testConfig)
-
-  // Wait for either:
-  // - Ready state (success)
-  // - OOM in logs (failure)
-  // - Startup timeout (failure)
-
-  outcome := tmpPM.WaitForOutcome(3 * time.Minute)
-
-  // Stop the test process regardless
-  tmpPM.Stop()
-  // Wait for GPU memory to be freed
-  time.Sleep(5 * time.Second)
-
-  switch outcome:
-  case Ready:
-    return true
-  case OOM:
-    return false
-  case Timeout:
-    return false  // Treat timeout as failure (conservative)
-  case OtherError:
-    return false
-```
-
-### OOM Detection from vLLM Logs
-
-Parse vLLM stdout/stderr for OOM indicators:
-
-```
-OOM patterns to match:
-  "torch.cuda.OutOfMemoryError"
-  "torch.OutOfMemoryError"
-  "CUDA out of memory"
-  "HIP out of memory"
-  "Cannot allocate"
-  "RuntimeError: out of memory"
-  "ValueError: The model's max seq len" ... "is larger than the maximum"
-  "not enough memory" (case insensitive)
-```
-
-Also look for vLLM's helpful suggestions:
-```
-  "Try reducing max_model_len" -- extract suggested value if present
-  "gpu_memory_utilization is set to" ... "but" ... "is required"
-```
-
-If vLLM suggests a specific max length, use it to narrow the binary search faster.
-
-### Probe Config
-
-```
-ProbeConfig struct:
-  TPSize              int        // 1 or 2
-  UtilizationLevels   []float64  // Default: [0.98, 0.95, 0.90]
-  ConcurrencyLevels   []int      // Default: [1, 4, 8, 16]
-  TimeoutPerTest      time.Duration  // Default: 3 minutes
-  TestPort            int        // Default: 8001 (avoid conflicting with main vLLM)
+type JobCell struct {
+    ModelID        string `json:"model_id"`
+    Preset         string `json:"preset"`
+    Status         string `json:"status"`
+    Attempt        int    `json:"attempt"`
+    BenchmarkRunID string `json:"benchmark_run_id,omitempty"`
+    Error          string `json:"error,omitempty"`
 }
 ```
 
-### Saving Probe Results
+Status constants are the same as llama-toolchest: `JobStatus{Pending,Running,Completed,Failed,Canceled}`; `CellStatus{Pending,Running,Completed,Failed,Skipped}`.
 
-Store in the model's registry entry:
+### JobEnv Interface (vLLM-adapted)
 
-```json
-{
-  "context_probe": {
-    "last_probed": "2026-04-12T10:30:00Z",
-    "tp1": {
-      "util_098": 32768,
-      "util_095": 28672,
-      "util_090": 24576,
-      "concurrency_1": 32768,
-      "concurrency_4": 16384,
-      "concurrency_8": 8192,
-      "concurrency_16": 4096
-    },
-    "tp2": {
-      "util_098": 65536,
-      "util_095": 57344,
-      "util_090": 49152,
-      "concurrency_1": 65536,
-      "concurrency_4": 32768,
-      "concurrency_8": 16384,
-      "concurrency_16": 8192
+```go
+type JobEnv interface {
+    // EnsureModelLoaded stops the current vLLM process if a different model is
+    // active, starts vLLM with the target model+config, and blocks until the
+    // server reports healthy via /v1/models. May take minutes for large models.
+    EnsureModelLoaded(ctx context.Context, modelID string, cfg ConfigSnapshot) error
+
+    // CurrentLoadedModel returns the HF repo id of the model vLLM is currently
+    // serving, or "" if vLLM is stopped.
+    CurrentLoadedModel() string
+
+    // ResolveModel returns registry data for a model.
+    ResolveModel(modelID string) (ModelInfo, error)
+
+    // CurrentMetrics returns the latest GPU metrics for snapshotting.
+    CurrentMetrics() monitor.Metrics
+
+    // VLLMURL returns the base URL the runner targets (e.g. http://localhost:8000).
+    VLLMURL() string
+
+    // HFToken / HFCacheDir forwarded to llama-benchy (same as llama-toolchest).
+    HFToken() string
+    HFCacheDir() string
+
+    // VLLMVersion returns the version string of the running vllm (parsed from
+    // its startup log or /v1/models -- whichever's accessible).
+    VLLMVersion() string
+}
+
+type ModelInfo struct {
+    HFRepoID    string         // passed to llama-benchy --tokenizer and used as ConfigSnapshot.ModelID
+    Quant       string
+    SizeGB      float64
+    DisplayName string
+    ServedName  string         // what /v1/models returns; passed in the chat request "model" field
+    Config      ConfigSnapshot // model's saved baseline; overlay ConfigOverrides on this
+}
+```
+
+The api layer implements `JobEnv` in `internal/api/jobs_env.go`, holding refs to `*process.Manager`, the model registry, the monitor, and config.
+
+### Job Execution: Model-Grouped
+
+Per the answered scope, cells are reordered so each model loads exactly once per job. Within a model, all its presets run back-to-back, then we swap.
+
+```go
+// In job_runner.go
+func (q *JobQueue) runJob(ctx context.Context, job *BenchmarkJob) {
+    // Group cells by model, preserving preset order within each group.
+    byModel := map[string][]int{}
+    var modelOrder []string
+    for i, cell := range job.Cells {
+        if _, seen := byModel[cell.ModelID]; !seen {
+            modelOrder = append(modelOrder, cell.ModelID)
+        }
+        byModel[cell.ModelID] = append(byModel[cell.ModelID], i)
     }
-  }
+
+    for _, modelID := range modelOrder {
+        if ctx.Err() != nil {
+            break
+        }
+
+        // Load this model once (with the per-model config + job overrides).
+        info, err := q.env.ResolveModel(modelID)
+        if err != nil {
+            q.markCellsFailed(job, byModel[modelID], err.Error())
+            continue
+        }
+        cfg := applyOverrides(info.Config, job.Overrides)
+
+        if err := q.env.EnsureModelLoaded(ctx, modelID, cfg); err != nil {
+            q.markCellsFailed(job, byModel[modelID], "model load failed: "+err.Error())
+            continue
+        }
+
+        // Run all cells for this model.
+        for _, idx := range byModel[modelID] {
+            if ctx.Err() != nil {
+                job.Cells[idx].Status = CellStatusSkipped
+                continue
+            }
+            q.runCell(ctx, job, idx, info, cfg)
+            q.store.SaveJob(*job)
+        }
+    }
+
+    job.Status = jobFinalStatus(job)
+    job.FinishedAt = time.Now()
+    q.store.SaveJob(*job)
 }
 ```
 
-These verified values can be used as smart defaults: when the user sets TP and max_num_seqs, auto-suggest the probed max context length.
+Single-job-at-a-time semantics (a `sync.Mutex` guard on `JobQueue.current`) — same as llama-toolchest. `ErrJobAlreadyRunning` returned on `Submit` when busy.
+
+### Ad-Hoc Single Runs
+
+The existing single-run "start a benchmark on the current model" path still works: it creates a one-cell `BenchmarkJob` with `Kind: "ad-hoc"`, `ID: "adhoc"` (the synthetic catch-all is reused as the JobID — or a fresh one-shot job is created and the run is reassigned to AdhocJobID on save; choose one and stick with it). The runner skips `EnsureModelLoaded` if the requested model matches `CurrentLoadedModel()`.
 
 ---
 
-## Results Data Model
+## Context-Length Probing (`context_probe.go`)
 
-### TestPoint (per individual test)
+Binary-search the maximum `--max-model-len` that doesn't OOM. Full-version scope: sweep `{utilization} × {concurrency}`.
 
-```
-TestPoint struct:
-  Index            int       // 1-indexed within run
-  PromptTokens     int       // Actual from vLLM response
-  CompletionTokens int       // Actual from vLLM response
-  TargetPromptLen  int       // What we requested
-  TTFTMs           float64   // Time to first token (if measured via streaming)
-  TotalTimeMs      int64     // Wall clock time for full request
-  PromptTPS        float64   // Prompt tokens / total time (rough prefill speed)
-  GenTPS           float64   // Completion tokens / total time (rough gen speed)
-  FinishReason     string    // "stop", "length"
-  Timestamp        time.Time
-  Error            string    // Non-empty if this test failed
+### Data Model
+
+Stored under the model's registry entry, not in benchmarks.json (probe results describe model capability, not a benchmark).
+
+```go
+// In models/registry: extend ModelEntry with
+type ContextProbe struct {
+    LastProbed time.Time             `json:"last_probed"`
+    Results    map[int]TPProbeResult `json:"results"` // key: tensor_parallel_size
+}
+
+type TPProbeResult struct {
+    Utilization map[string]int `json:"utilization"` // "0.98" -> 32768
+    Concurrency map[int]int    `json:"concurrency"` // 4 -> 16384
 }
 ```
 
-### RunSummary
+### Probe Orchestration
 
-```
-RunSummary struct:
-  PerPromptLen []PromptLenSummary
-  Overall      OverallSummary
-  TTFTSummary  *TTFTSummary  // nil if TTFT not measured
+```go
+type ProbeConfig struct {
+    ModelID           string
+    TPSize            int
+    UtilizationLevels []float64 // default [0.98, 0.95, 0.90]
+    ConcurrencyLevels []int     // default [1, 4, 8, 16]
+    TimeoutPerTest    time.Duration // default 3 * time.Minute
+    TestPort          int       // default 8001 (must differ from main vLLM port)
+}
 
-PromptLenSummary struct:
-  PromptTokens int
-  NumTests     int
-  TotalTime    Stats   // ms
-  GenTPS       Stats   // tokens/sec
-  PromptTPS    Stats   // tokens/sec
-  TTFTMs       *Stats  // nil if not measured for this prompt length
+type ProbeResult struct {
+    ModelID            string                  `json:"model_id"`
+    TPSize             int                     `json:"tp_size"`
+    UtilizationResults map[float64]int         `json:"utilization_results"`
+    ConcurrencyResults map[int]int             `json:"concurrency_results"`
+    Timestamp          time.Time               `json:"timestamp"`
+    Warnings           []string                `json:"warnings,omitempty"`
+}
 
-OverallSummary struct:
-  TotalTests      int
-  TotalDurationMs int64
-  GenTPS          Stats
-  PromptTPS       Stats
-  AvgGenTPS       float64   // Convenience: mean of GenTPS across all tests
-  BestGenTPS      float64   // Convenience: max
-  WorstGenTPS     float64   // Convenience: min
-
-TTFTSummary struct:
-  PerPromptLen map[int]Stats  // prompt_length -> TTFT stats
-  Overall      Stats
+func ProbeMaxContext(ctx context.Context, env ProbeEnv, cfg ProbeConfig, progress chan<- ProbeProgress) (*ProbeResult, error)
 ```
 
-### Comparison Data
+### Algorithm (per `(util, concurrency)` point)
 
-For cross-run comparison, compute normalized scores:
+1. **Exponential probe:** start at 1024, double until OOM or `max_position_embeddings` (capped at 131072). Record the last good value.
+2. **Binary search** between `lastGood` and `firstBad`, granularity 256 (vLLM's KV cache block size). Round midpoints to the nearest 256.
+3. Each `tryStartVLLM(...)` call starts a temporary vLLM process on `cfg.TestPort` and waits for one of:
+   - **Ready:** `/v1/models` returns 200 → success
+   - **OOM:** stderr / log matches the OOM regex (see below) → failure
+   - **Timeout:** `cfg.TimeoutPerTest` elapsed → failure (conservative)
+4. Stop the test process. Wait 5s for VRAM to free. Move on.
+
+### tryStartVLLM (extends `internal/process/manager.go`)
+
+The existing `process.Manager` already knows how to start vLLM. Extend it to support a "secondary" mode on `cfg.TestPort` so the probe can spawn vLLM without disturbing the main instance.
+
+**Precondition:** main vLLM must be stopped before probing (otherwise GPU memory contention skews the probe). The API endpoint returns 409 if main vLLM is running.
+
+### OOM Detection
+
+Stream the test process's combined stdout/stderr and match these patterns:
 
 ```
-ComparisonEntry struct:
-  RunID          string
-  ModelID        string
-  ModelName      string
-  QuantMethod    string
-  QuantBits      int
-  TPSize         int
-  MaxModelLen    int
-  AvgGenTPS      float64
-  BestGenTPS     float64
-  AvgTTFTMs      float64   // 0 if not measured
-  // Per-prompt-len breakdowns for chart
-  PromptLenData  map[int]PromptLenCompare
+torch.cuda.OutOfMemoryError
+torch.OutOfMemoryError
+CUDA out of memory
+HIP out of memory
+RuntimeError: out of memory
+ValueError: The model's max seq len .* is larger than the maximum
+not enough memory (case-insensitive)
+KV cache .* cannot fit
+```
 
-PromptLenCompare struct:
-  AvgGenTPS   float64
-  AvgTotalMs  float64
-  AvgTTFTMs   float64
+When vLLM logs a helpful suggestion ("Try reducing max_model_len to N"), extract `N` and snap the upper bound to it to short-circuit further iterations.
+
+### Progress Reporting
+
+```go
+type ProbeProgress struct {
+    Phase           string  // "exponential" | "binary_search" | "swept_util" | "swept_concurrency"
+    Utilization     float64
+    Concurrency     int
+    TestingContext  int
+    Result          string  // "success" | "oom" | "timeout"
+    ElapsedSeconds  float64
 }
 ```
+
+SSE-streamed at `/api/benchmarks/probe-context/{id}/progress`.
+
+### Apply-Results UX
+
+In the probe results display (and the Models page), each row has an "Apply" button that writes `max_model_len` + the matching `gpu_memory_utilization` or `max_num_seqs` back into the model's saved config. Probe values are advisory defaults; the user can override.
 
 ---
 
-## Passive Timing Capture
+## Passive Timing Capture (`timing.go`, proxy hook)
 
-The proxy (Phase 5) captures timing data from non-streaming `/v1/chat/completions` responses.
+### Capture Path
 
-### Storage
+`internal/api/proxy.go` already proxies `/v1/*` requests to vLLM. Extend the proxy to capture timing from **non-streaming** chat completion responses (streaming responses are harder to instrument cheaply; skip them).
 
-```
-PassiveTiming struct:
-  Timestamp        time.Time
-  ModelID          string
-  PromptTokens     int
-  CompletionTokens int
-  TotalTimeMs      int64
-  HasToolCalls     bool
+```go
+// proxy.go (sketch)
+func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+    body, _ := io.ReadAll(r.Body)
+    var reqJSON struct {
+        Stream bool   `json:"stream"`
+        Model  string `json:"model"`
+    }
+    json.Unmarshal(body, &reqJSON)
 
-PassiveTimingStore struct:
-  mu       sync.RWMutex
-  entries  []PassiveTiming     // Recent entries (ring buffer, capacity 10000)
-  perModel map[string]*RunningAverage
+    start := time.Now()
+    rec := &timingRecorder{ResponseWriter: w}
+    // ... forward the request to vLLM, recording the response body if non-streaming
+    s.proxyTo(rec, r, body)
 
-RunningAverage struct:
-  ModelID          string
-  Count            int
-  AvgGenTPS        float64
-  AvgPromptTPS     float64
-  AvgTotalMs       float64
-  LastUpdated      time.Time
+    if !reqJSON.Stream {
+        var resp struct {
+            Usage struct {
+                PromptTokens     int `json:"prompt_tokens"`
+                CompletionTokens int `json:"completion_tokens"`
+            } `json:"usage"`
+        }
+        if json.Unmarshal(rec.body, &resp) == nil && resp.Usage.CompletionTokens > 0 {
+            s.bench.AddTiming(benchmark.TimingSample{
+                Timestamp:       start,
+                ModelID:         reqJSON.Model,
+                PromptTokens:    resp.Usage.PromptTokens,
+                GenTokens:       resp.Usage.CompletionTokens,
+                PromptTokPerSec: 0, // unknown without TTFT split
+                GenTokPerSec:    float64(resp.Usage.CompletionTokens) / time.Since(start).Seconds(),
+            })
+        }
+    }
 }
 ```
 
-### Updating Running Averages
+### Store API
 
+```go
+type TimingSample struct {
+    Timestamp       time.Time `json:"ts"`
+    ModelID         string    `json:"model"`
+    PromptTokens    int       `json:"prompt_n"`
+    GenTokens       int       `json:"gen_n"`
+    PromptTokPerSec float64   `json:"prompt_tps"`
+    GenTokPerSec    float64   `json:"gen_tps"`
+}
+
+// On Store:
+func (s *Store) AddTiming(sample TimingSample)
+func (s *Store) RecentTimings(modelID string, n int) []TimingSample
+func (s *Store) RunningAverage(modelID string) (avgGenTPS float64, count int, ok bool)
 ```
-func (s *PassiveTimingStore) Add(t PassiveTiming):
-  s.mu.Lock()
-  defer s.mu.Unlock()
 
-  // Add to ring buffer
-  s.entries.Add(t)
+Per-model ring buffer of `maxTimingSamples=1000`. Running average is an exponential moving average (alpha=0.1) updated on every `AddTiming`, displayed once at least 10 samples have accumulated.
 
-  // Update running average for model
-  avg, ok := s.perModel[t.ModelID]
-  if !ok:
-    avg = &RunningAverage{ModelID: t.ModelID}
-    s.perModel[t.ModelID] = avg
-
-  genTPS := float64(t.CompletionTokens) / (float64(t.TotalTimeMs) / 1000.0)
-
-  // Exponential moving average (alpha = 0.1 for smoothing)
-  alpha := 0.1
-  if avg.Count == 0:
-    avg.AvgGenTPS = genTPS
-  else:
-    avg.AvgGenTPS = alpha * genTPS + (1 - alpha) * avg.AvgGenTPS
-
-  avg.Count++
-  avg.LastUpdated = time.Now()
-```
+Timing samples are **not persisted** across restarts (in-memory only). That keeps `benchmarks.json` small and avoids file churn on every API request. If persistence becomes valuable later, write a separate `timings.jsonl` append-only log.
 
 ### Display
 
-- **Dashboard:** Show per-model passive metrics card with avg gen TPS, request count.
-- **Model cards:** Show passive average gen TPS badge if available (> 10 samples).
-- **Benchmark comparison:** Allow including passive averages as a baseline in comparisons.
+- **Dashboard** — per-model card showing `avg gen TPS`, sample count, last-updated.
+- **Model cards (Models page)** — small badge near the "Loaded" indicator when ≥10 samples.
+- **Benchmark comparison** — optional "include passive averages" checkbox that synthesizes pseudo-runs from the timing store for comparison plotting.
 
 ---
 
-## Benchmark API
+## API Endpoints
 
-### GET /api/benchmarks
+Mirrors llama-toolchest's split across `bench.go`, `bench_jobs.go`, `bench_about.go`, `bench_export.go`, plus a new `bench_probe.go`. Dual-mode (HTML/JSON via `HX-Request`) on every endpoint.
 
-List all benchmark runs.
+### Benchmark Runs
 
-**Query params:**
-- `model_id` -- Filter by model (optional)
-- `preset` -- Filter by preset (optional)
-- `sort` -- "date" (default), "gen_tps", "model"
-- `order` -- "desc" (default), "asc"
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/benchmarks` | List runs (newest first); query params: `model_id`, `preset`, `job_id`, `sort`, `order` |
+| GET | `/api/benchmarks/{id}` | Single run detail |
+| POST | `/api/benchmarks` | Start a single (ad-hoc) run. Body: `{model_id, preset, overrides?}` |
+| DELETE | `/api/benchmarks/{id}` | Delete one |
+| DELETE | `/api/benchmarks/batch-delete?ids=a,b,c` | Delete many |
+| POST | `/api/benchmarks/{id}/cancel` | Cancel an in-flight run |
+| GET | `/api/benchmarks/{id}/progress` | SSE stream of progress |
+| GET | `/api/benchmarks/compare?ids=a,b,c` | Comparison view data (2–10 runs) |
+| GET | `/api/benchmarks/export?ids=a,b&format=csv\|json` | Export selected runs |
+| GET | `/api/benchmarks/about` | Disclosure modal data (presets, prompt text, benchy command) |
+| GET | `/api/benchmarks/form` | New-benchmark form partial (HTML) |
 
-**Response (JSON):**
-```json
-{
-  "runs": [
-    {
-      "id": "abc-123",
-      "status": "completed",
-      "preset": "standard",
-      "model_id": "NousResearch/Hermes-3-Llama-3.1-8B",
-      "model_display_name": "Hermes 3 Llama 3.1 8B",
-      "quant_method": "none",
-      "started_at": "2026-04-12T10:00:00Z",
-      "completed_at": "2026-04-12T10:03:15Z",
-      "summary": {
-        "overall": {
-          "avg_gen_tps": 45.2,
-          "best_gen_tps": 52.1,
-          "worst_gen_tps": 38.7,
-          "total_tests": 9
-        }
-      }
-    }
-  ],
-  "total": 15
-}
-```
+**Validation on POST `/api/benchmarks`:**
 
-**HTML response:** Summary card list with model name, date, avg gen TPS, preset badge.
+- The model must be currently loaded in vLLM (`CurrentLoadedModel() == model_id`). If not, return 409 with `{error: "Start the model first", action: "/api/service/start"}`. Single-run benchmarks do not auto-load.
+- Preset's largest prompt + gen must not exceed the model's configured `max_model_len`. If it would, the runner skips those points with a warning, but the run still starts.
 
-### POST /api/benchmarks
+### Benchmark Jobs
 
-Start a new benchmark run.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/benchmark-jobs` | List jobs |
+| GET | `/api/benchmark-jobs/{id}` | Job detail with cells |
+| POST | `/api/benchmark-jobs` | Create + start a job. Body: `{name, description?, model_ids, presets, overrides?}` |
+| POST | `/api/benchmark-jobs/{id}/cancel` | Cancel an in-flight job |
+| POST | `/api/benchmark-jobs/{id}/retry-failed` | Retry failed cells (reuses the same job ID, bumps `Attempt`) |
+| DELETE | `/api/benchmark-jobs/{id}?runs=cascade\|orphan` | Delete a job; cascade removes runs, orphan reassigns to AdhocJobID |
+| GET | `/api/benchmark-jobs/form` | New-job form partial |
 
-**Request body:**
-```json
-{
-  "model_id": "NousResearch/Hermes-3-Llama-3.1-8B",
-  "preset": "standard",
-  "custom_config": null
-}
-```
+**Validation on POST `/api/benchmark-jobs`:**
 
-Or with custom config:
-```json
-{
-  "model_id": "NousResearch/Hermes-3-Llama-3.1-8B",
-  "preset": "custom",
-  "custom_config": {
-    "prompt_lengths": [256, 1024, 4096],
-    "generation_tokens": 256,
-    "repetitions": 3,
-    "warmup_requests": 2,
-    "include_vllm_bench": true,
-    "vllm_bench_qps": [1.0, 4.0],
-    "concurrent_requests": 1
-  }
-}
-```
+- At least one model and one preset.
+- All `model_ids` exist in the registry.
+- All `presets` exist in `Presets()`.
+- Returns 409 if another job is already running (`ErrJobAlreadyRunning`).
+
+### Context Probe
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/benchmarks/probe-context` | Start a probe. Body: `{model_id, tp_size, utilization_levels?, concurrency_levels?}` |
+| GET | `/api/benchmarks/probe-context/{id}/progress` | SSE progress |
+| GET | `/api/benchmarks/probe-context/{model_id}` | Latest stored probe results for a model |
 
 **Validation:**
-- Model must be currently loaded in vLLM (check service status).
-- If model is not loaded, return 409 with message "Start the model first via /api/service/start".
-- Custom config values must be within allowed ranges.
 
-**Response:** 202 Accepted with run ID.
-```json
-{
-  "id": "abc-123",
-  "status": "pending",
-  "message": "Benchmark started, subscribe to /api/benchmarks/abc-123/progress for updates"
-}
-```
+- Main vLLM must be stopped (else 409). Probe spawns its own vLLM on `TestPort`.
 
-### GET /api/benchmarks/{id}
+### Passive Timing
 
-Full results for a completed run.
-
-**Response:** The complete `BenchmarkRun` struct serialized as JSON. Includes all test points, summaries, hardware snapshot, model config snapshot.
-
-**HTML response:** Detailed results page with tables and inline charts.
-
-### GET /api/benchmarks/{id}/progress
-
-SSE stream of benchmark progress.
-
-**Events:**
-```
-event: progress
-data: {"phase":"testing","current_test":3,"total_tests":9,"current_prompt_len":512,"current_rep":1,"elapsed_seconds":45.2,"est_remaining_s":90.5}
-
-event: metric
-data: {"index":3,"prompt_tokens":515,"completion_tokens":128,"total_time_ms":2850,"gen_tps":44.9}
-
-event: phase
-data: {"phase":"vllm_bench","message":"Running vllm bench throughput..."}
-
-event: complete
-data: {"id":"abc-123","status":"completed","summary":{"overall":{"avg_gen_tps":45.2}}}
-
-event: error
-data: {"id":"abc-123","status":"failed","error":"Connection refused -- is vLLM still running?"}
-```
-
-### DELETE /api/benchmarks/{id}
-
-Delete a single benchmark run.
-
-**Response:** 204 No Content on success, 404 if not found.
-
-### DELETE /api/benchmarks/batch-delete
-
-Delete multiple runs at once.
-
-**Request body:**
-```json
-{
-  "ids": ["abc-123", "def-456", "ghi-789"]
-}
-```
-
-**Response:**
-```json
-{
-  "deleted": 3,
-  "not_found": 0
-}
-```
-
-### GET /api/benchmarks/compare?ids=1,2,3
-
-Comparison view data for multiple runs.
-
-**Query params:**
-- `ids` -- Comma-separated run IDs (2-10 runs)
-
-**Response:**
-```json
-{
-  "runs": [
-    {
-      "id": "abc-123",
-      "model_id": "NousResearch/Hermes-3-Llama-3.1-8B",
-      "model_display_name": "Hermes 3 8B",
-      "quant_method": "none",
-      "tp_size": 1,
-      "max_model_len": 8192,
-      "avg_gen_tps": 45.2,
-      "best_gen_tps": 52.1,
-      "avg_ttft_ms": 120.5,
-      "prompt_len_data": {
-        "128": {"avg_gen_tps": 52.1, "avg_total_ms": 2450},
-        "512": {"avg_gen_tps": 45.2, "avg_total_ms": 2830},
-        "2048": {"avg_gen_tps": 38.7, "avg_total_ms": 3310}
-      }
-    },
-    {
-      "id": "def-456",
-      "model_id": "NousResearch/Hermes-3-Llama-3.1-8B-GPTQ",
-      "model_display_name": "Hermes 3 8B GPTQ",
-      "quant_method": "gptq",
-      "tp_size": 1,
-      "max_model_len": 16384,
-      "avg_gen_tps": 62.5,
-      "best_gen_tps": 71.3,
-      "avg_ttft_ms": 95.2,
-      "prompt_len_data": {
-        "128": {"avg_gen_tps": 71.3, "avg_total_ms": 1790},
-        "512": {"avg_gen_tps": 62.5, "avg_total_ms": 2050},
-        "2048": {"avg_gen_tps": 53.8, "avg_total_ms": 2380}
-      }
-    }
-  ],
-  "common_prompt_lens": [128, 512, 2048]
-}
-```
-
-`common_prompt_lens` lists prompt lengths that all selected runs have in common (for apples-to-apples chart).
-
-### GET /api/benchmarks/export?id=1
-
-CSV export of a single run's test points.
-
-**Response headers:**
-```
-Content-Type: text/csv
-Content-Disposition: attachment; filename="benchmark-abc123-hermes-3-8b-2026-04-12.csv"
-```
-
-**CSV columns:**
-```
-test_index,prompt_tokens,completion_tokens,target_prompt_len,ttft_ms,total_time_ms,prompt_tps,gen_tps,finish_reason,timestamp
-1,130,128,128,,2450,53.1,52.2,stop,2026-04-12T10:00:15Z
-2,131,128,128,,2480,52.8,51.6,stop,2026-04-12T10:00:18Z
-...
-```
-
-### POST /api/benchmarks/probe-context
-
-Start context length probing.
-
-**Request body:**
-```json
-{
-  "model_id": "NousResearch/Hermes-3-Llama-3.1-8B",
-  "tp_size": 1,
-  "utilization_levels": [0.98, 0.95, 0.90],
-  "concurrency_levels": [1, 4, 8, 16]
-}
-```
-
-**Validation:**
-- Model does NOT need to be currently loaded (probing starts its own vLLM instances on a different port).
-- But main vLLM should be stopped to avoid GPU memory contention. If running, return 409 "Stop main vLLM process before context probing".
-
-**Response:** 202 Accepted with probe ID.
-
-**Progress via SSE:** `GET /api/benchmarks/probe-context/{id}/progress`
-```
-event: progress
-data: {"phase":"binary_search","utilization":0.98,"testing_context":16384,"result":"success"}
-
-event: progress
-data: {"phase":"binary_search","utilization":0.98,"testing_context":24576,"result":"oom"}
-
-event: complete
-data: {"model_id":"...","results":{...}}
-```
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/benchmarks/timings/{model_id}` | Recent timing samples + running average |
+| GET | `/api/benchmarks/timings` | Per-model running averages (all models with ≥10 samples) |
 
 ---
 
-## Benchmarks Page UI (`web/templates/benchmarks.html`)
+## UI
 
-### Layout
+Port the llama-toolchest UI structure: job-grouped tables with expandable run rows, multi-select actions (compare / export / batch-delete), and the "About benchmarks" disclosure modal.
 
-Three sections, top to bottom:
-
-1. **New Benchmark Panel** (collapsible, expanded by default if no runs exist)
-2. **Active Benchmark Progress** (shown only when a benchmark is running)
-3. **Results List** (always shown)
-
-### New Benchmark Panel
-
-- **Model selector** -- Dropdown of loaded model only (or all enabled models with "start first" note for unloaded ones). Show current model as default.
-- **Preset selector** -- Radio buttons: Quick, Standard, Thorough, Custom
-  - Each preset shows estimated duration and test count
-  - Selecting Custom reveals additional fields:
-    - **Prompt lengths** -- Multi-select chips or comma-separated input: 128, 256, 512, 1024, 2048, 4096, 8192, 16384. Pre-filter to only show values <= model's max_model_len.
-    - **Generation tokens** -- Number input, default 128. Range: 1 to max_model_len.
-    - **Repetitions** -- Number input, default 3. Range: 1-20.
-    - **Include vLLM bench** -- Toggle. Shows sub-options for QPS levels.
-    - **QPS levels** -- Multi-select: 1.0, 2.0, 4.0, 8.0, 16.0
-- **Run button** -- `hx-post="/api/benchmarks"`. Disabled if no model loaded. Shows confirmation with estimated duration.
-- **Context probe button** -- Separate button: "Probe Max Context". Opens probe config modal (TP selector, utilization levels). Requires main vLLM to be stopped.
-
-### Active Benchmark Progress
-
-Shown only when `status == "running"`. Driven by SSE from `/api/benchmarks/{id}/progress`.
-
-- **Progress bar** -- `currentTest / totalTests` as percentage.
-- **Phase indicator** -- "Warmup", "Testing (3/9)", "Running vllm bench throughput", "Computing statistics".
-- **Live metrics table** -- Updated after each test point:
-
-  | Prompt Tokens | Completion Tokens | Total Time (ms) | Gen TPS |
-  |---|---|---|---|
-  | 128 | 128 | 2450 | 52.2 |
-  | 128 | 128 | 2480 | 51.6 |
-  | 512 | 128 | 2830 | 45.2 |
-
-- **Elapsed / Estimated remaining** -- "1:15 elapsed, ~2:00 remaining"
-- **Cancel button** -- `hx-post="/api/benchmarks/{id}/cancel"`. Stops the current run.
-
-### Results List
-
-Card-style list of completed benchmark runs. Each card shows:
-
-- **Model name** + quant badge (e.g. "Hermes 3 8B" with "GPTQ 4-bit" badge)
-- **Date** -- "April 12, 2026 10:00 AM"
-- **Preset** badge -- Quick / Standard / Thorough / Custom
-- **Key metrics** -- Avg gen TPS, best gen TPS in large text
-- **Expandable details** -- Click to reveal full results (htmx `hx-get="/api/benchmarks/{id}"`)
-
-**Sorting controls:** Date (default), Gen TPS, Model name.
-
-**Filter controls:** By model (dropdown), by preset (checkboxes).
-
-**Selection checkboxes:** For comparison and batch delete.
-
-**Actions row:**
-- **Compare selected** -- Button, enabled when 2-10 runs selected. Opens comparison view.
-- **Delete selected** -- Button with confirmation.
-
-### Detailed Results View
-
-Expanded within a card or as a separate panel. Shows:
-
-**Configuration snapshot:**
-- Model, quant, TP, context length, gpu_memory_utilization, enforce_eager, kv_cache_dtype, tool config
-- Hardware: GPU name, VRAM, ROCm version
-
-**Per-test-point table:**
-
-| # | Prompt Tokens | Completion Tokens | TTFT (ms) | Total Time (ms) | Gen TPS | Finish |
-|---|---|---|---|---|---|---|
-| 1 | 130 | 128 | - | 2450 | 52.2 | stop |
-| 2 | 131 | 128 | - | 2480 | 51.6 | stop |
-| 3 | 515 | 128 | - | 2830 | 45.2 | stop |
-
-**Summary statistics per prompt length:**
-
-| Prompt Length | Avg Gen TPS | Min | Max | Median | P95 | Stddev |
-|---|---|---|---|---|---|---|
-| 128 | 51.9 | 51.6 | 52.2 | 51.9 | 52.2 | 0.3 |
-| 512 | 45.0 | 44.5 | 45.5 | 45.0 | 45.5 | 0.4 |
-| 2048 | 38.5 | 37.8 | 39.2 | 38.5 | 39.1 | 0.6 |
-
-**Mini chart:** Simple horizontal bar chart showing avg gen TPS per prompt length. Built with inline SVG or a lightweight chart helper (no heavy chart library -- keep it Pico CSS compatible). Or use ASCII-style bars:
+### Page Layout (`benchmarks.html`)
 
 ```
-128 tokens:  ████████████████████████████████████████████  52.2 tps
-512 tokens:  ██████████████████████████████████████         45.2 tps
-2048 tokens: ██████████████████████████████                 38.7 tps
+┌─ Benchmarks ───────────────────────────────────────┐
+│ [+ New Run]  [+ New Job]  [Probe Max Context]  [?] │  ← Top actions; [?] opens About modal
+├────────────────────────────────────────────────────┤
+│ Active Job Progress (when running)                 │  ← Polled via hx-get + hx-trigger=load,every 2s
+│   ▓▓▓▓▓░░░░░  3/8 cells   Job: "Quant compare"     │
+│   Cell 3: Hermes-3-8B  internal-standard  rep 2/3  │
+├────────────────────────────────────────────────────┤
+│ Job-grouped runs list                              │
+│                                                    │
+│ ▼ "Quant compare" (batch, completed)  [delete]     │
+│   ┌─[✓] Hermes-3-8B / internal-standard / 45.2 t/s │
+│   ├─[ ] Hermes-3-8B-GPTQ / internal-standard / 62.5 │
+│   └─[ ] Hermes-3-8B-AWQ / internal-standard / 58.9 │
+│                                                    │
+│ ▼ Ad-Hoc Runs                                       │
+│   ┌─[ ] Hermes-3-8B / benchy-quick / 44.8 t/s      │
+│   └─[ ] Llama-3.1-70B / internal-quick / 12.3 t/s  │
+│                                                    │
+│ [Compare selected] [Export selected ▾] [Delete selected]
+└────────────────────────────────────────────────────┘
 ```
 
-**vLLM bench results** (if included):
-- Throughput: X tokens/sec, Y requests/sec
-- Per-QPS serve results table:
-  | QPS | Mean TTFT | P99 TTFT | Mean TPOT | Throughput | Failed |
-  |---|---|---|---|---|---|
-  | 1.0 | 95ms | 120ms | 22ms | 45.2 tok/s | 0 |
-  | 4.0 | 110ms | 180ms | 25ms | 160.5 tok/s | 0 |
-  | 8.0 | 250ms | 450ms | 35ms | 280.1 tok/s | 2 |
+### Partial Templates
 
-**CSV export button:** `<a href="/api/benchmarks/{id}/export">Export CSV</a>`
+- `bench_job_list.html` — top-level: one `<tbody class="bench-row-group">` per job, header row + run rows
+- `bench_run_row.html` — single run row with checkbox, summary stats, expand-on-click
+- `bench_detail.html` — expanded view loaded via `hx-get="/api/benchmarks/{id}"` on row click. Shows:
+  - Hardware snapshot (GPU name, VRAM, count)
+  - Config snapshot (the 7 ConfigSnapshot fields)
+  - vLLM version / image tag
+  - Per-test-point table (rep, prompt tokens, gen tokens, TTFT, total ms, prompt-tps, gen-tps)
+  - Summary stats card
+  - For benchy runs: the full multi-concurrency `LlamaBenchy` results table + the disclosed command string
+  - Warnings list
+- `bench_compare.html` — side-by-side comparison view; horizontal-bar visualization per prompt length (inline SVG, no chart library); summary table with best-value highlighting
+- `bench_progress.html` — active progress panel with phase indicator, cell progress, ETA
+- `bench_about.html` — modal contents:
+  - Preset table with computed durations
+  - The `BenchPromptText` and `BenchPromptPrefixTemplate` shown verbatim
+  - For each benchy preset: the exact `uvx llama-benchy …` command (via `FormatBenchyCommand`)
+  - Link to llama-benchy upstream docs
+- `bench_form.html` — new-run form: model selector (only loaded model selectable; others shown disabled with "start first" hint), preset radio buttons with descriptions
+- `bench_job_form.html` — new-job form: multi-select for models (checkboxes), multi-select for presets, optional config overrides section
+- `bench_probe.html` — probe form (tp_size, utilization levels, concurrency levels) + results display table
 
-### Comparison View
+### htmx Patterns (copy from llama-toolchest)
 
-Side-by-side display of 2-10 selected runs. Driven by `/api/benchmarks/compare?ids=...`.
-
-**Header row:** One column per run, showing model name, quant type, key config.
-
-**Bar chart per prompt length:**
-For each common prompt length, horizontal bars showing avg gen TPS:
-```
-128 tokens:
-  Hermes 3 8B FP16:  ████████████████████████████████████  52.2
-  Hermes 3 8B GPTQ:  █████████████████████████████████████████████████  71.3
-  Hermes 3 8B AWQ:   ███████████████████████████████████████████████  68.9
-
-512 tokens:
-  Hermes 3 8B FP16:  ████████████████████████████████  45.2
-  Hermes 3 8B GPTQ:  ██████████████████████████████████████████  62.5
-  Hermes 3 8B AWQ:   ████████████████████████████████████████  59.1
-```
-
-**Summary comparison table:**
-
-| Metric | Hermes 3 FP16 | Hermes 3 GPTQ | Hermes 3 AWQ |
-|---|---|---|---|
-| Avg Gen TPS | 45.2 | 62.5 | 59.1 |
-| Best Gen TPS | 52.2 | 71.3 | 68.9 |
-| Avg TTFT | 120ms | 95ms | 100ms |
-| Context Length | 8192 | 16384 | 16384 |
-| VRAM Used | 16.1 GB | 4.5 GB | 4.3 GB |
-| TP Size | 1 | 1 | 1 |
-
-Highlight the best value in each row (green background).
-
-### Context Probe Results Section
-
-Shown on the models page (Phase 4) and linked from benchmarks page.
-
-Display probed results as a table:
-
-**TP=1:**
-| GPU Mem Util | Max Context |
-|---|---|
-| 0.98 | 32768 |
-| 0.95 | 28672 |
-| 0.90 | 24576 |
-
-| Concurrency (max_num_seqs) | Max Context |
-|---|---|
-| 1 | 32768 |
-| 4 | 16384 |
-| 8 | 8192 |
-| 16 | 4096 |
-
-"Apply" button next to each row: sets `max_model_len` and `gpu_memory_utilization`/`max_num_seqs` in the model's config to the probed values.
+- Auto-refresh active progress: `hx-get="/api/benchmark-jobs/{id}"` with `hx-trigger="every 2s"` while status=running
+- SSE for per-cell live metrics: `hx-ext="sse" sse-connect="/api/benchmarks/{run-id}/progress" sse-swap="metric"`
+- Selection state: vanilla JS scoped to the bench-runs container (port the `benchContainer(btn)` helper)
+- Modal open/close: native `<dialog>` element, JS triggers `.showModal()` / `.close()`
 
 ---
 
-## What to Copy from llama-toolchest vs Adapt
+## Container Changes
 
-### Copy Directly
+Both `Dockerfile.rocm` and `Dockerfile.cuda` need `uv` so `uvx llama-benchy` works in-process.
 
-- **`stats.go`** -- Statistical computation functions. Identical math, same Go code.
-- **SSE progress pattern** -- Same fan-out writer, same event format, same htmx-sse.js consumption.
-- **Benchmark list UI layout** -- Card-style list with expand/collapse. Same htmx patterns.
-- **CSV export endpoint pattern** -- Same Content-Disposition header, same CSV writer.
-- **Progress bar component** -- Same HTML/CSS, different SSE source.
+Add to each Dockerfile (after vLLM is installed):
 
-### Adapt (Same Pattern, Different Details)
+```dockerfile
+# Install uv for llama-benchy
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx
+```
 
-- **`runner.go`** -- llama-toolchest sends to llama.cpp's `/v1/chat/completions`. Here we send to vLLM's. Same endpoint, but:
-  - vLLM returns `usage.prompt_tokens` and `usage.completion_tokens` (llama.cpp may use different field names)
-  - vLLM's streaming format may have slight differences in chunk structure
-  - Temperature 0.0 may behave differently (vLLM might need `temperature: 0.01` to avoid greedy-mode edge cases)
-- **`benchmark.go`** -- Orchestration is similar but:
-  - Add vLLM CLI bench integration (new)
-  - Add TTFT measurement via streaming (new)
-  - Hardware snapshot uses rocm-smi instead of (or in addition to) nvidia-smi
-- **Benchmark presets** -- Same concept, different default values (vLLM typically handles larger contexts)
-- **Results display** -- Same table/card layout, add columns for TTFT and vLLM-specific metrics
+`uv` is statically-linked Rust and ~10 MB on disk — negligible image bloat.
 
-### Entirely New
+The HF tokenizer cache should live on the `/data` volume so it persists across container recreates:
 
-- **`context_probe.go`** -- No equivalent in llama-toolchest. Entirely new feature.
-- **vLLM CLI bench integration** -- `vllm bench throughput` and `vllm bench serve` parsing.
-- **Passive timing from proxy** -- llama-toolchest had this but it was simpler (no tool call detection, different response format).
-- **Comparison view** -- llama-toolchest had basic comparison; enhance with per-prompt-length breakdown charts.
+```yaml
+# docker-compose.*.yml
+environment:
+  - HF_HOME=/data/cache/huggingface
+```
+
+The benchmark code already forwards `HF_HOME` to the `uvx` subprocess via `BenchyConfig.HFHome`.
 
 ---
 
-## File Layout Summary
+## What to Copy Verbatim From llama-toolchest
 
-```
-internal/benchmark/
-  benchmark.go      -- BenchmarkRun struct, RunConfig, presets, orchestration, storage
-  runner.go         -- sendCompletionRequest, runSingleTest, measureTTFT, generatePrompt,
-                       parseVLLMBenchOutput
-  stats.go          -- Stats struct, computeStats, percentile (copy from llama-toolchest)
-  context_probe.go  -- ProbeMaxContext, binarySearchMaxContext, tryStartVLLM, OOM detection
+These files / blocks transfer with only the package import path changed:
 
-internal/api/
-  bench.go          -- HTTP handlers for /api/benchmarks/* endpoints
+- `internal/benchmark/stats.go` — `ComputeSummary`, `BuildComparison`, `ComparisonData` (statistics math is identical)
+- `internal/benchmark/benchy.go` — `BenchyConfig`, `LlamaBenchyResult`, `LlamaBenchyReport`, `BuildBenchyArgs`, `FormatBenchyCommand`, `summarizeBenchy`, `runLlamaBenchy` (engine-agnostic by design)
+- The `BenchPromptText`, `BenchPromptPrefixTemplate`, `BenchPromptCharsPerToken` constants and `buildPrompt()` helper from `runner.go`
+- `internal/benchmark/job.go` job/cell status constants, `DeleteDisposition`, `AdhocJobID`, `newAdhocJob` helper
+- `internal/api/bench_about.go` — minor changes to remove llama.cpp build references; otherwise identical structure
+- `internal/api/bench_export.go` — CSV writer is engine-agnostic; just adjusts column set for vLLM (drop llama-bench columns, add TTFT)
+- Most htmx-driven template logic in `web/templates/benchmarks.html` and partials — selection state, modal handling, group toggles, export menu
 
-web/templates/
-  benchmarks.html   -- Full benchmarks page
-  partials/
-    benchmark_card.html       -- Summary card for results list
-    benchmark_detail.html     -- Expanded results view
-    benchmark_compare.html    -- Side-by-side comparison
-    benchmark_progress.html   -- Active benchmark progress panel
-    context_probe.html        -- Probe results display
-```
+## What to Adapt
+
+These need real changes — same shape, different details:
+
+- `internal/benchmark/benchmark.go` — Drop `Build*` fields; replace `ConfigSnapshot` with the vLLM-specific seven fields; add `VLLMVersion` / `ImageTag` fields on `BenchmarkRun`
+- `internal/benchmark/runner.go` — Replace llama.cpp `timings` parsing with streaming SSE TTFT measurement; drop `unloadAllModels` / `ensureModelLoaded` (vLLM swap is process restart, owned by the Job Runner); keep warmup with retry
+- `internal/benchmark/job_runner.go` — Replace `JobEnv.EnsureBuildActive` with `JobEnv.EnsureModelLoaded`; add the model-grouping reorder pass; drop build snapshot logic
+- `internal/api/bench.go`, `bench_jobs.go` — Adjust for the new ConfigSnapshot, drop build inputs, validate against current loaded model
+- `web/templates/benchmarks.html` and partials — Remove build-related columns / selectors; add vLLM version / image tag display; add probe-context button to the top action bar
+
+## Entirely New
+
+- `internal/benchmark/context_probe.go` — Context-length probing (no llama-toolchest equivalent)
+- `internal/benchmark/timing.go` — `TimingSample`, ring buffer, running average (split out of `benchmark.go` for clarity; passive capture pattern partly existed in llama-toolchest but is rewritten for vLLM's response shape)
+- `internal/api/bench_probe.go` — Probe API handlers and SSE
+- Proxy hook in `internal/api/proxy.go` that feeds `TimingSample`s into the store
+- `process.Manager` extension for spawning secondary vLLM on `TestPort`
+- `Dockerfile.{rocm,cuda}` lines that install `uv`
+
+---
+
+## Implementation Order
+
+Six steps, each independently mergeable. Each step ends with a working app — partial benchmarking is better than half-finished everything.
+
+1. **Foundation** — `benchmark.go` types and `Store`. Persistence works; list endpoint returns empty list. Wire `/api/benchmarks` GET (returns empty), the benchmarks page renders. Smoke test: store loads cleanly on startup; deleted runs don't reappear.
+
+2. **Internal runner** — `runner.go` streaming SSE loop, prompt generation, single-run ad-hoc path. Run `internal-quick` against a loaded model. Verify TTFT and gen-TPS values are sane against a known-good model. Display run on benchmarks page. Cancel works.
+
+3. **Benchy runner + container `uv`** — Dockerfile adds `uv`. `benchy.go` ported. Run `benchy-quick` against the same model. Verify llama-benchy result parses and renders. Disclose the command in the About modal.
+
+4. **Jobs** — `job.go`, `job_runner.go`, `JobEnv` adapter, job UI (job-grouped list, multi-select, new-job form). Test a 2-model × 2-preset matrix (4 cells) and verify model-grouping reorder: each model loads exactly once. Cancel mid-job leaves partial results.
+
+5. **Passive timing capture** — Proxy hook + dashboard / model-card badges. Send a few real chat completions via the proxy, observe running average converge. Verify streaming requests don't capture (by design).
+
+6. **Context probing** — `context_probe.go`, secondary-port spawn in `process.Manager`, OOM log detection, probe UI, "Apply" button on model config. Test on a model that easily fits at the default max and one that doesn't; verify probe converges to a reasonable value at each utilization level.
+
+Step 1 unblocks the UI work. Steps 2 and 3 can land in either order. Step 4 depends on 2+3 (the runners it orchestrates). Steps 5 and 6 are independent of 4 and can land in parallel.
+
+---
+
+## Open Questions
+
+- Should `internal-thorough`'s 8K prompt be skipped on models with `max_model_len < 8192`, or should we substitute a smaller test point? Current plan: skip + warning. Reconsider if many small-context models exist in the registry.
+- For comparison view across runs with different model sizes (e.g. 8B vs 70B), should we normalize tokens/sec by parameter count? Probably no — that's analysis, not measurement; keep the raw numbers and let the user reason about them.
+- Should benchy runs auto-start the model if it's not currently loaded? Today: no, return 409. The job path will load models automatically; the ad-hoc path stays explicit. Revisit if friction is high.
