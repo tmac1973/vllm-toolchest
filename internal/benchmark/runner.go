@@ -114,17 +114,50 @@ func (r *Runner) Run(ctx context.Context, cfg RunnerConfig, progress chan<- Prog
 	case PresetSourceInternal:
 		r.runInternal(ctx, &run, cfg, send)
 	case PresetSourceBenchy:
-		// Step 3 wires in the benchy runner. Until then, surface a clear error.
-		run.Status = StatusFailed
-		run.Error = "benchy presets are not yet wired up; coming in Step 3"
-		send("error", run.Error, 0)
-		return
+		r.runBenchy(ctx, &run, cfg, send)
 	default:
 		run.Status = StatusFailed
 		run.Error = fmt.Sprintf("unknown preset source: %q", cfg.Preset.Source)
 		send("error", run.Error, 0)
 		return
 	}
+}
+
+// runBenchy shells out to `uvx llama-benchy` against the same /v1 endpoint
+// vLLM is serving. The disclosed command and the parsed multi-concurrency
+// report land on the run so the About modal can show what actually ran.
+func (r *Runner) runBenchy(ctx context.Context, run *BenchmarkRun, cfg RunnerConfig, send func(stage, detail string, pct int)) {
+	concurrency := cfg.Preset.Concurrency
+	if len(concurrency) == 0 {
+		concurrency = []int{1}
+	}
+
+	send("benchmark", "Running llama-benchy via uvx — output streams when finished...", 30)
+
+	results, cmdStr, err := runLlamaBenchy(ctx, BenchyConfig{
+		BaseURL:         cfg.VLLMURL + "/v1",
+		APIKey:          "EMPTY",
+		ServedModelName: cfg.ServedName,
+		Tokenizer:       cfg.HFRepoID,
+		PromptSizes:     cfg.Preset.PromptTokens,
+		GenSizes:        []int{cfg.Preset.GenTokens},
+		Runs:            cfg.Preset.Repetitions,
+		Concurrency:     concurrency,
+		HFToken:         cfg.HFToken,
+		HFHome:          cfg.HFHome,
+	})
+	run.BenchyCommand = cmdStr
+	if err != nil {
+		run.Status = StatusFailed
+		run.Error = err.Error()
+		send("error", run.Error, 0)
+		return
+	}
+
+	run.LlamaBenchy = results
+	run.Summary = summarizeBenchy(results)
+	run.Status = StatusCompleted
+	send("done", "Benchmark complete", 100)
 }
 
 // runInternal executes the matrix of (prompt_tokens × repetitions) using

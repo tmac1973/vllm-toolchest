@@ -1,9 +1,21 @@
 {{define "content"}}
-<h1>Benchmarks</h1>
+<h1>Benchmarks <a href="#" style="font-size:0.6em;" onclick="event.preventDefault();document.getElementById('bench-about').showModal();">[?]</a></h1>
 
 <p style="opacity:0.7;">
 Benchmark inference performance with structured results, multi-run comparison, and engine-agnostic measurement via <a href="https://github.com/eugr/llama-benchy" target="_blank" rel="noopener">llama-benchy</a>.
 </p>
+
+<dialog id="bench-about" style="max-width:720px;">
+  <div id="bench-about-body"
+       hx-get="/api/benchmarks/about"
+       hx-trigger="intersect once"
+       hx-swap="innerHTML">
+    <p style="opacity:0.6;">Loading…</p>
+  </div>
+  <footer>
+    <button class="secondary" onclick="document.getElementById('bench-about').close()">Close</button>
+  </footer>
+</dialog>
 
 <section id="bench-form"
          hx-get="/api/benchmarks/form"

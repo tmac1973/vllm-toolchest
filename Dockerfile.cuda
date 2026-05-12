@@ -42,6 +42,15 @@ RUN pip install --no-cache-dir bitsandbytes
 RUN python3 -c "import vllm; print(f'vLLM {vllm.__version__} installed')" && \
     python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
 
+# ── uv (for llama-benchy benchmarks) ──────────────────────────────
+# llama-benchy is invoked as `uvx llama-benchy ...` from the benchmark
+# runner. uv ships a single statically-linked Rust binary and is small
+# (~15 MB on disk).
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh && \
+    /usr/local/bin/uv --version && /usr/local/bin/uvx --version
+
+ENV HF_HOME=/data/cache/huggingface
+
 # ── Go management binary ──────────────────────────────────────────
 COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
 
