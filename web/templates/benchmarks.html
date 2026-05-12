@@ -33,6 +33,14 @@ Benchmark inference performance with structured results, multi-run comparison, a
            hx-swap="innerHTML"></section>
 </details>
 
+<details>
+  <summary><strong>Probe maximum context</strong> &mdash; binary-search the largest <code>--max-model-len</code> a model can serve</summary>
+  <section id="bench-probe-form"
+           hx-get="/api/benchmarks/probe-context/form"
+           hx-trigger="load"
+           hx-swap="innerHTML"></section>
+</details>
+
 <h2 style="margin-top:1.5rem;">Jobs &amp; runs</h2>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"

@@ -32,6 +32,7 @@ type Server struct {
 	process    *process.Manager
 	bench      *benchmark.Store
 	benchSvc   *benchmark.Service
+	probe      *probeManager
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -55,6 +56,7 @@ func NewServer(cfg *config.Config) *Server {
 	s.bench = benchmark.NewStore(cfg.DataDir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
+	s.probe = newProbeManager(s)
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -163,6 +165,11 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/about", s.handleBenchmarksAbout)
 			r.Get("/timings", s.handleTimingsList)
 			r.Get("/timings/*", s.handleTimingsForModel)
+			r.Get("/probe-context/form", s.handleProbeForm)
+			r.Post("/probe-context", s.handleStartContextProbe)
+			r.Post("/probe-context/apply", s.handleApplyProbe)
+			r.Get("/probe-context/{id}/progress", s.handleContextProbeProgress)
+			r.Get("/probe-context/result/*", s.handleGetProbeResult)
 			r.Get("/{id}", s.handleGetBenchmark)
 			r.Delete("/{id}", s.handleDeleteBenchmark)
 			r.Post("/{id}/cancel", s.handleCancelBenchmark)
