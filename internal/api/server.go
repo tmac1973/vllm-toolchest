@@ -54,6 +54,7 @@ func NewServer(cfg *config.Config) *Server {
 	}
 	s.bench = benchmark.NewStore(cfg.DataDir)
 	s.benchSvc = benchmark.NewService(s.bench)
+	s.benchSvc.SetJobEnv(newJobEnv(s))
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -164,6 +165,15 @@ func (s *Server) buildRouter() chi.Router {
 			r.Delete("/{id}", s.handleDeleteBenchmark)
 			r.Post("/{id}/cancel", s.handleCancelBenchmark)
 			r.Get("/{id}/progress", s.handleBenchmarkProgress)
+		})
+		r.Route("/benchmark-jobs", func(r chi.Router) {
+			r.Get("/", s.handleListJobs)
+			r.Post("/", s.handleCreateJob)
+			r.Get("/form", s.handleJobForm)
+			r.Get("/{id}", s.handleGetJob)
+			r.Delete("/{id}", s.handleDeleteJob)
+			r.Post("/{id}/cancel", s.handleCancelJob)
+			r.Post("/{id}/retry-failed", s.handleRetryFailedCells)
 		})
 		r.Route("/settings", func(r chi.Router) {
 			r.Get("/", s.handleGetSettings)

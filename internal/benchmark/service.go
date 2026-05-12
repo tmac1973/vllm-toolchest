@@ -6,34 +6,42 @@ import (
 	"sync"
 )
 
-// ErrRunAlreadyActive is returned by StartRun when another run is in
-// flight. The benchmark service serializes runs: vLLM is single-process
-// and concurrent benchmarks would cross-contaminate timing.
-var ErrRunAlreadyActive = errors.New("a benchmark run is already in progress")
+// ErrRunAlreadyActive is returned by StartRun when another run or job
+// is in flight. vLLM is single-process and concurrent benchmarks would
+// cross-contaminate timing.
+var ErrRunAlreadyActive = errors.New("a benchmark run or job is already in progress")
 
-// Service coordinates active runs: tracks the in-flight run, fans
-// progress updates out to multiple SSE subscribers, and provides
-// cancellation.
+// Service coordinates active benchmark work — ad-hoc runs and jobs share
+// one queue, since both contend for the underlying vLLM process. At most
+// one is active at a time.
 type Service struct {
 	store  *Store
 	runner *Runner
+	env    JobEnv // optional; required for jobs
 
-	mu     sync.Mutex
-	active *activeRun
+	mu        sync.Mutex
+	activeRun *activeRun
+	activeJob *activeJob
 }
 
 type activeRun struct {
-	id      string
-	cancel  context.CancelFunc
-	done    chan struct{}
+	id     string
+	cancel context.CancelFunc
+	done   chan struct{}
 
 	subMu sync.Mutex
 	subs  map[chan ProgressUpdate]struct{}
 	last  *ProgressUpdate
 }
 
-// NewService wires a Service over a Store. The Runner is created here so
-// the api package never needs to hold one directly.
+type activeJob struct {
+	id     string
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// NewService wires a Service over a Store. JobEnv may be set later via
+// SetJobEnv; ad-hoc runs work without it.
 func NewService(store *Store) *Service {
 	return &Service{
 		store:  store,
@@ -41,22 +49,40 @@ func NewService(store *Store) *Service {
 	}
 }
 
-// ActiveRunID returns the ID of the in-flight run, if any.
+// SetJobEnv injects the JobEnv adapter from the api layer. Must be called
+// before SubmitJob is used.
+func (s *Service) SetJobEnv(env JobEnv) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.env = env
+}
+
+// ActiveRunID returns the ID of the in-flight ad-hoc run, if any.
 func (s *Service) ActiveRunID() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil {
+	if s.activeRun == nil {
 		return "", false
 	}
-	return s.active.id, true
+	return s.activeRun.id, true
 }
 
-// StartRun begins a benchmark in a background goroutine. The run must
-// already exist in the store with StatusRunning. Returns ErrRunAlreadyActive
-// when the service is busy.
+// ActiveJobID returns the ID of the in-flight job, if any.
+func (s *Service) ActiveJobID() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeJob == nil {
+		return "", false
+	}
+	return s.activeJob.id, true
+}
+
+// StartRun begins an ad-hoc benchmark in a background goroutine. The run
+// must already exist in the store with StatusRunning. Returns
+// ErrRunAlreadyActive when either a run or a job is in flight.
 func (s *Service) StartRun(cfg RunnerConfig) error {
 	s.mu.Lock()
-	if s.active != nil {
+	if s.activeRun != nil || s.activeJob != nil {
 		s.mu.Unlock()
 		return ErrRunAlreadyActive
 	}
@@ -68,14 +94,11 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 		done:   make(chan struct{}),
 		subs:   make(map[chan ProgressUpdate]struct{}),
 	}
-	s.active = ar
+	s.activeRun = ar
 	s.mu.Unlock()
 
 	progress := make(chan ProgressUpdate, 16)
 
-	// Fan-out goroutine: consumes the runner's progress channel, stamps
-	// the latest update onto activeRun.last (for late-joining SSE clients),
-	// and broadcasts to every subscriber.
 	go func() {
 		for update := range progress {
 			update := update
@@ -85,14 +108,10 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 				select {
 				case sub <- update:
 				default:
-					// Slow subscriber — drop the update for them. They'll
-					// pick up the next one (or close).
 				}
 			}
 			ar.subMu.Unlock()
 		}
-		// Channel closed by Runner.Run — close subscriber channels too
-		// so SSE handlers exit cleanly.
 		ar.subMu.Lock()
 		for sub := range ar.subs {
 			close(sub)
@@ -101,7 +120,7 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 		ar.subMu.Unlock()
 
 		s.mu.Lock()
-		s.active = nil
+		s.activeRun = nil
 		s.mu.Unlock()
 		close(ar.done)
 	}()
@@ -110,31 +129,28 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 	return nil
 }
 
-// CancelRun cancels the in-flight run, if any. Returns false when no run
-// is active or when the id doesn't match the active run.
+// CancelRun cancels the in-flight ad-hoc run, if any.
 func (s *Service) CancelRun(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil || s.active.id != id {
+	if s.activeRun == nil || s.activeRun.id != id {
 		return false
 	}
-	s.active.cancel()
+	s.activeRun.cancel()
 	return true
 }
 
 // Subscribe registers a channel to receive progress updates for the
-// in-flight run. Returns the subscription channel, the most recent
-// update (for immediate replay), and an unsubscribe function. Returns
-// (nil, nil, nil) when no run matches.
-//
-// The returned channel is closed when the run completes.
+// in-flight ad-hoc run. Returns the subscription channel, the most
+// recent update (for immediate replay), and an unsubscribe function.
+// Returns (nil, nil, nil) when no run matches.
 func (s *Service) Subscribe(id string) (<-chan ProgressUpdate, *ProgressUpdate, func()) {
 	s.mu.Lock()
-	if s.active == nil || s.active.id != id {
+	if s.activeRun == nil || s.activeRun.id != id {
 		s.mu.Unlock()
 		return nil, nil, nil
 	}
-	ar := s.active
+	ar := s.activeRun
 	s.mu.Unlock()
 
 	sub := make(chan ProgressUpdate, 16)
@@ -153,4 +169,49 @@ func (s *Service) Subscribe(id string) (<-chan ProgressUpdate, *ProgressUpdate, 
 	}
 
 	return sub, last, unsub
+}
+
+// SubmitJob persists the job (with StatusPending → JobStatusRunning at
+// start) and dispatches a background goroutine to execute its cells.
+// Returns ErrRunAlreadyActive when busy.
+func (s *Service) SubmitJob(job BenchmarkJob) error {
+	s.mu.Lock()
+	if s.activeRun != nil || s.activeJob != nil {
+		s.mu.Unlock()
+		return ErrRunAlreadyActive
+	}
+	if s.env == nil {
+		s.mu.Unlock()
+		return errors.New("benchmark service has no JobEnv; jobs are unavailable")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	aj := &activeJob{
+		id:     job.ID,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	s.activeJob = aj
+	s.mu.Unlock()
+
+	go func() {
+		s.runJob(ctx, &job)
+
+		s.mu.Lock()
+		s.activeJob = nil
+		s.mu.Unlock()
+		close(aj.done)
+	}()
+	return nil
+}
+
+// CancelJob cancels the in-flight job.
+func (s *Service) CancelJob(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeJob == nil || s.activeJob.id != id {
+		return false
+	}
+	s.activeJob.cancel()
+	return true
 }
