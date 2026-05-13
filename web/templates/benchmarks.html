@@ -1,4 +1,65 @@
 {{define "content"}}
-<h1>Benchmarks</h1>
-<p>Inference benchmarking will be available in a future update.</p>
+<h1>Benchmarks <a href="#" style="font-size:0.6em;" onclick="event.preventDefault();document.getElementById('bench-about').showModal();">[?]</a></h1>
+
+<p style="opacity:0.7;">
+Benchmark inference performance with structured results, multi-run comparison, and engine-agnostic measurement via <a href="https://github.com/eugr/llama-benchy" target="_blank" rel="noopener">llama-benchy</a>.
+</p>
+
+<dialog id="bench-about" style="max-width:720px;">
+  <div id="bench-about-body"
+       hx-get="/api/benchmarks/about"
+       hx-trigger="intersect once"
+       hx-swap="innerHTML">
+    <p style="opacity:0.6;">Loading…</p>
+  </div>
+  <footer>
+    <button class="secondary" onclick="document.getElementById('bench-about').close()">Close</button>
+  </footer>
+</dialog>
+
+<details>
+  <summary><strong>New ad-hoc run</strong> &mdash; benchmark the currently loaded model</summary>
+  <section id="bench-form"
+           hx-get="/api/benchmarks/form"
+           hx-trigger="load"
+           hx-swap="innerHTML"></section>
+</details>
+
+<details>
+  <summary><strong>New batch job</strong> &mdash; sweep multiple models × presets</summary>
+  <section id="bench-job-form"
+           hx-get="/api/benchmark-jobs/form"
+           hx-trigger="load"
+           hx-swap="innerHTML"></section>
+</details>
+
+<details>
+  <summary><strong>Probe maximum context</strong> &mdash; binary-search the largest <code>--max-model-len</code> a model can serve</summary>
+  <section id="bench-probe-form"
+           hx-get="/api/benchmarks/probe-context/form"
+           hx-trigger="load"
+           hx-swap="innerHTML"></section>
+</details>
+
+<h2 style="margin-top:1.5rem;">Jobs &amp; runs</h2>
+<section id="bench-jobs"
+         hx-get="/api/benchmark-jobs/"
+         hx-trigger="load, benchStarted from:body"
+         hx-swap="innerHTML">
+  <p style="opacity:0.6;">Loading…</p>
+</section>
+
+<script>
+  // Refresh the job list when a new run or job starts.
+  document.body.addEventListener('htmx:afterRequest', function(evt) {
+    if (evt.detail && evt.detail.xhr &&
+        evt.detail.xhr.status === 202 &&
+        evt.detail.requestConfig &&
+        (evt.detail.requestConfig.path === '/api/benchmarks/' ||
+         evt.detail.requestConfig.path === '/api/benchmark-jobs/') &&
+        evt.detail.requestConfig.verb === 'post') {
+      htmx.trigger('body', 'benchStarted');
+    }
+  });
+</script>
 {{end}}

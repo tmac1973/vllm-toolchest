@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -29,6 +30,9 @@ type Server struct {
 	downloader *huggingface.Downloader
 	registry   *models.Registry
 	process    *process.Manager
+	bench      *benchmark.Store
+	benchSvc   *benchmark.Service
+	probe      *probeManager
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -49,6 +53,10 @@ func NewServer(cfg *config.Config) *Server {
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
 	}
+	s.bench = benchmark.NewStore(cfg.DataDir)
+	s.benchSvc = benchmark.NewService(s.bench)
+	s.benchSvc.SetJobEnv(newJobEnv(s))
+	s.probe = newProbeManager(s)
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -151,7 +159,30 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/health", s.handleServiceHealth)
 		})
 		r.Route("/benchmarks", func(r chi.Router) {
-			// Phase 6
+			r.Get("/", s.handleListBenchmarks)
+			r.Post("/", s.handleStartBenchmark)
+			r.Get("/form", s.handleBenchmarkForm)
+			r.Get("/about", s.handleBenchmarksAbout)
+			r.Get("/timings", s.handleTimingsList)
+			r.Get("/timings/*", s.handleTimingsForModel)
+			r.Get("/probe-context/form", s.handleProbeForm)
+			r.Post("/probe-context", s.handleStartContextProbe)
+			r.Post("/probe-context/apply", s.handleApplyProbe)
+			r.Get("/probe-context/{id}/progress", s.handleContextProbeProgress)
+			r.Get("/probe-context/result/*", s.handleGetProbeResult)
+			r.Get("/{id}", s.handleGetBenchmark)
+			r.Delete("/{id}", s.handleDeleteBenchmark)
+			r.Post("/{id}/cancel", s.handleCancelBenchmark)
+			r.Get("/{id}/progress", s.handleBenchmarkProgress)
+		})
+		r.Route("/benchmark-jobs", func(r chi.Router) {
+			r.Get("/", s.handleListJobs)
+			r.Post("/", s.handleCreateJob)
+			r.Get("/form", s.handleJobForm)
+			r.Get("/{id}", s.handleGetJob)
+			r.Delete("/{id}", s.handleDeleteJob)
+			r.Post("/{id}/cancel", s.handleCancelJob)
+			r.Post("/{id}/retry-failed", s.handleRetryFailedCells)
 		})
 		r.Route("/settings", func(r chi.Router) {
 			r.Get("/", s.handleGetSettings)
@@ -324,6 +355,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
         <p><a href="/settings">Settings &rarr;</a></p>
     </article>
 </div>`, svcBadge, svcModel, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
+
+	if avgs := s.bench.RunningAverages(); len(avgs) > 0 {
+		fmt.Fprint(w, `<article style="margin-top:1rem;">
+    <header>Live inference activity <small style="opacity:0.6;">(passive timing from the OpenAI proxy)</small></header>
+    <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
+		for _, a := range avgs {
+			fmt.Fprintf(w, `<tr><td><small>%s</small></td><td>%.1f t/s</td><td>%d</td><td><small>%s</small></td></tr>`,
+				htmlEscape(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+		}
+		fmt.Fprint(w, `</tbody></table>
+</article>`)
+	}
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

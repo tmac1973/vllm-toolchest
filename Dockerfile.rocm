@@ -143,11 +143,19 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
 
 RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
 
+# ── uv (for llama-benchy benchmarks) ──────────────────────────────
+# llama-benchy is invoked as `uvx llama-benchy ...` from the benchmark
+# runner. uv ships a single statically-linked Rust binary and is small
+# (~15 MB on disk).
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh && \
+    /usr/local/bin/uv --version && /usr/local/bin/uvx --version
+
 # ── Runtime environment ────────────────────────────────────────────
 ENV LD_PRELOAD=/usr/lib64/libtcmalloc.so.4 \
     HIP_FORCE_DEV_KERNARG=1 \
     RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1 \
-    ROCBLAS_USE_HIPBLASLT=1
+    ROCBLAS_USE_HIPBLASLT=1 \
+    HF_HOME=/data/cache/huggingface
 
 # ── Go management binary ──────────────────────────────────────────
 COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
