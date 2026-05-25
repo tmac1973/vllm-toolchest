@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile.rocm
       args:
-        ROCM_VERSION: "${ROCM_VERSION:-7.2.1}"
-        GPU_ARCH: "${GPU_ARCH:-gfx1201;gfx1100}"
+        ROCM_VERSION: "${ROCM_VERSION:-7.2.3}"
+        GPU_ARCH: "${GPU_ARCH:-gfx1201}"
         VLLM_VERSION: "${VLLM_VERSION:-main}"
     container_name: vllm-toolchest
     ports:

@@ -48,12 +48,18 @@ RUN dnf -y --nodocs --setopt=install_weak_deps=False \
     && dnf clean all
 
 # ── GPU architecture (semicolon-separated for PyTorch, e.g. "gfx1201;gfx1100") ─
-# Defaults build for both RDNA3 (7900/W7900) and RDNA4 (R9700/RX 9070). Override
-# at build time to trim build time / wheel size for a specific card.
-ARG GPU_ARCH="gfx1201;gfx1100"
+# Defaults to RDNA4 (R9700/RX 9070) only. Each extra arch roughly doubles
+# AITER + vLLM compile time. Override at build time for multi-card setups.
+ARG GPU_ARCH="gfx1201"
 ENV PYTORCH_ROCM_ARCH=${GPU_ARCH} \
     HIP_ARCHITECTURES=${GPU_ARCH} \
     AMDGPU_TARGETS=${GPU_ARCH}
+
+# ── Build-time parallelism cap ─────────────────────────────────────
+# Applies to flash-attention (AITER submodule), bitsandbytes, and vLLM.
+# Each parallel C++/HIP compile can use 2-3 GB RAM; unbounded ninja
+# parallelism thrashes or OOMs typical build boxes.
+ENV MAX_JOBS=4
 
 # ── ROCm environment ───────────────────────────────────────────────
 ENV ROCM_PATH=/opt/rocm \
@@ -130,8 +136,7 @@ ENV VLLM_TARGET_DEVICE=rocm \
     TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
     VLLM_USE_TRITON_AWQ=1 \
     CC=/opt/rocm/llvm/bin/clang \
-    CXX=/opt/rocm/llvm/bin/clang++ \
-    MAX_JOBS=4
+    CXX=/opt/rocm/llvm/bin/clang++
 
 COPY scripts/patch_vllm.py /tmp/patch_vllm.py
 
@@ -149,14 +154,13 @@ RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successful
 # ── hipcc wrapper (gfx1201 single-arch JIT) ───────────────────────
 # AITER's JIT invokes hipcc with --offload-arch=native which fails on RDNA4.
 # Rewrite to --offload-arch=gfx1201 so runtime JIT compiles succeed.
+# AITER itself is installed transitively by flash-attention's setup.py
+# when FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE (FA's main_perf branch pulls
+# AITER in as a git submodule and `pip install`s it).
 RUN mv /opt/rocm/bin/hipcc /opt/rocm/bin/hipcc.real && \
     printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n    args+=("${arg//--offload-arch=native/--offload-arch=gfx1201}")\ndone\nexec /opt/rocm/bin/hipcc.real "${args[@]}"\n' \
         > /opt/rocm/bin/hipcc && \
     chmod 755 /opt/rocm/bin/hipcc
-
-# ── AITER (ROCm fused kernels) ────────────────────────────────────
-# Pre-installed so first-run JIT doesn't have to fetch + build.
-RUN pip install --no-cache-dir git+https://github.com/ROCm/aiter.git
 
 # ── uv (for llama-benchy benchmarks) ──────────────────────────────
 # llama-benchy is invoked as `uvx llama-benchy ...` from the benchmark
