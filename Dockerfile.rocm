@@ -107,11 +107,22 @@ RUN pip install --no-cache-dir --pre \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/nightly/rocm7.2
 
-# Sanity-check torch imports cleanly inside the build sandbox. If torch's
-# HIP runtime init blocks on missing /dev/kfd, this step will hang
-# visibly (instead of stalling silently inside FA's setup.py later).
-# TEMPORARILY DISABLED for interactive diagnostic of the hang.
-# RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
+# Runtime libs the torch wheel dlopens during static init.
+# libtorch_rocshmem.so's NUMAWrapper constructor and rocprofiler's init
+# both run from inside dlopen of torch/_C.so. If libnuma.so / libibverbs.so
+# aren't found, a constructor calls exit() — which deadlocks because exit()
+# ran inside dlopen and its atexit handlers try to join threads that can't
+# acquire the dlopen lock. Manifests as a silent hang on `import torch`,
+# with two threads parked in futex_wait. The -devel packages provide the
+# unversioned .so symlinks the wheel looks up by name.
+RUN dnf -y --nodocs --setopt=install_weak_deps=False install \
+        numactl-devel libibverbs rdma-core-devel \
+    && dnf clean all
+
+# Sanity-check torch imports cleanly inside the build sandbox. Previously
+# hung silently on the rocshmem/numa dlopen deadlock above; with the
+# runtime libs installed this should print version + hip metadata.
+RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
 
 # ── Stage 4: Flash Attention + AITER ──────────────────────────────
 # Tag with `--target fa-ready` to checkpoint after the FA/AITER kernel build.
