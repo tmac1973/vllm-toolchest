@@ -267,24 +267,76 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	p(`<details style="margin-top:0.5rem;"><summary style="font-size:0.85rem;cursor:pointer;">Parser override</summary>`)
 	p(`<label title="Override the auto-detected parser. Only change this if auto-detection got it wrong. Using the wrong parser will break tool calling.">`)
 	p(`<select name="tool_call_parser">`)
-	for _, opt := range []struct{ val, label string }{
-		{"", "(auto: " + m.ToolUse.ToolCallParser + ")"},
-		{"hermes", "hermes — Hermes, NousResearch, Qwen 2.5+, Qwen 3+"},
-		{"llama3_json", "llama3_json — Llama 3.1, 3.2, 3.3"},
-		{"mistral", "mistral — Mistral, Mixtral"},
-		{"granite", "granite — IBM Granite"},
-		{"internlm", "internlm — InternLM"},
-		{"jamba", "jamba — Jamba"},
-		{"pythonic", "pythonic — Python-style function calls"},
+	// Auto option appears outside any optgroup so it's always at the top.
+	autoSelected := c.ToolCallParser == "" || c.ToolCallParser == m.ToolUse.ToolCallParser
+	p(`<option value=""%s>(auto: %s)</option>`, selected(autoSelected), m.ToolUse.ToolCallParser)
+	// Groups ordered most-common first. Parser names must match vLLM's
+	// registration names in vllm/tool_parsers/__init__.py.
+	for _, grp := range []struct {
+		label string
+		opts  []struct{ val, label string }
+	}{
+		{"Common", []struct{ val, label string }{
+			{"hermes", "hermes — Hermes, NousResearch, Qwen 2.5, plain Qwen 3"},
+			{"qwen3_xml", "qwen3_xml — Qwen 3.5+, Qwen thinking variants, MiMo"},
+			{"qwen3_coder", "qwen3_coder — Qwen 3 Coder"},
+			{"llama3_json", "llama3_json — Llama 3.1 / 3.2 / 3.3"},
+			{"llama4_pythonic", "llama4_pythonic — Llama 4"},
+			{"llama4_json", "llama4_json — Llama 4 (json output)"},
+			{"mistral", "mistral — Mistral, Mixtral"},
+			{"pythonic", "pythonic — Python-style function calls"},
+			{"openai", "openai — OpenAI-compatible JSON"},
+		}},
+		{"DeepSeek", []struct{ val, label string }{
+			{"deepseek_v3", "deepseek_v3 — DeepSeek V3, R1"},
+			{"deepseek_v31", "deepseek_v31 — DeepSeek V3.1"},
+			{"deepseek_v32", "deepseek_v32 — DeepSeek V3.2"},
+			{"deepseek_v4", "deepseek_v4 — DeepSeek V4"},
+		}},
+		{"Granite", []struct{ val, label string }{
+			{"granite", "granite — IBM Granite"},
+			{"granite4", "granite4 — IBM Granite 4"},
+			{"granite-20b-fc", "granite-20b-fc — IBM Granite 20B FC"},
+		}},
+		{"GLM", []struct{ val, label string }{
+			{"glm45", "glm45 — GLM 4.5 MoE"},
+			{"glm47", "glm47 — GLM 4.7 MoE"},
+		}},
+		{"Cohere", []struct{ val, label string }{
+			{"cohere_command3", "cohere_command3 — Command R / R+"},
+			{"cohere_command4", "cohere_command4 — Command R 4"},
+		}},
+		{"Other", []struct{ val, label string }{
+			{"gemma4", "gemma4 — Gemma 4"},
+			{"functiongemma", "functiongemma — FunctionGemma"},
+			{"phi4_mini_json", "phi4_mini_json — Phi-4 Mini"},
+			{"internlm", "internlm — InternLM"},
+			{"jamba", "jamba — Jamba (AI21)"},
+			{"kimi_k2", "kimi_k2 — Moonshot Kimi K2"},
+			{"minimax", "minimax — MiniMax"},
+			{"minimax_m2", "minimax_m2 — MiniMax M2"},
+			{"hunyuan_a13b", "hunyuan_a13b — Tencent Hunyuan A13B"},
+			{"hy_v3", "hy_v3 — Tencent Hunyuan V3"},
+			{"olmo3", "olmo3 — AI2 OLMo 3"},
+			{"longcat", "longcat — LongCat Flash"},
+			{"ernie45", "ernie45 — Baidu Ernie 4.5"},
+			{"lfm2", "lfm2 — Liquid LFM-2"},
+			{"xlam", "xlam — Salesforce xLAM"},
+			{"seed_oss", "seed_oss — ByteDance Seed-OSS"},
+			{"step3", "step3 — StepFun Step3"},
+			{"step3p5", "step3p5 — StepFun Step3.5"},
+			{"mimo", "mimo — Xiaomi MiMo (uses Qwen3 XML)"},
+			{"apertus", "apertus — Apertus"},
+			{"gigachat3", "gigachat3 — GigaChat 3"},
+			{"poolside_v1", "poolside_v1 — Poolside V1"},
+		}},
 	} {
-		// For the auto option, check if no manual override is set
-		isSelected := false
-		if opt.val == "" {
-			isSelected = c.ToolCallParser == "" || c.ToolCallParser == m.ToolUse.ToolCallParser
-		} else {
-			isSelected = c.ToolCallParser == opt.val && c.ToolCallParser != m.ToolUse.ToolCallParser
+		p(`<optgroup label="%s">`, grp.label)
+		for _, opt := range grp.opts {
+			isSelected := c.ToolCallParser == opt.val && c.ToolCallParser != m.ToolUse.ToolCallParser
+			p(`<option value="%s"%s>%s</option>`, opt.val, selected(isSelected), opt.label)
 		}
-		p(`<option value="%s"%s>%s</option>`, opt.val, selected(isSelected), opt.label)
+		p(`</optgroup>`)
 	}
 	p(`</select></label></details>`)
 	p(`</fieldset>`)

@@ -76,16 +76,62 @@
             <input type="checkbox" name="tool_use_enabled" role="switch"{{if .ToolUseEnabled}} checked{{end}}>
             Enable tool use by default
         </label>
-        <label title="Default tool call parser for new models. Usually auto-detected per model, but this sets the fallback. hermes works for most modern models (Qwen, Hermes, NousResearch).">Default tool call parser
+        <label title="Default tool call parser for new models when auto-detection (architecture, chat template, name) fails. hermes is the safest fallback — it covers Hermes, NousResearch, plain Qwen 2.5/3.">Default tool call parser
             <select name="default_tool_parser">
                 <option value=""{{if eq .DefaultToolParser ""}} selected{{end}}>(none)</option>
-                <option value="hermes"{{if eq .DefaultToolParser "hermes"}} selected{{end}}>hermes</option>
-                <option value="llama3_json"{{if eq .DefaultToolParser "llama3_json"}} selected{{end}}>llama3_json</option>
-                <option value="mistral"{{if eq .DefaultToolParser "mistral"}} selected{{end}}>mistral</option>
-                <option value="granite"{{if eq .DefaultToolParser "granite"}} selected{{end}}>granite</option>
-                <option value="internlm"{{if eq .DefaultToolParser "internlm"}} selected{{end}}>internlm</option>
-                <option value="jamba"{{if eq .DefaultToolParser "jamba"}} selected{{end}}>jamba</option>
-                <option value="pythonic"{{if eq .DefaultToolParser "pythonic"}} selected{{end}}>pythonic</option>
+                <optgroup label="Common">
+                    <option value="hermes"{{if eq .DefaultToolParser "hermes"}} selected{{end}}>hermes</option>
+                    <option value="qwen3_xml"{{if eq .DefaultToolParser "qwen3_xml"}} selected{{end}}>qwen3_xml</option>
+                    <option value="qwen3_coder"{{if eq .DefaultToolParser "qwen3_coder"}} selected{{end}}>qwen3_coder</option>
+                    <option value="llama3_json"{{if eq .DefaultToolParser "llama3_json"}} selected{{end}}>llama3_json</option>
+                    <option value="llama4_pythonic"{{if eq .DefaultToolParser "llama4_pythonic"}} selected{{end}}>llama4_pythonic</option>
+                    <option value="mistral"{{if eq .DefaultToolParser "mistral"}} selected{{end}}>mistral</option>
+                    <option value="pythonic"{{if eq .DefaultToolParser "pythonic"}} selected{{end}}>pythonic</option>
+                    <option value="openai"{{if eq .DefaultToolParser "openai"}} selected{{end}}>openai</option>
+                </optgroup>
+                <optgroup label="DeepSeek">
+                    <option value="deepseek_v3"{{if eq .DefaultToolParser "deepseek_v3"}} selected{{end}}>deepseek_v3</option>
+                    <option value="deepseek_v31"{{if eq .DefaultToolParser "deepseek_v31"}} selected{{end}}>deepseek_v31</option>
+                    <option value="deepseek_v32"{{if eq .DefaultToolParser "deepseek_v32"}} selected{{end}}>deepseek_v32</option>
+                    <option value="deepseek_v4"{{if eq .DefaultToolParser "deepseek_v4"}} selected{{end}}>deepseek_v4</option>
+                </optgroup>
+                <optgroup label="Granite">
+                    <option value="granite"{{if eq .DefaultToolParser "granite"}} selected{{end}}>granite</option>
+                    <option value="granite4"{{if eq .DefaultToolParser "granite4"}} selected{{end}}>granite4</option>
+                    <option value="granite-20b-fc"{{if eq .DefaultToolParser "granite-20b-fc"}} selected{{end}}>granite-20b-fc</option>
+                </optgroup>
+                <optgroup label="GLM">
+                    <option value="glm45"{{if eq .DefaultToolParser "glm45"}} selected{{end}}>glm45</option>
+                    <option value="glm47"{{if eq .DefaultToolParser "glm47"}} selected{{end}}>glm47</option>
+                </optgroup>
+                <optgroup label="Cohere">
+                    <option value="cohere_command3"{{if eq .DefaultToolParser "cohere_command3"}} selected{{end}}>cohere_command3</option>
+                    <option value="cohere_command4"{{if eq .DefaultToolParser "cohere_command4"}} selected{{end}}>cohere_command4</option>
+                </optgroup>
+                <optgroup label="Other">
+                    <option value="gemma4"{{if eq .DefaultToolParser "gemma4"}} selected{{end}}>gemma4</option>
+                    <option value="functiongemma"{{if eq .DefaultToolParser "functiongemma"}} selected{{end}}>functiongemma</option>
+                    <option value="phi4_mini_json"{{if eq .DefaultToolParser "phi4_mini_json"}} selected{{end}}>phi4_mini_json</option>
+                    <option value="internlm"{{if eq .DefaultToolParser "internlm"}} selected{{end}}>internlm</option>
+                    <option value="jamba"{{if eq .DefaultToolParser "jamba"}} selected{{end}}>jamba</option>
+                    <option value="kimi_k2"{{if eq .DefaultToolParser "kimi_k2"}} selected{{end}}>kimi_k2</option>
+                    <option value="minimax"{{if eq .DefaultToolParser "minimax"}} selected{{end}}>minimax</option>
+                    <option value="minimax_m2"{{if eq .DefaultToolParser "minimax_m2"}} selected{{end}}>minimax_m2</option>
+                    <option value="hunyuan_a13b"{{if eq .DefaultToolParser "hunyuan_a13b"}} selected{{end}}>hunyuan_a13b</option>
+                    <option value="hy_v3"{{if eq .DefaultToolParser "hy_v3"}} selected{{end}}>hy_v3</option>
+                    <option value="olmo3"{{if eq .DefaultToolParser "olmo3"}} selected{{end}}>olmo3</option>
+                    <option value="longcat"{{if eq .DefaultToolParser "longcat"}} selected{{end}}>longcat</option>
+                    <option value="ernie45"{{if eq .DefaultToolParser "ernie45"}} selected{{end}}>ernie45</option>
+                    <option value="lfm2"{{if eq .DefaultToolParser "lfm2"}} selected{{end}}>lfm2</option>
+                    <option value="xlam"{{if eq .DefaultToolParser "xlam"}} selected{{end}}>xlam</option>
+                    <option value="seed_oss"{{if eq .DefaultToolParser "seed_oss"}} selected{{end}}>seed_oss</option>
+                    <option value="step3"{{if eq .DefaultToolParser "step3"}} selected{{end}}>step3</option>
+                    <option value="step3p5"{{if eq .DefaultToolParser "step3p5"}} selected{{end}}>step3p5</option>
+                    <option value="mimo"{{if eq .DefaultToolParser "mimo"}} selected{{end}}>mimo</option>
+                    <option value="apertus"{{if eq .DefaultToolParser "apertus"}} selected{{end}}>apertus</option>
+                    <option value="gigachat3"{{if eq .DefaultToolParser "gigachat3"}} selected{{end}}>gigachat3</option>
+                    <option value="poolside_v1"{{if eq .DefaultToolParser "poolside_v1"}} selected{{end}}>poolside_v1</option>
+                </optgroup>
             </select>
         </label>
     </div>

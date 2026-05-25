@@ -235,7 +235,7 @@ func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
 	// Parse config files
 	hfCfg := ParseHFConfig(modelDir)
 	quantMeta := DetectQuantization(modelDir, modelID)
-	toolMeta := DetectToolUse(modelDir, modelID)
+	toolMeta := DetectToolUse(modelDir, modelID, hfCfg)
 	visionMeta := DetectVision(modelDir, hfCfg)
 	genDefaults := ParseGenDefaults(modelDir)
 
@@ -361,7 +361,7 @@ func (r *Registry) backfillMetadata() {
 			slog.Info("backfilling metadata", "id", m.ID)
 			m.HFConfig = ParseHFConfig(m.LocalPath)
 			m.Quantization = DetectQuantization(m.LocalPath, m.ID)
-			m.ToolUse = DetectToolUse(m.LocalPath, m.ID)
+			m.ToolUse = DetectToolUse(m.LocalPath, m.ID, m.HFConfig)
 			m.Vision = DetectVision(m.LocalPath, m.HFConfig)
 			m.GenDefaults = ParseGenDefaults(m.LocalPath)
 			m.VRAMEstimate = EstimateVRAM(m)

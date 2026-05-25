@@ -182,10 +182,21 @@ func DetectQuantization(modelDir, modelID string) QuantMeta {
 }
 
 // DetectToolUse checks if the model supports tool/function calling.
-func DetectToolUse(modelDir, modelID string) ToolUseMeta {
+// Detection order: architecture (most reliable for new model families) →
+// chat template regex → model-name patterns. The architecture check goes
+// first because newer model families (Qwen3.5+ hybrid, Llama 4, DeepSeek
+// V3.x, GLM 4.x MoE, Granite 4) often share chat-template markers with
+// older relatives but emit a different tool-call format at runtime.
+func DetectToolUse(modelDir, modelID string, hfCfg HFConfig) ToolUseMeta {
 	t := ToolUseMeta{}
 
-	// Read chat_template from tokenizer_config.json
+	if parser := detectToolParserFromArch(hfCfg.Architectures); parser != "" {
+		t.HasToolSupport = true
+		t.ToolCallParser = parser
+		t.DetectionMethod = "architecture"
+		return t
+	}
+
 	data, err := os.ReadFile(filepath.Join(modelDir, "tokenizer_config.json"))
 	if err == nil {
 		var tc struct {
@@ -197,7 +208,6 @@ func DetectToolUse(modelDir, modelID string) ToolUseMeta {
 			case string:
 				template = v
 			case []interface{}:
-				// List of templates -- check each
 				for _, item := range v {
 					if m, ok := item.(map[string]interface{}); ok {
 						if s, ok := m["template"].(string); ok {
@@ -219,7 +229,6 @@ func DetectToolUse(modelDir, modelID string) ToolUseMeta {
 		}
 	}
 
-	// Fallback: known model families
 	parser := detectToolParserFromName(modelID)
 	if parser != "" {
 		t.HasToolSupport = true
@@ -230,11 +239,66 @@ func DetectToolUse(modelDir, modelID string) ToolUseMeta {
 	return t
 }
 
+// detectToolParserFromArch picks a parser by HF architecture string.
+// Architectures are a more reliable signal than name patterns for
+// distinguishing modern model families that share lineage with older
+// ones (Qwen3.5+ vs Qwen3, Llama 4 vs Llama 3, DeepSeek V3.x revisions).
+func detectToolParserFromArch(archs []string) string {
+	for _, a := range archs {
+		lower := strings.ToLower(a)
+		switch {
+		// Qwen3.5+ hybrid (Mamba/GDN + thinking blocks) — class names look
+		// like Qwen3_5ForConditionalGeneration, Qwen3_6*, MiMo*.
+		case strings.HasPrefix(lower, "qwen3_5"),
+			strings.HasPrefix(lower, "qwen3_6"),
+			strings.Contains(lower, "mimo"):
+			return "qwen3_xml"
+		case strings.HasPrefix(lower, "llama4"):
+			return "llama4_pythonic"
+		// DeepSeek V3.x / V4 share the V3 base class, so check most specific first.
+		case strings.Contains(lower, "deepseekv4"):
+			return "deepseek_v4"
+		case strings.Contains(lower, "deepseekv32"):
+			return "deepseek_v32"
+		case strings.Contains(lower, "deepseekv31"):
+			return "deepseek_v31"
+		case strings.Contains(lower, "deepseekv3"):
+			return "deepseek_v3"
+		case strings.HasPrefix(lower, "glm47"):
+			return "glm47"
+		case strings.HasPrefix(lower, "glm4moe"), strings.HasPrefix(lower, "glm45"):
+			return "glm45"
+		case strings.HasPrefix(lower, "granite4"):
+			return "granite4"
+		case strings.HasPrefix(lower, "gemma4"):
+			return "gemma4"
+		case strings.Contains(lower, "minimaxm2"):
+			return "minimax_m2"
+		case strings.Contains(lower, "minimax"):
+			return "minimax"
+		case strings.Contains(lower, "hunyuana13b"):
+			return "hunyuan_a13b"
+		case strings.HasPrefix(lower, "olmo3"):
+			return "olmo3"
+		case strings.HasPrefix(lower, "apertus"):
+			return "apertus"
+		case strings.HasPrefix(lower, "kimik2"), strings.Contains(lower, "kimi_k2"):
+			return "kimi_k2"
+		}
+	}
+	return ""
+}
+
 func detectToolParser(template string) string {
 	patterns := []struct {
 		pattern *regexp.Regexp
 		parser  string
 	}{
+		// Qwen3-XML emits tool calls wrapped in <think>...</think> blocks
+		// then XML; matching both markers in the same template is a strong
+		// indicator the model is a Qwen3 thinking variant even when the
+		// arch field doesn't make it obvious.
+		{regexp.MustCompile(`<think>[\s\S]*<tool_call>|<tool_call>[\s\S]*<think>`), "qwen3_xml"},
 		{regexp.MustCompile(`<\|?tool_call\|?>`), "hermes"},
 		{regexp.MustCompile(`\[TOOL_CALLS\]|\[AVAILABLE_TOOLS\]`), "mistral"},
 		{regexp.MustCompile(`<function=`), "granite"},
@@ -252,23 +316,93 @@ func detectToolParser(template string) string {
 	return ""
 }
 
+// detectToolParserFromName is the last-resort fallback when neither the
+// architecture nor the chat template gave us a hit. Order matters: more
+// specific patterns (qwen3-coder, deepseek-r1) must come before broader
+// ones (qwen3, deepseek).
 func detectToolParserFromName(modelID string) string {
 	lower := strings.ToLower(modelID)
 	switch {
 	case strings.Contains(lower, "hermes"):
 		return "hermes"
-	case strings.Contains(lower, "llama-3.1") || strings.Contains(lower, "llama-3.2") || strings.Contains(lower, "llama-3.3"):
+	case strings.Contains(lower, "qwen3") && strings.Contains(lower, "coder"):
+		return "qwen3_coder"
+	case strings.Contains(lower, "qwen3.5"),
+		strings.Contains(lower, "qwen3.6"),
+		strings.Contains(lower, "qwen-3.5"),
+		strings.Contains(lower, "qwen-3.6"),
+		strings.Contains(lower, "thinking") && strings.Contains(lower, "qwen"):
+		return "qwen3_xml"
+	case strings.Contains(lower, "qwen2.5"), strings.Contains(lower, "qwen3"):
+		return "hermes"
+	case strings.Contains(lower, "llama-4"), strings.Contains(lower, "llama4"):
+		return "llama4_pythonic"
+	case strings.Contains(lower, "llama-3.1"),
+		strings.Contains(lower, "llama-3.2"),
+		strings.Contains(lower, "llama-3.3"):
 		return "llama3_json"
-	case strings.Contains(lower, "mistral") || strings.Contains(lower, "mixtral"):
+	case strings.Contains(lower, "deepseek-v4"), strings.Contains(lower, "deepseek_v4"):
+		return "deepseek_v4"
+	case strings.Contains(lower, "deepseek-v3.2"), strings.Contains(lower, "deepseek-v32"):
+		return "deepseek_v32"
+	case strings.Contains(lower, "deepseek-v3.1"), strings.Contains(lower, "deepseek-v31"):
+		return "deepseek_v31"
+	case strings.Contains(lower, "deepseek-v3"),
+		strings.Contains(lower, "deepseek-r1"),
+		strings.Contains(lower, "deepseek_r1"):
+		return "deepseek_v3"
+	case strings.Contains(lower, "mistral"), strings.Contains(lower, "mixtral"):
 		return "mistral"
+	case strings.Contains(lower, "granite-4"), strings.Contains(lower, "granite4"):
+		return "granite4"
+	case strings.Contains(lower, "granite-20b") && strings.Contains(lower, "fc"):
+		return "granite-20b-fc"
 	case strings.Contains(lower, "granite"):
 		return "granite"
+	case strings.Contains(lower, "glm-4.7"), strings.Contains(lower, "glm-47"):
+		return "glm47"
+	case strings.Contains(lower, "glm-4.5"), strings.Contains(lower, "glm-45"):
+		return "glm45"
+	case strings.Contains(lower, "gemma-4"), strings.Contains(lower, "gemma4"):
+		return "gemma4"
+	case strings.Contains(lower, "phi-4") && strings.Contains(lower, "mini"):
+		return "phi4_mini_json"
+	case strings.Contains(lower, "command-r4"), strings.Contains(lower, "command-r-4"):
+		return "cohere_command4"
+	case strings.Contains(lower, "command-r"), strings.Contains(lower, "command-r3"):
+		return "cohere_command3"
+	case strings.Contains(lower, "kimi"):
+		return "kimi_k2"
+	case strings.Contains(lower, "minimax-m2"), strings.Contains(lower, "minimax_m2"):
+		return "minimax_m2"
+	case strings.Contains(lower, "minimax"):
+		return "minimax"
+	case strings.Contains(lower, "hunyuan"):
+		return "hunyuan_a13b"
+	case strings.Contains(lower, "olmo-3"), strings.Contains(lower, "olmo3"):
+		return "olmo3"
+	case strings.Contains(lower, "longcat"):
+		return "longcat"
+	case strings.Contains(lower, "step3.5"), strings.Contains(lower, "step-3.5"):
+		return "step3p5"
+	case strings.Contains(lower, "step3"), strings.Contains(lower, "step-3"):
+		return "step3"
+	case strings.Contains(lower, "seed-oss"), strings.Contains(lower, "seed_oss"):
+		return "seed_oss"
+	case strings.Contains(lower, "ernie"):
+		return "ernie45"
+	case strings.Contains(lower, "lfm-2"), strings.Contains(lower, "lfm2"):
+		return "lfm2"
+	case strings.Contains(lower, "xlam"):
+		return "xlam"
 	case strings.Contains(lower, "internlm"):
 		return "internlm"
-	case strings.Contains(lower, "qwen2.5") || strings.Contains(lower, "qwen3"):
-		return "hermes"
 	case strings.Contains(lower, "jamba"):
 		return "jamba"
+	case strings.Contains(lower, "mimo"):
+		return "qwen3_xml"
+	case strings.Contains(lower, "apertus"):
+		return "apertus"
 	}
 	return ""
 }
