@@ -110,7 +110,8 @@ RUN pip install --no-cache-dir --pre \
 #   3. Build + install via pip -v (more verbose than `setup.py install`)
 ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
     FLASH_ATTENTION_INTERNAL_USE_RTN=1 \
-    GIT_TERMINAL_PROMPT=0
+    GIT_TERMINAL_PROMPT=0 \
+    AITER_USE_SYSTEM_TRITON=1
 
 RUN git clone -b main_perf \
         https://github.com/ROCm/flash-attention.git /tmp/flash-attention
