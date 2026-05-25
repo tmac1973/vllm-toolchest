@@ -110,7 +110,8 @@ RUN pip install --no-cache-dir --pre \
 # Sanity-check torch imports cleanly inside the build sandbox. If torch's
 # HIP runtime init blocks on missing /dev/kfd, this step will hang
 # visibly (instead of stalling silently inside FA's setup.py later).
-RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
+# TEMPORARILY DISABLED for interactive diagnostic of the hang.
+# RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
 
 # ── Stage 4: Flash Attention + AITER ──────────────────────────────
 # Tag with `--target fa-ready` to checkpoint after the FA/AITER kernel build.
