@@ -74,7 +74,9 @@ ENV ROCM_PATH=/opt/rocm \
 # ── Python venv ────────────────────────────────────────────────────
 RUN python3.12 -m venv /opt/vllm-venv
 ENV PATH=/opt/vllm-venv/bin:/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH \
-    VIRTUAL_ENV=/opt/vllm-venv
+    VIRTUAL_ENV=/opt/vllm-venv \
+    PYTHONUNBUFFERED=1 \
+    PIP_PROGRESS_BAR=on
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging ninja
 
@@ -101,14 +103,24 @@ RUN pip install --no-cache-dir --pre \
         --index-url https://download.pytorch.org/whl/nightly/rocm7.2
 
 # ── Flash Attention (ROCm fork, Triton backend) ───────────────────
+# Split into 3 RUN steps so buildkit progress shows which phase is slow:
+#   1. Clone FA (no --depth 1 — submodule update needs full git history)
+#   2. Init aiter submodule + its CK transitive submodule explicitly
+#      (FA's setup.py would do this silently, hiding network stalls)
+#   3. Build + install via pip -v (more verbose than `setup.py install`)
 ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
-    FLASH_ATTENTION_INTERNAL_USE_RTN=1
+    FLASH_ATTENTION_INTERNAL_USE_RTN=1 \
+    GIT_TERMINAL_PROMPT=0
 
-RUN git clone --depth 1 -b main_perf \
-        https://github.com/ROCm/flash-attention.git /tmp/flash-attention && \
-    cd /tmp/flash-attention && \
-    python setup.py install && \
-    rm -rf /tmp/flash-attention
+RUN git clone -b main_perf \
+        https://github.com/ROCm/flash-attention.git /tmp/flash-attention
+
+RUN cd /tmp/flash-attention && \
+    git -c protocol.version=2 submodule update --init --progress --recursive third_party/aiter
+
+RUN cd /tmp/flash-attention && \
+    pip install -v --no-cache-dir --no-build-isolation . && \
+    cd / && rm -rf /tmp/flash-attention
 
 # ── bitsandbytes (ROCm fork) ──────────────────────────────────────
 ENV BNB_ROCM_ARCH=${GPU_ARCH}
