@@ -6,11 +6,11 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 
-# ── Stage 2: vLLM runtime (Fedora 43 + AMD ROCm 7.2.1) ─────────────
+# ── Stage 2: vLLM runtime (Fedora 43 + AMD ROCm 7.2.3) ─────────────
 FROM registry.fedoraproject.org/fedora:43
 
-# ── AMD ROCm 7.2.1 repo ────────────────────────────────────────────
-ARG ROCM_VERSION=7.2.1
+# ── AMD ROCm 7.2.3 repo ────────────────────────────────────────────
+ARG ROCM_VERSION=7.2.3
 RUN tee /etc/yum.repos.d/rocm.repo <<REPO
 [ROCm-${ROCM_VERSION}]
 name=ROCm${ROCM_VERSION}
@@ -133,15 +133,30 @@ ENV VLLM_TARGET_DEVICE=rocm \
     CXX=/opt/rocm/llvm/bin/clang++ \
     MAX_JOBS=4
 
+COPY scripts/patch_vllm.py /tmp/patch_vllm.py
+
 RUN git clone --depth 1 -b ${VLLM_VERSION} \
         https://github.com/vllm-project/vllm.git /tmp/vllm && \
     cd /tmp/vllm && \
+    python /tmp/patch_vllm.py && \
     pip install --no-cache-dir -r requirements/rocm.txt && \
     pip wheel --no-build-isolation --no-deps -w /tmp/vllm-wheel . && \
     pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
-    rm -rf /tmp/vllm /tmp/vllm-wheel
+    rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/patch_vllm.py
 
 RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
+
+# ── hipcc wrapper (gfx1201 single-arch JIT) ───────────────────────
+# AITER's JIT invokes hipcc with --offload-arch=native which fails on RDNA4.
+# Rewrite to --offload-arch=gfx1201 so runtime JIT compiles succeed.
+RUN mv /opt/rocm/bin/hipcc /opt/rocm/bin/hipcc.real && \
+    printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n    args+=("${arg//--offload-arch=native/--offload-arch=gfx1201}")\ndone\nexec /opt/rocm/bin/hipcc.real "${args[@]}"\n' \
+        > /opt/rocm/bin/hipcc && \
+    chmod 755 /opt/rocm/bin/hipcc
+
+# ── AITER (ROCm fused kernels) ────────────────────────────────────
+# Pre-installed so first-run JIT doesn't have to fetch + build.
+RUN pip install --no-cache-dir git+https://github.com/ROCm/aiter.git
 
 # ── uv (for llama-benchy benchmarks) ──────────────────────────────
 # llama-benchy is invoked as `uvx llama-benchy ...` from the benchmark
@@ -155,6 +170,9 @@ ENV LD_PRELOAD=/usr/lib64/libtcmalloc.so.4 \
     HIP_FORCE_DEV_KERNARG=1 \
     RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1 \
     ROCBLAS_USE_HIPBLASLT=1 \
+    VLLM_DISABLE_COMPILE_CACHE=1 \
+    NCCL_PROTO=Simple \
+    PYTHONNOUSERSITE=1 \
     HF_HOME=/data/cache/huggingface
 
 # ── Go management binary ──────────────────────────────────────────
