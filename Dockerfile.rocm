@@ -6,8 +6,9 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 
-# ── Stage 2: vLLM runtime (Fedora 43 + AMD ROCm 7.2.3) ─────────────
-FROM registry.fedoraproject.org/fedora:43
+# ── Stage 2: ROCm base (Fedora 43 + AMD ROCm 7.2.3 + venv) ─────────
+# Tag with `--target rocm-base` to checkpoint after the heavy dnf install.
+FROM registry.fedoraproject.org/fedora:43 AS rocm-base
 
 # ── AMD ROCm 7.2.3 repo ────────────────────────────────────────────
 ARG ROCM_VERSION=7.2.3
@@ -51,7 +52,8 @@ RUN dnf -y --nodocs --setopt=install_weak_deps=False \
 # Defaults to RDNA4 (R9700/RX 9070) only. Each extra arch roughly doubles
 # AITER + vLLM compile time. Override at build time for multi-card setups.
 ARG GPU_ARCH="gfx1201"
-ENV PYTORCH_ROCM_ARCH=${GPU_ARCH} \
+ENV GPU_ARCH=${GPU_ARCH} \
+    PYTORCH_ROCM_ARCH=${GPU_ARCH} \
     HIP_ARCHITECTURES=${GPU_ARCH} \
     AMDGPU_TARGETS=${GPU_ARCH}
 
@@ -94,7 +96,10 @@ RUN set -e; \
         echo "WARNING: amdsmi Python bindings not found on host; vLLM ROCm platform detection will fail" >&2; \
     fi
 
-# ── PyTorch (AMD ROCm) ─────────────────────────────────────────────
+# ── Stage 3: PyTorch installed ─────────────────────────────────────
+# Tag with `--target pytorch-ready` to checkpoint after the ~8 min wheel install.
+FROM rocm-base AS pytorch-ready
+
 # Match PyTorch's ROCm major version to the system ROCm installed above —
 # mismatched versions cause HSA symbol resolution failures at runtime when
 # PyTorch's bundled libs are mixed with the system libamdhip64.so.
@@ -107,12 +112,18 @@ RUN pip install --no-cache-dir --pre \
 # visibly (instead of stalling silently inside FA's setup.py later).
 RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
 
-# ── Flash Attention (ROCm fork, Triton backend) ───────────────────
+# ── Stage 4: Flash Attention + AITER ──────────────────────────────
+# Tag with `--target fa-ready` to checkpoint after the FA/AITER kernel build.
+# This is the longest single stage; pinning it lets you skip it on rebuilds
+# that only touch vLLM or runtime config.
+FROM pytorch-ready AS fa-ready
+
 # Split into 3 RUN steps so buildkit progress shows which phase is slow:
 #   1. Clone FA (no --depth 1 — submodule update needs full git history)
 #   2. Init aiter submodule + its CK transitive submodule explicitly
 #      (FA's setup.py would do this silently, hiding network stalls)
-#   3. Build + install via pip -v (more verbose than `setup.py install`)
+#   3. Build + install via direct setup.py (pip 26.x metadata phase
+#      buffers child output until done, hiding AITER's own prints)
 ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
     FLASH_ATTENTION_INTERNAL_USE_RTN=1 \
     GIT_TERMINAL_PROMPT=0 \
@@ -127,6 +138,10 @@ RUN cd /tmp/flash-attention && \
 RUN cd /tmp/flash-attention && \
     python -u setup.py install 2>&1 && \
     cd / && rm -rf /tmp/flash-attention
+
+# ── Stage 5: bitsandbytes + vLLM ──────────────────────────────────
+# Tag with `--target vllm-ready` to checkpoint just before runtime config.
+FROM fa-ready AS vllm-ready
 
 # ── bitsandbytes (ROCm fork) ──────────────────────────────────────
 ENV BNB_ROCM_ARCH=${GPU_ARCH}
@@ -168,6 +183,11 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
     rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/patch_vllm.py
 
 RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
+
+# ── Final stage: runtime config ────────────────────────────────────
+# Adds the hipcc JIT wrapper, uv, runtime ENV, vllmctl binary, and the
+# entrypoint. Cheap layers — fast to iterate on without rebuilding above.
+FROM vllm-ready
 
 # ── hipcc wrapper (gfx1201 single-arch JIT) ───────────────────────
 # AITER's JIT invokes hipcc with --offload-arch=native which fails on RDNA4.
