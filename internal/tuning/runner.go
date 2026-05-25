@@ -258,6 +258,11 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	cmd := exec.CommandContext(ctx, "python", args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
+		// tqdm updates its bar with \r overwrites many times per second.
+		// Throttle so we get a useful progress line in the UI without a
+		// flood. Combined with the \r-aware scanner below, each surviving
+		// update becomes its own log line.
+		"TQDM_MININTERVAL=2",
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -300,9 +305,37 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 func (m *Manager) pumpReader(r io.ReadCloser) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(splitCROrLF)
 	for scanner.Scan() {
-		m.appendLog(scanner.Text())
+		line := strings.TrimRight(scanner.Text(), " \t")
+		if line == "" {
+			continue
+		}
+		m.appendLog(line)
 	}
+}
+
+// splitCROrLF is a bufio.SplitFunc that treats either '\n' or '\r' as a
+// line boundary. tqdm (used by vLLM's tuner) updates progress bars in-place
+// using bare '\r' overwrites; the default ScanLines accumulates the whole
+// bar-update history into one giant line until '\n' arrives, which in our
+// UI renders as a blank pane with horizontal-overflow whitespace. This
+// split emits each bar update as its own line — combined with
+// TQDM_MININTERVAL=2 on the subprocess env, the user sees a useful
+// progress trickle.
+func splitCROrLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 func newJobID() string {
