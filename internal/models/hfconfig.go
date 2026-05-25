@@ -131,15 +131,23 @@ func DetectQuantization(modelDir, modelID string) QuantMeta {
 	if data, err := os.ReadFile(filepath.Join(modelDir, "config.json")); err == nil {
 		var cfg struct {
 			QuantizationConfig *struct {
-				QuantMethod string `json:"quant_method"`
-				Bits        int    `json:"bits"`
-				GroupSize   int    `json:"group_size"`
+				QuantMethod  string                     `json:"quant_method"`
+				Bits         int                        `json:"bits"`
+				GroupSize    int                        `json:"group_size"`
+				Format       string                     `json:"format"`
+				ConfigGroups map[string]json.RawMessage `json:"config_groups"`
 			} `json:"quantization_config"`
 		}
 		if json.Unmarshal(data, &cfg) == nil && cfg.QuantizationConfig != nil && cfg.QuantizationConfig.QuantMethod != "" {
 			q.Method = strings.ToLower(cfg.QuantizationConfig.QuantMethod)
 			q.Bits = cfg.QuantizationConfig.Bits
 			q.GroupSize = cfg.QuantizationConfig.GroupSize
+			// compressed-tensors (RedHatAI / llm-compressor format) stores
+			// the actual quant scheme inside config_groups[*].weights.
+			// Parse it so we get the right bytes/param for FP8, INT8, INT4.
+			if q.Method == "compressed-tensors" || q.Method == "compressed_tensors" {
+				q.Bits, _ = compressedTensorsBits(cfg.QuantizationConfig.ConfigGroups, cfg.QuantizationConfig.Format)
+			}
 			q.BytesPerParam = bytesPerParam(q.Method, q.Bits, q.GroupSize)
 			return q
 		}
@@ -468,7 +476,11 @@ func ParseGenDefaults(modelDir string) GenDefaults {
 
 func bytesPerParam(method string, bits, groupSize int) float64 {
 	if bits == 0 {
-		bits = 4
+		// Defaulting silently to 4-bit was an old bug — newer formats
+		// (compressed-tensors FP8, raw FP8) leave bits unset. 0 means
+		// "unknown"; let EstimateVRAM fall back to disk-size rather
+		// than fabricate a quantization level.
+		return 0
 	}
 	base := float64(bits) / 8.0
 	if groupSize > 0 && (method == "gptq" || method == "awq") {
@@ -476,6 +488,34 @@ func bytesPerParam(method string, bits, groupSize int) float64 {
 		return base + overhead
 	}
 	return base + 0.0625 // small overhead for metadata
+}
+
+// compressedTensorsBits inspects the config_groups of a compressed-tensors
+// (llm-compressor / RedHatAI) checkpoint to recover the weight bit-width.
+// Each group has a weights.num_bits and weights.type ("float" = FP8,
+// "int" = INT8/INT4). Returns 0 if the scheme can't be determined.
+func compressedTensorsBits(groups map[string]json.RawMessage, format string) (int, string) {
+	for _, raw := range groups {
+		var grp struct {
+			Weights struct {
+				NumBits int    `json:"num_bits"`
+				Type    string `json:"type"`
+			} `json:"weights"`
+		}
+		if json.Unmarshal(raw, &grp) == nil && grp.Weights.NumBits > 0 {
+			return grp.Weights.NumBits, strings.ToLower(grp.Weights.Type)
+		}
+	}
+	// Format hint as a secondary signal.
+	switch strings.ToLower(format) {
+	case "float-quantized":
+		return 8, "float" // assume FP8 — the only float quantization in vLLM today
+	case "pack-quantized":
+		return 4, "int" // INT4 packed
+	case "int-quantized":
+		return 8, "int"
+	}
+	return 0, ""
 }
 
 func detectGGUFQuantType(dir string) string {

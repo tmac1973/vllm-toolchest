@@ -18,21 +18,34 @@ type VRAMEstimate struct {
 }
 
 // EstimateVRAM computes VRAM requirements for a model.
+//
+// Weight memory is computed two ways and the larger wins:
+//   1. Structural — param-count × bytes-per-param. Accurate for plain
+//      transformers, but undercounts hybrid (Mamba/GDN) and MoE models
+//      because the formula only models attention + dense MLP layers.
+//   2. Disk-floor — the safetensors files on disk are roughly equal to
+//      the in-memory weight footprint. The file size is a hard lower
+//      bound for any sane quantization, so use it as a sanity floor.
+//
+// This avoids two known underestimate failure modes: the param-count
+// formula missing Mamba layers (Qwen3.5+, Jamba, Hunyuan) and unknown
+// quantization schemes silently defaulting to a too-aggressive bpp.
 func EstimateVRAM(m *Model) VRAMEstimate {
 	est := VRAMEstimate{}
 
+	diskGB := float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
+
 	params := estimateParamCount(m.HFConfig)
 	if params == 0 {
-		// Fallback: estimate from file size
-		if m.TotalSizeBytes > 0 {
-			est.WeightMemoryGB = float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
+		// Couldn't compute params from architecture — work backwards from disk.
+		if diskGB > 0 {
+			est.WeightMemoryGB = diskGB
 			bpp := m.Quantization.BytesPerParam
 			if bpp <= 0 {
-				bpp = 2.0
+				bpp = 2.0 // best guess for back-calculation only
 			}
-			est.ParamCountBillion = est.WeightMemoryGB / bpp
+			est.ParamCountBillion = diskGB / bpp
 		}
-		// Still compute overhead and totals from weight estimate
 		if est.WeightMemoryGB > 0 {
 			est.ActivationGB = activationOverhead(est.ParamCountBillion)
 			est.TotalSingleGPUGB = est.WeightMemoryGB + est.ActivationGB
@@ -43,7 +56,15 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 	}
 
 	est.ParamCountBillion = float64(params) / 1e9
-	est.WeightMemoryGB = float64(params) * m.Quantization.BytesPerParam / (1024 * 1024 * 1024)
+	bpp := m.Quantization.BytesPerParam
+	if bpp > 0 {
+		est.WeightMemoryGB = float64(params) * bpp / (1024 * 1024 * 1024)
+	}
+	// Disk-floor: weights on disk can't be smaller than weights in memory.
+	// Tokenizer/config files add at most a few MB so the bias is negligible.
+	if diskGB > est.WeightMemoryGB {
+		est.WeightMemoryGB = diskGB
+	}
 
 	// KV cache per token
 	cfg := m.HFConfig

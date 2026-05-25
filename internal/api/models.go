@@ -173,7 +173,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	p(`<label title="Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache. Model max is %d.">Context length <small>(max: %d)</small>`, maxCtx, maxCtx)
+	p(`<label title="Maps to vLLM's --max-model-len. Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache and let the engine warm up faster. Model max is %d.">Context length <small>(--max-model-len, max: %d)</small>`, maxCtx, maxCtx)
 	p(`<select name="max_model_len" id="ctx-sel-%s" onchange="var c=document.getElementById('ctx-cust-%s');if(this.value==='custom'){c.style.display='';c.name='max_model_len';this.name='';}else{c.style.display='none';c.name='';this.name='max_model_len';}">`, sid, sid)
 	for _, v := range ctxOptions {
 		label := fmt.Sprintf("%d", v)
