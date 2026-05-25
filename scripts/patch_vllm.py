@@ -173,6 +173,25 @@ def patch_8_fp8_utils(txt: str) -> str:
     return txt.replace(target, replacement)
 
 
+def patch_10_hip_found(txt: str) -> str:
+    """Recent PyTorch's cmake/public/LoadHIP.cmake stopped setting HIP_FOUND
+    and now sets PYTORCH_FOUND_HIP instead (after migrating from
+    find_package(HIP) to find_package(hip CONFIG)). vLLM's CMakeLists.txt
+    still checks HIP_FOUND, so the build fails with 'Can't find CUDA or HIP
+    installation' even though HIP is configured fine. Accept both names."""
+    if "PYTORCH_FOUND_HIP" in txt:
+        return txt
+    txt = txt.replace(
+        "if (NOT HIP_FOUND AND CUDA_FOUND)",
+        "if (NOT HIP_FOUND AND NOT PYTORCH_FOUND_HIP AND CUDA_FOUND)",
+    )
+    txt = txt.replace(
+        "elseif(HIP_FOUND)",
+        "elseif(HIP_FOUND OR PYTORCH_FOUND_HIP)",
+    )
+    return txt
+
+
 def patch_9_int8_utils(txt: str) -> str:
     marker = 'fallback_device_name = "AMD_Instinct_MI300X"'
     if marker in txt:
@@ -231,6 +250,11 @@ def main():
         "vllm/model_executor/layers/quantization/utils/int8_utils.py",
         "MI300X INT8 config fallback",
         patch_9_int8_utils,
+    )
+    _patch(
+        "CMakeLists.txt",
+        "accept PYTORCH_FOUND_HIP in addition to HIP_FOUND",
+        patch_10_hip_found,
     )
 
     print()
