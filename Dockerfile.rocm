@@ -102,6 +102,11 @@ RUN pip install --no-cache-dir --pre \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/nightly/rocm7.2
 
+# Sanity-check torch imports cleanly inside the build sandbox. If torch's
+# HIP runtime init blocks on missing /dev/kfd, this step will hang
+# visibly (instead of stalling silently inside FA's setup.py later).
+RUN python -u -c "import torch; from torch.utils.cpp_extension import ROCM_HOME, IS_HIP_EXTENSION; print(f'torch={torch.__version__} hip={getattr(torch.version, \"hip\", None)} ROCM_HOME={ROCM_HOME} IS_HIP_EXTENSION={IS_HIP_EXTENSION}')"
+
 # ── Flash Attention (ROCm fork, Triton backend) ───────────────────
 # Split into 3 RUN steps so buildkit progress shows which phase is slow:
 #   1. Clone FA (no --depth 1 — submodule update needs full git history)
@@ -120,7 +125,7 @@ RUN cd /tmp/flash-attention && \
     git -c protocol.version=2 submodule update --init --progress --recursive third_party/aiter
 
 RUN cd /tmp/flash-attention && \
-    pip install -v --no-cache-dir --no-build-isolation . && \
+    python -u setup.py install 2>&1 && \
     cd / && rm -rf /tmp/flash-attention
 
 # ── bitsandbytes (ROCm fork) ──────────────────────────────────────
