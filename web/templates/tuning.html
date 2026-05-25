@@ -1,0 +1,144 @@
+{{define "content"}}
+<h1>Kernel Tuning</h1>
+
+<p style="opacity:0.7;">
+  Tune Triton W8A8 block-FP8 matmul kernels for the matmul shapes your registered FP8 models use.
+  Tuned configs land in <code>/data/tuned-kernels/{{.DeviceName}}/</code> and are symlinked into vLLM's
+  config dir on container startup. Each model's row shows how many of its derived shapes are already tuned.
+</p>
+
+{{if not .DeviceName}}
+<article style="border-color:var(--pico-color-orange-500);">
+  <strong>GPU arch not configured.</strong>
+  <p>
+    Set <code>gpu_arch</code> in <code>vllmctl.yaml</code> (e.g. <code>gfx1201</code>) or pass the
+    <code>GPU_ARCH</code> env var. Tuning is disabled until this is set so we don't write files with
+    the wrong device-name suffix.
+  </p>
+</article>
+{{end}}
+
+<article>
+  <header><strong>Target device</strong>: <code>{{.DeviceName}}</code></header>
+  <p style="opacity:0.7;font-size:0.9rem;">
+    Tuning runs <strong>stop the running vLLM instance</strong> (kernel sweep needs full GPU access).
+    Plan on ~few minutes per shape per GPU. Configs persist on the data volume and survive container rebuilds.
+  </p>
+</article>
+
+{{if .Active}}
+<article id="active-job" style="border-color:var(--pico-primary);">
+  <header>
+    <strong>Active job:</strong> {{.Active.ModelID}}
+    <small>({{.Active.State}}, started {{.Active.StartedAt.Format "15:04:05"}})</small>
+    <button class="secondary" style="float:right;" onclick="cancelTuning()">Cancel</button>
+  </header>
+  <pre id="tuner-log" style="max-height:400px;overflow-y:auto;font-size:0.75rem;background:var(--pico-code-background-color);padding:0.5em;">Connecting…</pre>
+</article>
+<script>
+(function() {
+  const logEl = document.getElementById("tuner-log");
+  logEl.textContent = "";
+
+  // Backfill recent logs first.
+  fetch("/api/tuning/logs")
+    .then(r => r.json())
+    .then(lines => {
+      if (Array.isArray(lines)) logEl.textContent = lines.join("\n") + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    });
+
+  // Then stream new ones via SSE.
+  const es = new EventSource("/api/tuning/log-stream");
+  es.onmessage = (e) => {
+    logEl.textContent += e.data + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  es.addEventListener("done", (e) => {
+    logEl.textContent += "\n[stream] " + e.data + "\n";
+    es.close();
+    // Refresh the page after a beat so the job-table re-renders.
+    setTimeout(() => location.reload(), 1500);
+  });
+})();
+</script>
+{{end}}
+
+<article>
+  <header><strong>Models</strong></header>
+  <table>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>FP8?</th>
+        <th>TP</th>
+        <th>Shapes (tuned / total)</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Models}}
+      <tr>
+        <td>
+          <strong>{{.ID}}</strong>
+          {{if .Shapes}}
+          <details style="margin-top:0.25rem;">
+            <summary style="font-size:0.75rem;cursor:pointer;opacity:0.7;">show shapes</summary>
+            <table style="font-size:0.75rem;margin-top:0.25rem;">
+              <tr><th>N</th><th>K</th><th>block</th><th>tuned?</th></tr>
+              {{range .Shapes}}
+              <tr>
+                <td>{{.N}}</td>
+                <td>{{.K}}</td>
+                <td>[{{.BlockN}},{{.BlockK}}]</td>
+                <td>{{if .Tuned}}<mark>✓</mark>{{else}}—{{end}}</td>
+              </tr>
+              {{end}}
+            </table>
+          </details>
+          {{end}}
+        </td>
+        <td>{{if .IsFP8}}<mark>yes</mark>{{else}}<small>no</small>{{end}}</td>
+        <td>{{.TPSize}}</td>
+        <td>
+          {{if .TotalCount}}
+            <strong>{{.TunedCount}}</strong> / {{.TotalCount}}
+            {{if eq .TunedCount .TotalCount}}<mark>complete</mark>{{end}}
+          {{else}}
+            <small style="opacity:0.6;">n/a</small>
+          {{end}}
+        </td>
+        <td>
+          {{if and .IsFP8 .TotalCount}}
+          <button class="contrast" data-model-id="{{.ID}}" onclick="startTuning(this.dataset.modelId)"
+                  {{if $.Active}}disabled{{end}}>
+            Tune
+          </button>
+          {{else}}
+          <small style="opacity:0.6;">—</small>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</article>
+
+<script>
+function startTuning(modelID) {
+  if (!confirm("This will stop the running vLLM (if any) and run the kernel tuner.\n\nProceed?")) return;
+  fetch("/api/tuning/start", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({model_id: modelID}),
+  }).then(r => {
+    if (r.ok) location.reload();
+    else r.text().then(t => alert("Failed to start: " + t));
+  });
+}
+function cancelTuning() {
+  fetch("/api/tuning/cancel", {method: "POST"})
+    .then(() => setTimeout(() => location.reload(), 500));
+}
+</script>
+{{end}}

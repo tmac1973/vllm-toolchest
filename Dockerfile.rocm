@@ -192,7 +192,14 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
     pip install --no-cache-dir -r requirements/rocm.txt && \
     pip wheel --no-build-isolation --no-deps -w /tmp/vllm-wheel . && \
     pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
+    mkdir -p /opt/vllm-tuner && \
+    cp /tmp/vllm/benchmarks/kernels/benchmark_w8a8_block_fp8.py /opt/vllm-tuner/ && \
     rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/patch_vllm.py
+
+# ── Kernel-tuning wrapper ─────────────────────────────────────────
+# The Go side spawns `python /opt/vllm-tuner/tune_fp8_wrapper.py …` and
+# the wrapper imports `benchmark_w8a8_block_fp8` from the same dir.
+COPY scripts/tune_fp8_wrapper.py /opt/vllm-tuner/tune_fp8_wrapper.py
 
 RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
 

@@ -56,6 +56,11 @@ type Config struct {
 	// Model storage
 	ModelDir string `yaml:"model_dir"`
 
+	// GPU architecture — used to namespace tuned kernel configs and to
+	// construct vLLM's device-name filename suffix (e.g. "AMD-gfx1201").
+	// Defaults to the GPU_ARCH env var the Dockerfile sets at build time.
+	GPUArch string `yaml:"gpu_arch"`
+
 	// Internal: path this config was loaded from (not serialized)
 	configPath string `yaml:"-"`
 }
@@ -137,6 +142,20 @@ func applyEnvOverrides(cfg *Config) {
 	envInt(&cfg.ShutdownTimeoutS, "VLLMCTL_SHUTDOWN_TIMEOUT_S")
 	envStr(&cfg.Theme, "VLLMCTL_THEME")
 	envStr(&cfg.ModelDir, "VLLMCTL_MODEL_DIR")
+	// The Dockerfile sets GPU_ARCH as a build arg → ENV. Honor it as the
+	// default so the operator doesn't have to duplicate it in vllmctl.yaml.
+	envStr(&cfg.GPUArch, "VLLMCTL_GPU_ARCH")
+	envStr(&cfg.GPUArch, "GPU_ARCH")
+}
+
+// DeviceNameSuffix is the value vLLM expects in tuned kernel config
+// filenames (e.g. "AMD-gfx1201"). It matches what kyuz0's RDNA4 patches
+// make rocm.py's get_device_name return.
+func (c *Config) DeviceNameSuffix() string {
+	if c.GPUArch == "" {
+		return ""
+	}
+	return "AMD-" + c.GPUArch
 }
 
 func (c *Config) Save(path string) error {

@@ -18,6 +18,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
 
@@ -33,6 +34,7 @@ type Server struct {
 	bench      *benchmark.Store
 	benchSvc   *benchmark.Service
 	probe      *probeManager
+	tuner      *tuning.Manager
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -57,6 +59,7 @@ func NewServer(cfg *config.Config) *Server {
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
 	s.probe = newProbeManager(s)
+	s.tuner = tuning.NewManager(cfg.DataDir, cfg.DeviceNameSuffix(), "/opt/vllm-tuner/tune_fp8_wrapper.py", s.process)
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -94,6 +97,7 @@ func (s *Server) parseTemplates() map[string]*template.Template {
 		"models_browse.html",
 		"service.html",
 		"benchmarks.html",
+		"tuning.html",
 		"settings.html",
 	}
 	for _, pf := range pageFiles {
@@ -123,6 +127,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/models/browse", s.handleModelsBrowsePage)
 	r.Get("/server", s.handleServicePage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
+	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
 
 	// Health check
@@ -192,6 +197,13 @@ func (s *Server) buildRouter() chi.Router {
 		r.Route("/monitor", func(r chi.Router) {
 			r.Get("/", s.handleMonitorStatus)
 			r.Get("/stream", s.handleMonitorStream)
+		})
+		r.Route("/tuning", func(r chi.Router) {
+			r.Get("/status", s.handleTuningStatus)
+			r.Post("/start", s.handleStartTuning)
+			r.Post("/cancel", s.handleCancelTuning)
+			r.Get("/logs", s.handleTuningLogs)
+			r.Get("/log-stream", s.handleTuningLogStream)
 		})
 	})
 
