@@ -610,7 +610,7 @@ container_down() {
 
 container_install() {
     write_env_file
-    $(compose_cmd) up -d --build
+    BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
 }
 
 container_rebuild() {
@@ -620,7 +620,7 @@ container_rebuild() {
     container_down
     $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
     write_env_file
-    $(compose_cmd) build --no-cache
+    BUILDKIT_PROGRESS=plain $(compose_cmd) build --no-cache --progress=plain
 
     if [[ "$quadlet_active" == true ]]; then
         log "Starting via systemd (Quadlet)..."
@@ -634,7 +634,7 @@ container_rebuild() {
 container_quick_rebuild() {
     container_down
     write_env_file
-    $(compose_cmd) up -d --build
+    BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
 }
 
 container_logs() {
