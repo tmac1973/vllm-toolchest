@@ -25,7 +25,9 @@ vllm-toolchest packages vLLM into a Docker/Podman container with a full web inte
 
 This builds the container image and creates a systemd (or podman) service. Once running, open `http://localhost:8080` in your browser.
 
-On an RDNA4 card the installer offers a choice of two images -- see [Image variants](#image-variants).
+`setup.sh` handles everything: it detects your GPUs and container runtime,
+asks what it needs to know, writes the config, and builds. On an RDNA4 card it
+offers a second, hand-tuned image -- see [Image variants](#image-variants).
 
 ## Requirements
 
@@ -55,16 +57,22 @@ vLLM stack underneath it.
 | Install | Long -- compiles the whole stack | Fast -- pulls a prebuilt base |
 | Performance on RDNA4 | Correctness patches only | Custom attention/GEMM/all-reduce kernels, tuned FP8 + MoE configs, MTP drafting |
 
-Pick a variant at install time, or force one at any point:
+`./setup.sh install` detects the GPU and, on gfx1201, offers to build the
+radiance variant. Answer yes and it asks the remaining questions -- which GPUs
+to use, which ports, where to keep models -- then configures and builds. You do
+not need to write a config file first.
+
+To skip the prompt, or to change your mind later:
 
 ```bash
-./setup.sh install                     # offers the choice on an RDNA4 card
-VARIANT=radiance ./setup.sh install    # skip the prompt
-VARIANT=generic  ./setup.sh rebuild    # switch back later
+VARIANT=radiance ./setup.sh install    # build radiance without being asked
+VARIANT=generic  ./setup.sh rebuild    # switch back to the portable image
 ```
 
-The choice is stored in `.env` as `VLLMCTL_VARIANT` and reused by every later
-command. `./setup.sh detect` prints the current backend and variant.
+The answers are stored in `.env` and reused by every later command, so `up`,
+`down`, `logs` and `rebuild` all act on the variant you installed.
+`./setup.sh detect` prints the current backend and variant. setup.sh only
+rewrites the keys it owns, so anything you add to `.env` yourself survives.
 
 ### What the radiance variant adds
 

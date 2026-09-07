@@ -18,6 +18,7 @@ readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 GPU_VENDOR=""           # cuda, rocm
 GPU_INFO=""             # human-readable GPU description
 BUILD_VARIANT=""        # generic, radiance — which image to build (rocm only)
+GPU_DEVICES=""          # HIP_VISIBLE_DEVICES value; empty = use every GPU
 AMD_GFX_TARGET=""       # detected gfx target (e.g. gfx1201) — passed as GPU_ARCH build arg
 AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
 HOST_VIDEO_GID=""       # host video group GID
@@ -573,33 +574,113 @@ prompt_variant() {
     fi
 
     echo ""
-    echo -e "${BOLD}Image variant${NC}"
+    echo -e "${BOLD}RDNA4 detected (${AMD_GFX_TARGET})${NC}"
     echo ""
-    echo "  Your GPU is RDNA4 (${AMD_GFX_TARGET}), so you can build either image."
+    echo    "  There is a second image for this card: vllm-radiance, a from-source"
+    echo    "  vLLM stack hand-tuned for gfx1201 — custom attention, GEMM and"
+    echo    "  all-reduce kernels, tuned FP8 and MoE configs, and MTP drafting."
+    echo    "  It installs much faster too, since it pulls a prebuilt base instead"
+    echo    "  of compiling ROCm and vLLM from source."
     echo ""
-    echo -e "  ${BOLD}1) generic${NC}   Builds ROCm + vLLM from source, tracking vLLM main."
-    echo    "               Portable, newest model support, no tuning for this card"
-    echo    "               beyond the RDNA4 correctness patches. Long build."
+    echo    "  The trade-off: it pins vLLM and transformers, so support for models"
+    echo    "  newer than that release is frozen. The generic image tracks vLLM main."
     echo ""
-    echo -e "  ${BOLD}2) radiance${NC}  Layers this UI on the vllm-radiance image, a from-source"
-    echo    "               stack hand-tuned for gfx1201: custom attention, GEMM and"
-    echo    "               all-reduce kernels, tuned FP8/MoE configs and MTP drafting."
-    echo    "               Much faster to install (pulls a prebuilt base), but vLLM"
-    echo    "               and transformers are pinned, so model support is frozen"
-    echo    "               at that release. Third-party project, credited in README."
+    echo    "  Third-party project, credited in README.md:"
+    echo    "  https://codeberg.org/StillDeadcode/vllm-radiance"
     echo ""
-    echo    "               https://codeberg.org/StillDeadcode/vllm-radiance"
+
+    if prompt_confirm "  Build the radiance variant?"; then
+        BUILD_VARIANT="radiance"
+    else
+        BUILD_VARIANT="generic"
+    fi
+    echo "  → Building the ${BUILD_VARIANT} image"
+}
+
+# List AMD GPUs in HIP enumeration order, one per line as:
+#   <hip-index>\t<pci-address>\t<vram-GiB>
+#
+# HIP enumerates by PCI bus order, so sorting the render nodes by their resolved
+# PCI address is what makes the index we print here the same index
+# HIP_VISIBLE_DEVICES expects. Reading sysfs rather than rocminfo keeps this
+# working on hosts with no ROCm userspace installed.
+detect_amd_gpus() {
+    local i=0 d pci vram
+    while IFS= read -r d; do
+        pci="$(basename "$(readlink -f "$d/device")")"
+        vram="$(cat "$d/device/mem_info_vram_total" 2>/dev/null || echo 0)"
+        printf '%d\t%s\t%d\n' "$i" "$pci" "$(( vram / 1073741824 ))"
+        i=$(( i + 1 ))
+    done < <(
+        for d in /sys/class/drm/renderD*; do
+            [[ -e "$d/device/vendor" ]] || continue
+            [[ "$(cat "$d/device/vendor" 2>/dev/null)" == "0x1002" ]] || continue
+            printf '%s\t%s\n' "$(basename "$(readlink -f "$d/device")")" "$d"
+        done | sort | cut -f2-
+    )
+}
+
+prompt_gpus() {
+    [[ "$GPU_VENDOR" == "rocm" ]] || return 0
+
+    local gpus
+    gpus="$(detect_amd_gpus)"
+    [[ -n "$gpus" ]] || return 0
+
+    local count
+    count="$(printf '%s\n' "$gpus" | wc -l)"
+    # One GPU and nothing to choose between.
+    [[ "$count" -gt 1 ]] || return 0
+
+    echo ""
+    echo -e "${BOLD}GPU selection${NC}"
+    echo ""
+    echo "  Found ${count} AMD GPUs:"
+    echo ""
+    local idx pci vram note
+    while IFS=$'\t' read -r idx pci vram; do
+        note=""
+        # An integrated GPU shows up here too and must not be handed to vLLM;
+        # its tiny VRAM is the giveaway.
+        [[ "$vram" -lt 4 ]] && note="  ← integrated? exclude this one"
+        printf "    [%s] %-14s %3s GiB%s\n" "$idx" "$pci" "$vram" "$note"
+    done <<< "$gpus"
+    echo ""
+    echo "  Enter the indices to use, comma-separated (e.g. 0,1), or 'all'."
+    echo "  Tensor-parallel size is set per model later, in the web UI."
     echo ""
 
     local answer
-    read -rp "$(echo -e "  ${BOLD}Variant${NC} [1=generic/2=radiance] (${BUILD_VARIANT}): ")" answer
-    case "${answer:-}" in
-        1|generic)  BUILD_VARIANT="generic" ;;
-        2|radiance) BUILD_VARIANT="radiance" ;;
-        "")         ;;  # keep current
-        *)          warn "Unrecognised choice '$answer' — keeping ${BUILD_VARIANT}" ;;
+    read -rp "$(echo -e "  ${BOLD}GPUs${NC} [${GPU_DEVICES:-all}]: ")" answer
+    answer="${answer:-${GPU_DEVICES:-all}}"
+
+    case "$answer" in
+        all|ALL|"")
+            GPU_DEVICES=""
+            echo "  → Using all ${count} GPUs"
+            return 0
+            ;;
     esac
-    echo "  → Building the ${BUILD_VARIANT} image"
+
+    if [[ ! "$answer" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        warn "Not a valid index list: '$answer' — using all GPUs"
+        GPU_DEVICES=""
+        return 0
+    fi
+
+    # Reject an out-of-range index rather than letting HIP silently see fewer
+    # GPUs than the user asked for.
+    local n
+    for n in ${answer//,/ }; do
+        if [[ "$n" -ge "$count" ]]; then
+            warn "No GPU with index ${n} (found ${count}) — using all GPUs"
+            GPU_DEVICES=""
+            return 0
+        fi
+    done
+
+    GPU_DEVICES="$answer"
+    echo "  → Using GPU(s): ${GPU_DEVICES}"
 }
 
 load_env_ports() {
@@ -616,6 +697,8 @@ load_env_ports() {
         # uses, so up/down/logs/rebuild must read it back, not re-ask.
         val="$(grep '^VLLMCTL_VARIANT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
         [[ -n "$val" ]] && BUILD_VARIANT="$val" || true
+        val="$(grep '^HIP_VISIBLE_DEVICES=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && GPU_DEVICES="$val" || true
     fi
 }
 
@@ -665,6 +748,7 @@ write_env_file() {
     local managed=(
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
+        HIP_VISIBLE_DEVICES
     )
 
     local preserved=""
@@ -684,6 +768,10 @@ write_env_file() {
         [[ -n "$AMD_GFX_TARGET" ]]     && echo "GPU_ARCH=${AMD_GFX_TARGET}"
         [[ -n "$HOST_VIDEO_GID" ]]     && echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}"
         [[ -n "$HOST_RENDER_GID" ]]    && echo "HOST_RENDER_GID=${HOST_RENDER_GID}"
+        # Only written when a subset was chosen. An empty HIP_VISIBLE_DEVICES
+        # is not "all GPUs" -- HIP reads it as "no GPUs" -- so the variable
+        # must be absent rather than blank.
+        [[ -n "$GPU_DEVICES" ]]        && echo "HIP_VISIBLE_DEVICES=${GPU_DEVICES}"
 
         # User-owned lines last, so they are visibly theirs to edit.
         [[ -n "$preserved" ]] && printf '%s\n' "$preserved"
@@ -1047,6 +1135,15 @@ print_summary() {
     if [[ -n "$AMD_GFX_TARGET" ]]; then
         echo -e "  ${CYAN}GPU arch${NC}      ${AMD_GFX_TARGET}"
     fi
+    if [[ "$GPU_VENDOR" == "rocm" ]]; then
+        local gpu_count
+        gpu_count="$(detect_amd_gpus | wc -l)"
+        if [[ -n "$GPU_DEVICES" ]]; then
+            echo -e "  ${CYAN}GPUs in use${NC}   ${GPU_DEVICES} (of ${gpu_count} detected)"
+        elif [[ "$gpu_count" -gt 0 ]]; then
+            echo -e "  ${CYAN}GPUs in use${NC}   all ${gpu_count}"
+        fi
+    fi
     if [[ -n "$AMD_GFX_VERSION" ]]; then
         echo -e "  ${CYAN}HSA Override${NC}  ${AMD_GFX_VERSION}"
     fi
@@ -1231,6 +1328,7 @@ main() {
         exit 0
     fi
 
+    prompt_gpus
     prompt_ports
     prompt_models_dir
 
