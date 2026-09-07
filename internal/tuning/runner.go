@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 )
 
 type JobState string
@@ -363,7 +365,9 @@ func (m *Manager) pumpReader(r io.ReadCloser) {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	scanner.Split(splitCROrLF)
 	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), " \t")
+		// tqdm repaints with colour and erase-line sequences; strip them so
+		// the progress lines are readable in the UI.
+		line := strings.TrimRight(ansi.Strip(scanner.Text()), " \t")
 		if line == "" {
 			continue
 		}

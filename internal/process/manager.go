@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 )
 
 type State string
@@ -279,7 +281,10 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 256*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
+		// Strip before anything else looks at the line: vLLM and the radiance
+		// banner colour their output, and an embedded escape would both
+		// corrupt the display and break the readiness match below.
+		line := ansi.Strip(scanner.Text())
 		m.appendLog(line)
 
 		// Detect ready signal

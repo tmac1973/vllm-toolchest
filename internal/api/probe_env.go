@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
@@ -173,9 +174,13 @@ func (s *safeBuffer) String() string {
 	const cap = 64 * 1024
 	b := s.buf.Bytes()
 	if len(b) > cap {
-		return string(b[len(b)-cap:])
+		b = b[len(b)-cap:]
 	}
-	return string(b)
+	// The OOM patterns are matched against this, and the result is surfaced
+	// as the attempt's detail text. A colour escape inside a phrase we are
+	// matching on would make the probe misreport an OOM as an unknown
+	// failure, and quietly widen the context sweep.
+	return ansi.Strip(string(b))
 }
 
 // Reset is unused but kept so the buffer can be repurposed by future
