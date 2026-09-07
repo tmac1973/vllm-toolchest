@@ -239,8 +239,23 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	p(`<label title="Prefill in chunks so a long prompt does not monopolise a step. Normally leave on; vLLM V1 enables it by default.">
 <input type="checkbox" name="enable_chunked_prefill" role="switch"%s> Enable chunked prefill</label>`,
 		checked(c.EnableChunkedPrefill))
-	p(`<label title="Tokens per prefill chunk. 0 lets vLLM choose. On the radiance image keep this at or below 4096: the tensor-parallel all-reduce message is max_num_batched_tokens x hidden_size x 2 bytes, and anything over 48 MiB silently falls back to RCCL, which is roughly 2.3x slower.">Max batched tokens <input type="number" name="max_num_batched_tokens" value="%d" min="0" step="256" placeholder="0 = auto"></label>`,
+	p(`<label title="Tokens per prefill chunk. 0 lets vLLM choose.">Max batched tokens <input type="number" name="max_num_batched_tokens" value="%d" min="0" step="256" placeholder="0 = auto"></label>`,
 		c.MaxNumBatchedTokens)
+
+	// The ceiling depends on the model's hidden size and the tensor-parallel
+	// size, so it cannot be written into a static tooltip -- and exceeding it
+	// is silent, which is exactly the kind of thing that should not be left to
+	// the operator to derive from a third-party source file.
+	if advice, warn := batchedTokenAdvice(
+		s.vllmEnv.IsRadiance(), m.HFConfig.HiddenSize,
+		c.TensorParallelSize, c.MaxNumBatchedTokens,
+	); advice != "" {
+		if warn {
+			p(`<small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;color:var(--pico-del-color);"><strong>Warning:</strong> %s</small>`, advice)
+		} else {
+			p(`<small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">%s</small>`, advice)
+		}
+	}
 	p(`</fieldset>`)
 
 	// ── Quantization ──
