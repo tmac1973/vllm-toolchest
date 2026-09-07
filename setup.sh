@@ -182,13 +182,22 @@ radiance_supported() {
 # Choose the image variant. Explicit VARIANT= always wins; otherwise default to
 # the portable build and let install offer the RDNA4 one interactively.
 detect_variant() {
-    if [[ -n "${VARIANT:-}" ]]; then
-        case "$VARIANT" in
-            generic|radiance) BUILD_VARIANT="$VARIANT" ;;
-            *) fatal "Unknown VARIANT=$VARIANT (expected: generic or radiance)" ;;
+    # VLLMCTL_VARIANT is the documented override, matching the key stored in
+    # .env. Bare VARIANT is accepted as a convenience, but only when it names a
+    # real variant: VARIANT is also an /etc/os-release field, so a value we do
+    # not recognise belongs to somebody else and must not be a fatal error.
+    local want="${VLLMCTL_VARIANT:-}"
+    if [[ -z "$want" && "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+        want="$VARIANT"
+    fi
+
+    if [[ -n "$want" ]]; then
+        case "$want" in
+            generic|radiance) BUILD_VARIANT="$want" ;;
+            *) fatal "Unknown VLLMCTL_VARIANT=$want (expected: generic or radiance)" ;;
         esac
         if [[ "$BUILD_VARIANT" == "radiance" && "$GPU_VENDOR" != "rocm" ]]; then
-            fatal "VARIANT=radiance needs an AMD ROCm GPU (detected backend: $GPU_VENDOR)"
+            fatal "The radiance variant needs an AMD ROCm GPU (detected backend: $GPU_VENDOR)"
         fi
         return
     fi
@@ -268,12 +277,22 @@ detect_distro() {
         fatal "Cannot detect distribution: /etc/os-release not found"
     fi
 
-    # shellcheck disable=SC1091
-    source /etc/os-release
+    # Read os-release in a SUBSHELL and hand back only the three fields we
+    # want. It is a shell fragment, so sourcing it directly dumps every field
+    # it defines into this script's namespace -- and Ubuntu Server defines
+    # VARIANT="Server Edition", which clobbered our own VARIANT override and
+    # made `./setup.sh install` fail on exactly that distro. printf %q keeps
+    # values with spaces intact through the eval.
+    local id pretty id_like
+    eval "$(
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        printf 'id=%q\npretty=%q\nid_like=%q\n' \
+            "${ID:-unknown}" "${PRETTY_NAME:-}" "${ID_LIKE:-}"
+    )"
 
-    DISTRO_ID="${ID:-unknown}"
-    DISTRO_NAME="${PRETTY_NAME:-$DISTRO_ID}"
-    local id_like="${ID_LIKE:-}"
+    DISTRO_ID="$id"
+    DISTRO_NAME="${pretty:-$DISTRO_ID}"
 
     case "$DISTRO_ID" in
         debian|ubuntu|pop|linuxmint|elementary|zorin|kali)
@@ -566,8 +585,10 @@ prompt_models_dir() {
 }
 
 prompt_variant() {
-    if [[ -n "${VARIANT:-}" ]]; then
-        return  # explicitly forced on the command line
+    # Forced on the command line -- nothing to ask. Mirrors detect_variant's
+    # handling, including ignoring an unrelated os-release VARIANT.
+    if [[ -n "${VLLMCTL_VARIANT:-}" ]] || [[ "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+        return
     fi
     if ! radiance_supported; then
         return  # not RDNA4 — only the generic image is buildable here
@@ -1226,13 +1247,17 @@ Image variants (AMD only):
               https://codeberg.org/StillDeadcode/vllm-radiance
 
   `install` offers the choice on an RDNA4 card; the answer is stored in .env
-  and reused by every later command. Force it with VARIANT= at any time.
+  and reused by every later command. Force it with VLLMCTL_VARIANT= any time.
 
 Environment variables:
-  GPU=cuda|rocm               Override GPU auto-detection
-  VARIANT=generic|radiance    Override image variant (skips the prompt)
-  RUNTIME=docker|podman       Override container runtime auto-detection
-  RADIANCE_IMAGE=<ref>        Base image for the radiance variant
+  GPU=cuda|rocm                        Override GPU auto-detection
+  VLLMCTL_VARIANT=generic|radiance     Override image variant (skips the prompt)
+  RUNTIME=docker|podman                Override container runtime auto-detection
+  RADIANCE_IMAGE=<ref>                 Base image for the radiance variant
+
+  VARIANT= is accepted as a short form, but VLLMCTL_VARIANT is preferred:
+  VARIANT is also an /etc/os-release field (Ubuntu Server sets it to
+  "Server Edition"), so the short form can collide on some distros.
 
 Port configuration is stored in .env (see .env.example for details).
 You can edit .env directly instead of using the interactive setup.
@@ -1246,8 +1271,8 @@ Examples:
   ./setup.sh quick                # fast rebuild (code changes only)
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
-  VARIANT=radiance ./setup.sh install   # build the RDNA4-tuned image
-  VARIANT=generic ./setup.sh rebuild    # switch back to the portable image
+  VLLMCTL_VARIANT=radiance ./setup.sh install   # build the RDNA4-tuned image
+  VLLMCTL_VARIANT=generic ./setup.sh rebuild    # switch back to the portable image
 USAGE
 }
 

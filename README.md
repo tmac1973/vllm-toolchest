@@ -65,8 +65,8 @@ not need to write a config file first.
 To skip the prompt, or to change your mind later:
 
 ```bash
-VARIANT=radiance ./setup.sh install    # build radiance without being asked
-VARIANT=generic  ./setup.sh rebuild    # switch back to the portable image
+VLLMCTL_VARIANT=radiance ./setup.sh install    # build radiance without being asked
+VLLMCTL_VARIANT=generic  ./setup.sh rebuild    # switch back to the portable image
 ```
 
 The answers are stored in `.env` and reused by every later command, so `up`,
