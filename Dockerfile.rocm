@@ -1,5 +1,5 @@
 # ── Stage 1: Go builder ─────────────────────────────────────────────
-FROM golang:1.26-bookworm AS go-builder
+FROM docker.io/library/golang:1.26-bookworm AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

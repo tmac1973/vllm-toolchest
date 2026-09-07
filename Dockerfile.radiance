@@ -31,12 +31,17 @@
 # RADIANCE_IMAGE and VLLM_VERSION must move together — the tuner benchmark
 # script is fetched from the vLLM tag the radiance image was built against, and
 # the build asserts the two agree.
-ARG RADIANCE_IMAGE=stilldeadcode/vllm-radiance:0.9.3
+# Fully qualified on purpose. Podman resolves an unqualified name against its
+# unqualified-search-registries, which on Fedora/RHEL hosts tries
+# registry.fedoraproject.org first and fails with "manifest unknown" before it
+# ever reaches Docker Hub. Docker treats the docker.io/ prefix as canonical, so
+# spelling it out costs nothing and works on both runtimes.
+ARG RADIANCE_IMAGE=docker.io/stilldeadcode/vllm-radiance:0.9.3
 ARG VLLM_VERSION=v0.27.1
 ARG GPU_ARCH=gfx1201
 
 # ── Stage 1: Go builder ─────────────────────────────────────────────────────
-FROM golang:1.26-bookworm AS go-builder
+FROM docker.io/library/golang:1.26-bookworm AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -49,7 +54,7 @@ RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 # radiance release image ships no source tree, so we fetch that one file from
 # the exact tag radiance compiled. Pin it to radiance's VLLM_VERSION — a script
 # from a different release can reference kernels this vLLM does not have.
-FROM alpine:3.22 AS tuner-fetch
+FROM docker.io/library/alpine:3.22 AS tuner-fetch
 ARG VLLM_VERSION
 RUN apk add --no-cache curl && \
     curl -fsSL -o /benchmark_w8a8_block_fp8.py \

@@ -15,7 +15,9 @@ services:
         # These two move together: the tuner benchmark script is fetched from
         # the vLLM tag radiance was built against, and the build fails if the
         # image's actual vLLM version disagrees.
-        RADIANCE_IMAGE: "${RADIANCE_IMAGE:-stilldeadcode/vllm-radiance:0.9.3}"
+        # Fully qualified: podman resolves an unqualified name against its
+        # unqualified-search-registries and fails before reaching Docker Hub.
+        RADIANCE_IMAGE: "${RADIANCE_IMAGE:-docker.io/stilldeadcode/vllm-radiance:0.9.3}"
         VLLM_VERSION: "${RADIANCE_VLLM_VERSION:-v0.27.1}"
         GPU_ARCH: "${GPU_ARCH:-gfx1201}"
     container_name: vllm-toolchest
