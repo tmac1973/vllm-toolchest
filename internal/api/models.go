@@ -230,7 +230,18 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	for _, n := range []int{1, 4, 8, 16, 32, 64, 128, 256} {
 		p(`<option value="%d"%s>%d</option>`, n, selected(c.MaxNumSeqs == n), n)
 	}
-	p(`</select></label></fieldset>`)
+	p(`</select></label>`)
+
+	// Both of these existed in the config and in BuildArgs but had no form
+	// field, so every save through this panel wiped them: the batched-token
+	// budget was reset to 0, and chunked prefill -- read from a checkbox that
+	// was never rendered -- was forced off.
+	p(`<label title="Prefill in chunks so a long prompt does not monopolise a step. Normally leave on; vLLM V1 enables it by default.">
+<input type="checkbox" name="enable_chunked_prefill" role="switch"%s> Enable chunked prefill</label>`,
+		checked(c.EnableChunkedPrefill))
+	p(`<label title="Tokens per prefill chunk. 0 lets vLLM choose. On the radiance image keep this at or below 4096: the tensor-parallel all-reduce message is max_num_batched_tokens x hidden_size x 2 bytes, and anything over 48 MiB silently falls back to RCCL, which is roughly 2.3x slower.">Max batched tokens <input type="number" name="max_num_batched_tokens" value="%d" min="0" step="256" placeholder="0 = auto"></label>`,
+		c.MaxNumBatchedTokens)
+	p(`</fieldset>`)
 
 	// ── Quantization ──
 	p(`<fieldset><legend>Quantization <a href="#" onclick="document.getElementById('quant-help-%s').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend><div class="grid">`, sid)
@@ -459,6 +470,7 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 			EnablePrefixCaching:    r.FormValue("enable_prefix_caching") == "on",
 			EnableChunkedPrefill:   r.FormValue("enable_chunked_prefill") == "on",
 			MaxNumSeqs:             formInt(r, "max_num_seqs"),
+			MaxNumBatchedTokens:    formInt(r, "max_num_batched_tokens"),
 			Quantization:           r.FormValue("quantization"),
 			LoadFormat:             r.FormValue("load_format"),
 			KVCacheDtype:           r.FormValue("kv_cache_dtype"),

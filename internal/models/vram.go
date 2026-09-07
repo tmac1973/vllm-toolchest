@@ -83,8 +83,17 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 		kvHeads = cfg.NumAttentionHeads
 	}
 
-	if cfg.NumHiddenLayers > 0 && kvHeads > 0 && headDim > 0 {
-		est.KVCachePerTokenB = int64(2 * cfg.NumHiddenLayers * kvHeads * headDim * kvDtypeBytes)
+	// Only full-attention layers hold a KV cache. On a hybrid the rest keep a
+	// fixed-size recurrent state that does not grow with context, so counting
+	// every layer overstates this badly -- fourfold on a model that is 16
+	// attention layers out of 64.
+	kvLayers := cfg.AttentionLayers
+	if kvLayers <= 0 {
+		kvLayers = cfg.NumHiddenLayers // unknown, or a dense model
+	}
+
+	if kvLayers > 0 && kvHeads > 0 && headDim > 0 {
+		est.KVCachePerTokenB = int64(2 * kvLayers * kvHeads * headDim * kvDtypeBytes)
 	}
 
 	// Activation overhead estimate
