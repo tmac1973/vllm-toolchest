@@ -98,6 +98,27 @@ across two R9700s.
 Because radiance pins vLLM and transformers, **a model newer than that release
 will not load**. If you need the newest architectures, use `generic`.
 
+### Note for Podman users
+
+The published vllm-radiance image is an OCI manifest whose layers carry Docker
+media types. Docker tolerates the mix, but `containers/image` -- the library
+behind Podman, Buildah and Skopeo alike -- refuses to rewrite such a manifest,
+so building on top of it fails with:
+
+```
+unsupported MIME type for compression:
+"application/vnd.docker.image.rootfs.diff.tar.gzip"
+```
+
+Podman can *run* the image fine; only using it as a build base is affected, and
+no manifest-level repair works (`push --format`, `save`, skopeo all hit the
+same wall). `setup.sh` handles this for you: it probes whether your runtime can
+build on the image and, if not, flattens it into a single-layer local image
+first. That costs roughly 10 GB and a few minutes, once per radiance version.
+
+The probe means nothing happens on a runtime that accepts the image as-is, so
+this disappears by itself when a conformant image is published upstream.
+
 ## Development
 
 ```bash

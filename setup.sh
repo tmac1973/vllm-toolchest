@@ -13,6 +13,10 @@ readonly QUADLET_USER_DIR="${HOME}/.config/containers/systemd"
 readonly QUADLET_SYSTEM_DIR="/etc/containers/systemd"
 readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 
+# Base image for the radiance variant. KEEP IN SYNC with the defaults in
+# Dockerfile.radiance and docker-compose.radiance.yml.
+readonly RADIANCE_DEFAULT_IMAGE="docker.io/stilldeadcode/vllm-radiance:0.9.3"
+
 # ─── Global state (populated by detect_* functions) ──────────────────────────
 
 GPU_VENDOR=""           # cuda, rocm
@@ -723,6 +727,133 @@ load_env_ports() {
     fi
 }
 
+# ─── Radiance base image ─────────────────────────────────────────────────────
+#
+# vllm-radiance is published as an OCI manifest whose layers carry *Docker*
+# media types. Docker/BuildKit tolerates the mix; containers/image -- the
+# library behind podman, buildah AND skopeo alike -- refuses to rewrite such a
+# manifest, so `FROM <that image>` dies before the first instruction:
+#
+#   unsupported MIME type for compression:
+#   "application/vnd.docker.image.rootfs.diff.tar.gzip"
+#
+# Every manifest-level repair hits the same wall (`push --format v2s2`, `save
+# --format docker-archive`, skopeo). But podman can RUN the image perfectly
+# well, so the way through is to flatten it: export the container filesystem
+# and re-import it as a fresh single-layer image, carrying the env and
+# entrypoint across by hand.
+#
+# This is an upstream packaging bug, so it is behind a cheap probe: the day a
+# conformant image is published, the probe passes and none of this runs.
+
+radiance_base_ref() {
+    if [[ -n "${RADIANCE_IMAGE:-}" ]]; then
+        echo "$RADIANCE_IMAGE"; return
+    fi
+    local val
+    val="$(grep '^RADIANCE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    echo "${val:-$RADIANCE_DEFAULT_IMAGE}"
+}
+
+# Can the build actually use this image as a base? A LABEL-only build is enough
+# to find out: it fails while creating the build container, before running
+# anything, so the probe costs nothing on a good image.
+base_is_buildable() {
+    local img="$1" tmpdir rc=1
+    tmpdir="$(mktemp -d)"
+    printf 'FROM %s\nLABEL vllmctl.probe=1\n' "$img" > "$tmpdir/Dockerfile"
+    if $CONTAINER_CMD build -t localhost/vllmctl-baseprobe:tmp "$tmpdir" >/dev/null 2>&1; then
+        rc=0
+    fi
+    $CONTAINER_CMD rmi -f localhost/vllmctl-baseprobe:tmp >/dev/null 2>&1 || true
+    rm -rf "$tmpdir"
+    return $rc
+}
+
+# export | import, reconstructing the metadata import would otherwise drop.
+flatten_image() {
+    local src="$1" dst="$2"
+    local cid rc e ep cm wd
+    local -a args=()
+
+    while IFS= read -r e; do
+        [[ -n "$e" ]] && args+=(--change "ENV $e")
+    done < <($CONTAINER_CMD image inspect "$src" --format '{{range .Config.Env}}{{println .}}{{end}}')
+
+    ep="$($CONTAINER_CMD image inspect "$src" --format '{{json .Config.Entrypoint}}' 2>/dev/null)"
+    [[ -n "$ep" && "$ep" != "null" ]] && args+=(--change "ENTRYPOINT $ep")
+    cm="$($CONTAINER_CMD image inspect "$src" --format '{{json .Config.Cmd}}' 2>/dev/null)"
+    [[ -n "$cm" && "$cm" != "null" ]] && args+=(--change "CMD $cm")
+    wd="$($CONTAINER_CMD image inspect "$src" --format '{{.Config.WorkingDir}}' 2>/dev/null)"
+    [[ -n "$wd" ]] && args+=(--change "WORKDIR $wd")
+
+    [[ "${#args[@]}" -gt 0 ]] || { err "could not read image config from $src"; return 1; }
+
+    cid="$($CONTAINER_CMD create "$src")" || return 1
+    $CONTAINER_CMD export "$cid" | $CONTAINER_CMD import "${args[@]}" - "$dst"
+    rc=$?
+    $CONTAINER_CMD rm -f "$cid" >/dev/null 2>&1 || true
+    return $rc
+}
+
+# Make sure the radiance base is present and usable, flattening it if the
+# runtime cannot build on top of it. Exports RADIANCE_IMAGE for the build.
+ensure_radiance_base() {
+    [[ "$BUILD_VARIANT" == "radiance" ]] || return 0
+
+    local src flat tag
+    src="$(radiance_base_ref)"
+
+    if ! $CONTAINER_CMD image exists "$src" 2>/dev/null; then
+        log "Pulling ${src} (about 4 GB)..."
+        $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+    fi
+
+    if base_is_buildable "$src"; then
+        export RADIANCE_IMAGE="$src"
+        return 0
+    fi
+
+    tag="${src##*:}"
+    [[ "$tag" == "$src" ]] && tag="latest"
+    flat="localhost/vllm-radiance-flat:${tag}"
+
+    if $CONTAINER_CMD image exists "$flat" 2>/dev/null; then
+        log "Using previously normalized base image ${flat}"
+        export RADIANCE_IMAGE="$flat"
+        return 0
+    fi
+
+    warn "${src} cannot be used as a build base by ${CONTAINER_CMD}:"
+    warn "it is an OCI manifest carrying Docker-typed layers, which"
+    warn "containers/image refuses to rewrite. Normalizing it locally."
+    echo ""
+    echo "  This flattens the image into a single layer, once per radiance"
+    echo "  version. It needs roughly 10 GB of free space and a few minutes."
+    echo ""
+
+    local avail
+    avail="$(df -BG --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')" || avail=""
+    if [[ -n "$avail" && "$avail" -lt 15 ]]; then
+        warn "Only ${avail} GB free — normalization may run out of space."
+    fi
+
+    log "Normalizing ${src} -> ${flat} ..."
+    if ! flatten_image "$src" "$flat"; then
+        $CONTAINER_CMD rmi -f "$flat" >/dev/null 2>&1 || true
+        fatal "Could not normalize ${src}. Building the radiance variant needs
+       either a container runtime that accepts this image (Docker does) or
+       a conformant image published upstream."
+    fi
+
+    if ! base_is_buildable "$flat"; then
+        fatal "Normalized image ${flat} is still not usable as a build base."
+    fi
+
+    ok "Normalized base image ready: ${flat}"
+    export RADIANCE_IMAGE="$flat"
+}
+
 # ─── Container operations ────────────────────────────────────────────────────
 
 # The radiance variant has its own image; every other combination is keyed by
@@ -821,11 +952,13 @@ container_down() {
 }
 
 container_install() {
+    ensure_radiance_base
     write_env_file
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
 }
 
 container_rebuild() {
+    ensure_radiance_base
     local quadlet_active=false
     has_quadlet && quadlet_active=true
 
@@ -844,6 +977,7 @@ container_rebuild() {
 
 # Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
 container_quick_rebuild() {
+    ensure_radiance_base
     container_down
     write_env_file
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
