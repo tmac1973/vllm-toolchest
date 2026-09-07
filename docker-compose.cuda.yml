@@ -28,6 +28,19 @@ services:
         soft: 65536
         hard: 65536
     ipc: host
+    # REQUIRED, and not redundant with ipc:host. vLLM's multiprocess executor
+    # puts its inter-process message queue in /dev/shm, and needs a few hundred
+    # MiB of it; the container default is 64 MB, which fails engine startup at
+    # any tensor-parallel size > 1:
+    #
+    #   RuntimeError: Insufficient space in /dev/shm: 160 MiB required, 62 MiB free
+    #
+    # `ipc: host` would give the container the host's /dev/shm and solve it --
+    # but podman-compose (1.6.0) silently ignores that key, so on Podman the
+    # container gets the 64 MB default anyway. shm_size is honoured by both
+    # docker compose and podman-compose. Where ipc:host *is* applied the host's
+    # /dev/shm wins and this is simply unused.
+    shm_size: "${VLLMCTL_SHM_SIZE:-8gb}"
     env_file:
       - path: .env
         required: false

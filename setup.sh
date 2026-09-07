@@ -1070,6 +1070,7 @@ AddCapability=SYS_NICE"
 AddDevice=/dev/dri
 SecurityLabelDisable=true
 PodmanArgs=--ipc=host
+ShmSize=${VLLMCTL_SHM_SIZE:-8gb}
 GroupAdd=${HOST_VIDEO_GID:-video}
 GroupAdd=${HOST_RENDER_GID:-render}
 ${extra_caps}
