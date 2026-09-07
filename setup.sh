@@ -966,7 +966,28 @@ container_down() {
 container_install() {
     ensure_radiance_base
     write_env_file
+
+    # Remove any existing container before bringing one up. `up -d` alone does
+    # NOT apply a changed environment under podman-compose -- it sees the
+    # container already exists and simply starts it -- so re-running install
+    # after changing the GPU selection, the ports or the models directory
+    # silently kept the old values, and the only clue was the running service
+    # still reporting the previous configuration.
+    local quadlet_active=false
+    has_quadlet && quadlet_active=true
+    if container_exists vllm-toolchest; then
+        log "Removing the existing container so the new configuration applies..."
+        container_down
+        $CONTAINER_CMD rm -f vllm-toolchest 2>/dev/null || true
+    fi
+
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
+
+    if [[ "$quadlet_active" == true ]]; then
+        log "Restarting via systemd (Quadlet)..."
+        $(compose_cmd) down >/dev/null 2>&1 || true
+        systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+    fi
 }
 
 container_rebuild() {
@@ -1372,7 +1393,10 @@ Lifecycle:
   rebuild     Full rebuild with no cache, then start
 
 Runtime:
-  up          Start a stopped container
+  up          Start a stopped container. Does NOT re-read .env -- a container
+              keeps the environment it was created with, so after changing GPU
+              selection or ports run `install` (or `down` then `up`) to have
+              the container recreated
   down        Stop the container
   logs        Follow container logs (Ctrl-C to stop)
 
