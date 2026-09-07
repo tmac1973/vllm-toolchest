@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
@@ -154,6 +155,28 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	cmd := exec.CommandContext(ctx, launcher.Bin, cmdArgs...)
 	cmd.Env = append(os.Environ(), env...)
 
+	// Put the server in its own process group so the whole tree can be
+	// signalled at once.
+	//
+	// vLLM is not one process: it forks an EngineCore and one Worker per
+	// tensor-parallel rank, and those are our grandchildren. Signalling only
+	// the direct child leaves them running, still holding their HIP contexts
+	// -- which is to say still holding the GPU memory. The symptom is a later
+	// start failing with "Free memory on device cuda:0 (2.82/31.86 GiB) on
+	// startup is less than desired", on exactly the GPUs the previous serve
+	// used, while the UI reports nothing is running.
+	//
+	// A new group is what makes this safe: the workers inherit it, so
+	// kill(-pgid) reaches every one of them without also signalling vllmctl,
+	// which shares its own group with them otherwise.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// Bound how long Wait blocks on the output pipes: a surviving grandchild
+	// holds them open, and without this the reaper never returns.
+	cmd.WaitDelay = 10 * time.Second
+
 	// Capture stdout and stderr
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
@@ -187,7 +210,12 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	return nil
 }
 
-// Stop gracefully stops vLLM.
+// Stop gracefully stops vLLM and everything it spawned.
+//
+// SIGTERM to the process group first: vLLM shuts down cleanly on it, releasing
+// GPU memory and tearing down NCCL. Only if that does not finish in time does
+// this escalate to SIGKILL. Either way the whole group is signalled, not just
+// the process we launched -- see the comment in Start.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	if m.state != StateRunning && m.state != StateStarting {
@@ -196,13 +224,31 @@ func (m *Manager) Stop() error {
 	}
 	m.state = StateStopping
 	cancel := m.cancelFunc
+	pgid := m.pid
 	m.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	if pgid > 0 {
+		if err := killProcessGroup(pgid, syscall.SIGTERM); err != nil {
+			slog.Warn("signalling vLLM process group", "pgid", pgid, "error", err)
+		}
 	}
 
-	// Wait for process to exit (up to 30s)
+	// finish sweeps up anything in the group that outlived the leader, then
+	// releases the context.
+	finish := func() {
+		if pgid > 0 {
+			// Only sweep while the group still exists, so a group id recycled
+			// after everything exited cannot be signalled by mistake.
+			if killProcessGroup(pgid, 0) == nil {
+				slog.Info("reaping vLLM workers that outlived the server", "pgid", pgid)
+				killProcessGroup(pgid, syscall.SIGKILL)
+			}
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}
+
 	deadline := time.After(30 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -210,10 +256,9 @@ func (m *Manager) Stop() error {
 	for {
 		select {
 		case <-deadline:
+			slog.Warn("vLLM did not exit on SIGTERM; killing the process group", "pgid", pgid)
+			finish()
 			m.mu.Lock()
-			if m.cmd != nil && m.cmd.Process != nil {
-				m.cmd.Process.Kill()
-			}
 			m.state = StateStopped
 			m.mu.Unlock()
 			return nil
@@ -222,10 +267,20 @@ func (m *Manager) Stop() error {
 			state := m.state
 			m.mu.RUnlock()
 			if state == StateStopped || state == StateError {
+				finish()
 				return nil
 			}
 		}
 	}
+}
+
+// killProcessGroup signals every process in the group led by pid. Signal 0
+// tests for the group's existence without delivering anything.
+func killProcessGroup(pid int, sig syscall.Signal) error {
+	if pid <= 0 {
+		return nil
+	}
+	return syscall.Kill(-pid, sig)
 }
 
 // Restart stops and starts vLLM with the same model.
