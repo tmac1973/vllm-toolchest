@@ -10,6 +10,9 @@ import (
 )
 
 func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 
 	if !isHTMX(r) {
@@ -32,17 +35,17 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 		badge = `Stopped`
 	}
 
-	fmt.Fprintf(w, `<div>
+	hp(`<div>
   <p>Status: %s</p>`, badge)
 
 	if status.ModelID != "" {
-		fmt.Fprintf(w, `<p>Model: <strong>%s</strong></p>`, status.ModelID)
+		hp(`<p>Model: <strong>%s</strong></p>`, status.ModelID)
 	}
 	if status.Uptime != "" {
-		fmt.Fprintf(w, `<p>Uptime: %s (PID: %d)</p>`, status.Uptime, status.PID)
+		hp(`<p>Uptime: %s (PID: %d)</p>`, status.Uptime, status.PID)
 	}
 	if status.Error != "" {
-		fmt.Fprintf(w, `<p><small><del>%s</del></small></p>`, status.Error)
+		hp(`<p><small><del>%s</del></small></p>`, status.Error)
 	}
 	fmt.Fprint(w, `</div>`)
 
@@ -53,6 +56,9 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	var req struct {
 		ModelID string `json:"model_id"`
 	}
@@ -86,7 +92,7 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.process.Start(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><del>Failed to start: %s</del></p>`, err)
+			hp(`<p><del>Failed to start: %s</del></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -95,17 +101,20 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		fmt.Fprintf(w, `<p><mark>Starting vLLM with %s...</mark></p>`, m.DisplayName)
+		hp(`<p><mark>Starting vLLM with %s...</mark></p>`, m.DisplayName)
 		return
 	}
 	respondJSON(w, map[string]string{"status": "starting"})
 }
 
 func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	if err := s.process.Stop(); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><del>%s</del></p>`, err)
+			hp(`<p><del>%s</del></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -121,6 +130,9 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 	if status.ModelID == "" {
 		http.Error(w, "no model was running", http.StatusBadRequest)
@@ -141,7 +153,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><del>%s</del></p>`, err)
+			hp(`<p><del>%s</del></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)

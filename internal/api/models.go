@@ -32,18 +32,22 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	for _, m := range list {
 		quantBadge := quantBadgeHTML(m.Quantization)
 		vramLabel := vramLabelHTML(m.VRAMEstimate)
-		toolBadge := ""
+		toolBadge := safeHTML("")
 		if m.ToolUse.HasToolSupport {
-			toolBadge = fmt.Sprintf(`<ins title="%s">tool use</ins>`, m.ToolUse.ToolCallParser)
+			toolBadge = safeHTML(fmt.Sprintf(`<ins title="%s">tool use</ins>`,
+				esc(m.ToolUse.ToolCallParser)))
 		}
 
-		orphanBadge := ""
+		orphanBadge := safeHTML("")
 		if m.Orphaned {
 			orphanBadge = ` <del>missing</del>`
 		}
 
+		// Model IDs and display names come from HuggingFace and land in both
+		// attributes and text below, so this printer escapes them.
+		row := htmlPrinter(w)
 		sid := safeID(m.ID)
-		fmt.Fprintf(w, `<tr>
+		row(`<tr>
       <td>
         <a href="#" hx-get="/api/models/config-panel?id=%s" hx-target="#config-%s" hx-swap="innerHTML">
           <strong>%s</strong>
@@ -108,7 +112,11 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		modelLen = maxCtx
 	}
 
-	p := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
+	// Escapes every string argument. The config fields below are free text the
+	// operator typed -- a JSON speculative config is nothing but double quotes,
+	// and interpolating one raw closed the value="..." attribute it was being
+	// written into, so the browser kept only the leading brace.
+	p := htmlPrinter(w)
 
 	p(`<article style="margin:0.5rem 0;">
   <header style="display:flex;justify-content:space-between;align-items:center;">
@@ -603,7 +611,7 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOp
 	}
 }
 
-func quantBadgeHTML(q models.QuantMeta) string {
+func quantBadgeHTML(q models.QuantMeta) safeHTML {
 	label := strings.ToUpper(q.Method)
 	if label == "NONE" || label == "" {
 		label = "FP16"
@@ -615,10 +623,10 @@ func quantBadgeHTML(q models.QuantMeta) string {
 		label = "GGUF " + q.GGUFQuantType
 	}
 	color := quantBadgeColor(q.Method)
-	return fmt.Sprintf(`<span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;">%s</span>`, color, label)
+	return safeHTML(fmt.Sprintf(`<span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;">%s</span>`, color, esc(label)))
 }
 
-func vramLabelHTML(est models.VRAMEstimate) string {
+func vramLabelHTML(est models.VRAMEstimate) safeHTML {
 	if est.WeightMemoryGB == 0 {
 		return "—"
 	}
@@ -629,8 +637,8 @@ func vramLabelHTML(est models.VRAMEstimate) string {
 	if est.TooLarge {
 		color = "#b83d3d"
 	}
-	return fmt.Sprintf(`<span style="color:%s;">%.1f GB<br><small>%s</small></span>`,
-		color, est.TotalSingleGPUGB, est.FitLabel)
+	return safeHTML(fmt.Sprintf(`<span style="color:%s;">%.1f GB<br><small>%s</small></span>`,
+		color, est.TotalSingleGPUGB, esc(est.FitLabel)))
 }
 
 func safeID(id string) string {
@@ -643,14 +651,14 @@ func safeID(id string) string {
 	return r.Replace(id)
 }
 
-func checked(v bool) string {
+func checked(v bool) safeHTML {
 	if v {
 		return " checked"
 	}
 	return ""
 }
 
-func selected(v bool) string {
+func selected(v bool) safeHTML {
 	if v {
 		return " selected"
 	}

@@ -407,7 +407,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
 		for _, a := range avgs {
 			fmt.Fprintf(w, `<tr><td><small>%s</small></td><td>%.1f t/s</td><td>%d</td><td><small>%s</small></td></tr>`,
-				htmlEscape(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+				esc(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
 		}
 		fmt.Fprint(w, `</tbody></table>
 </article>`)
