@@ -65,6 +65,18 @@ need_cmd() {
     command -v "$1" &>/dev/null
 }
 
+# Portable existence checks. `image exists` / `container exists` are podman
+# subcommands that Docker does not have -- on Docker they fail as "unknown
+# command", which reads as "not present" and silently sends the caller down
+# the wrong branch. `inspect` exists on both.
+image_exists() {
+    $CONTAINER_CMD image inspect "$1" >/dev/null 2>&1
+}
+
+container_exists() {
+    $CONTAINER_CMD container inspect "$1" >/dev/null 2>&1
+}
+
 run_sudo() {
     if [[ $EUID -eq 0 ]]; then
         "$@"
@@ -804,7 +816,7 @@ ensure_radiance_base() {
     local src flat tag
     src="$(radiance_base_ref)"
 
-    if ! $CONTAINER_CMD image exists "$src" 2>/dev/null; then
+    if ! image_exists "$src"; then
         log "Pulling ${src} (about 4 GB)..."
         $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
     fi
@@ -818,7 +830,7 @@ ensure_radiance_base() {
     [[ "$tag" == "$src" ]] && tag="latest"
     flat="localhost/vllm-radiance-flat:${tag}"
 
-    if $CONTAINER_CMD image exists "$flat" 2>/dev/null; then
+    if image_exists "$flat"; then
         log "Using previously normalized base image ${flat}"
         export RADIANCE_IMAGE="$flat"
         return 0
@@ -1192,19 +1204,28 @@ container_uninstall() {
     local has_autostart=false
     local has_container=false
     local has_image=false
-    local image_name="localhost/vllm-toolchest:latest"
+
+    # Compose tags the build "vllm-toolchest:latest"; podman stores that under
+    # an implicit localhost/ prefix, Docker does not. Check both.
+    local image_name="" candidate
+    for candidate in "localhost/vllm-toolchest:latest" "vllm-toolchest:latest"; do
+        if image_exists "$candidate"; then
+            image_name="$candidate"
+            break
+        fi
+    done
 
     if is_autostart_enabled; then
         has_autostart=true
         actions+=("Disable auto-start on boot")
     fi
 
-    if $CONTAINER_CMD container exists vllm-toolchest 2>/dev/null; then
+    if container_exists vllm-toolchest; then
         has_container=true
         actions+=("Stop and remove container 'vllm-toolchest'")
     fi
 
-    if $CONTAINER_CMD image exists "$image_name" 2>/dev/null; then
+    if [[ -n "$image_name" ]]; then
         has_image=true
         actions+=("Remove image '${image_name}'")
     fi

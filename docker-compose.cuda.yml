@@ -1,5 +1,10 @@
 services:
   vllm-toolchest:
+    # Tag the build deterministically. Without this, compose derives a
+    # project-based name that neither `setup.sh uninstall` nor the Quadlet
+    # unit (which expects localhost/vllm-toolchest:latest) can find. Podman
+    # stores an unqualified name under an implicit localhost/ prefix.
+    image: vllm-toolchest:latest
     build:
       context: .
       dockerfile: Dockerfile.cuda

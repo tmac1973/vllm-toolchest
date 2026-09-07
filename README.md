@@ -98,12 +98,16 @@ across two R9700s.
 Because radiance pins vLLM and transformers, **a model newer than that release
 will not load**. If you need the newest architectures, use `generic`.
 
-### Note for Podman users
+### Docker and Podman
 
-The published vllm-radiance image is an OCI manifest whose layers carry Docker
-media types. Docker tolerates the mix, but `containers/image` -- the library
-behind Podman, Buildah and Skopeo alike -- refuses to rewrite such a manifest,
-so building on top of it fails with:
+Both are supported, and `setup.sh` adapts to whichever you have.
+
+There is one difference worth knowing about. The published vllm-radiance image
+is an OCI manifest whose layers carry *Docker* media types. Docker tolerates
+the mix and builds on it normally (verified against Docker 29.8). But
+`containers/image` -- the library behind Podman, Buildah and Skopeo alike --
+refuses to rewrite such a manifest, so under Podman the build fails at the
+first instruction:
 
 ```
 unsupported MIME type for compression:
@@ -111,13 +115,21 @@ unsupported MIME type for compression:
 ```
 
 Podman can *run* the image fine; only using it as a build base is affected, and
-no manifest-level repair works (`push --format`, `save`, skopeo all hit the
-same wall). `setup.sh` handles this for you: it probes whether your runtime can
-build on the image and, if not, flattens it into a single-layer local image
-first. That costs roughly 10 GB and a few minutes, once per radiance version.
+no manifest-level repair works -- `push --format`, `save` and skopeo all hit
+the same wall.
 
-The probe means nothing happens on a runtime that accepts the image as-is, so
-this disappears by itself when a conformant image is published upstream.
+`setup.sh` handles this for you. It probes whether your runtime can build on
+the image and only if it cannot does it flatten the image into a single-layer
+local one first, which costs roughly 10 GB and a few minutes, once per radiance
+version:
+
+| Runtime | What happens |
+|---|---|
+| Docker | Probe passes, builds directly from the published image |
+| Podman | Probe fails, image is flattened once, then builds |
+
+Since it is a probe and not a runtime check, this also disappears by itself the
+day a conformant image is published upstream.
 
 ## Development
 
