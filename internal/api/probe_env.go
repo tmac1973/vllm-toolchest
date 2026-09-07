@@ -61,33 +61,30 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 	}
 	modelPath := process.ResolveModelPath(m.LocalPath)
 
-	cfg := process.VLLMStartConfig{
-		Dtype:                m.VLLMConfig.Dtype,
-		MaxModelLen:          attempt.MaxModelLen,
-		TensorParallelSize:   attempt.TensorParallelSize,
-		GPUMemoryUtilization: attempt.GPUMemoryUtilization,
-		EnforceEager:         m.VLLMConfig.EnforceEager,
-		TrustRemoteCode:      m.VLLMConfig.TrustRemoteCode,
-		MaxNumSeqs:           attempt.MaxNumSeqs,
-		Quantization:         m.VLLMConfig.Quantization,
-		LoadFormat:           m.VLLMConfig.LoadFormat,
-		EnablePrefixCaching:  m.VLLMConfig.EnablePrefixCaching,
-		KVCacheDtype:         m.VLLMConfig.KVCacheDtype,
-		EnableChunkedPrefill: m.VLLMConfig.EnableChunkedPrefill,
-	}
-	args := append(
-		[]string{"serve", modelPath,
-			"--host", e.probeHost,
-			"--port", fmt.Sprintf("%d", e.probePort),
-		},
+	// The probe sweeps context length / TP / memory utilisation, but has to
+	// otherwise reproduce the real serve: a backend or speculative config the
+	// model needs changes how much VRAM it takes, so a probe without them
+	// measures a configuration that is never actually served.
+	cfg := m.VLLMConfig.StartConfig()
+	cfg.MaxModelLen = attempt.MaxModelLen
+	cfg.TensorParallelSize = attempt.TensorParallelSize
+	cfg.GPUMemoryUtilization = attempt.GPUMemoryUtilization
+	cfg.MaxNumSeqs = attempt.MaxNumSeqs
+	// A pinned KV pool would hold its size regardless of the memory
+	// utilisation this attempt is sweeping, so the probe would measure the
+	// same configuration every time and report a meaningless ceiling.
+	cfg.KVCacheMemory = 0
+
+	bin, args := e.s.vllmEnv.ServeCommand(modelPath, append(
+		[]string{"--host", e.probeHost, "--port", fmt.Sprintf("%d", e.probePort)},
 		process.BuildArgs(cfg)...,
-	)
-	env := process.BuildEnv(m.Quantization.Method)
+	))
+	env := process.BuildEnv(m.Quantization.Method, e.s.cfg.Radiance.Env()...)
 
 	cmdCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "vllm", args...)
+	cmd := exec.CommandContext(cmdCtx, bin, args...)
 	cmd.Env = append(os.Environ(), env...)
 
 	var logBuf safeBuffer

@@ -89,7 +89,7 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 
 	startCfg := vllmStartConfigFor(m, cfg)
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method)
+	env := process.BuildEnv(m.Quantization.Method, e.s.cfg.Radiance.Env()...)
 
 	// Restart handles the stop-if-running case for us.
 	if err := e.s.process.Restart(modelID, modelPath, args, env); err != nil {
@@ -149,26 +149,16 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	if snap.EnforceEager {
 		eager = true
 	}
-	return process.VLLMStartConfig{
-		Dtype:                dt,
-		MaxModelLen:          maxLen,
-		TensorParallelSize:   tp,
-		GPUMemoryUtilization: gmu,
-		EnforceEager:         eager,
-		TrustRemoteCode:      v.TrustRemoteCode,
-		MaxNumSeqs:           v.MaxNumSeqs,
-		Quantization:         v.Quantization,
-		LoadFormat:           v.LoadFormat,
-		EnablePrefixCaching:  v.EnablePrefixCaching,
-		KVCacheDtype:         kv,
-		EnableChunkedPrefill: v.EnableChunkedPrefill,
-		MaxNumBatchedTokens:  v.MaxNumBatchedTokens,
-		EnableAutoToolChoice: v.EnableAutoToolChoice,
-		ToolCallParser:       v.ToolCallParser,
-		Tokenizer:            v.Tokenizer,
-		ChatTemplate:         v.ChatTemplate,
-		ExtraFlags:           v.ExtraFlags,
-	}
+	// Start from the stored config so every flag the model was configured
+	// with survives, then apply the fields this job's snapshot overrides.
+	cfg := v.StartConfig()
+	cfg.Dtype = dt
+	cfg.MaxModelLen = maxLen
+	cfg.TensorParallelSize = tp
+	cfg.GPUMemoryUtilization = gmu
+	cfg.EnforceEager = eager
+	cfg.KVCacheDtype = kv
+	return cfg
 }
 
 // CurrentMetrics returns the latest GPU snapshot for the benchmark store.

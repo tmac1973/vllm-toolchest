@@ -19,6 +19,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/internal/tuning"
+	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
 
@@ -35,9 +36,16 @@ type Server struct {
 	benchSvc   *benchmark.Service
 	probe      *probeManager
 	tuner      *tuning.Manager
+	vllmEnv    vllmenv.Env
 }
 
 func NewServer(cfg *config.Config) *Server {
+	return NewServerWithEnv(cfg, vllmenv.Detect())
+}
+
+// NewServerWithEnv builds the server against an already-detected vLLM
+// environment, so main can log and reuse the same detection.
+func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
 	mon := monitor.New(3 * time.Second)
 	mon.Start()
 
@@ -54,12 +62,21 @@ func NewServer(cfg *config.Config) *Server {
 		downloader: dl,
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
+		vllmEnv:    env,
+	}
+	// Radiance's entrypoint takes the same arguments `vllm serve` does, so
+	// launching through it keeps its startup banner and topology sweep in the
+	// log stream instead of losing them to the bypassed ENTRYPOINT.
+	if len(env.Launcher) > 0 {
+		s.process.SetLauncher(process.Launcher{Bin: env.Launcher[0], Args: env.Launcher[1:]})
 	}
 	s.bench = benchmark.NewStore(cfg.DataDir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
 	s.probe = newProbeManager(s)
-	s.tuner = tuning.NewManager(cfg.DataDir, cfg.DeviceNameSuffix(), "/opt/vllm-tuner/tune_fp8_wrapper.py", s.process)
+	s.tuner = tuning.NewManager(cfg.DataDir, cfg.DeviceNameSuffix(), env.TunerScript, s.process)
+	s.tuner.SetPython(env.Python)
+	s.tuner.SetConfigsDir(env.BlockFP8ConfigsDir)
 
 	reg.Maintenance()
 	s.pages = s.parseTemplates()
@@ -262,6 +279,14 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		DefaultKVCacheDtype string
 		AutoRestart        bool
 		Theme              string
+
+		Variant           string
+		RadianceVersion   string
+		IsRadiance        bool
+		VLLMDeviceName    string
+		VenvRoot          string
+		AttentionBackends []backendOption
+		Radiance          config.RadianceConfig
 	}{
 		pageData:           pageData{Title: "Settings", Nav: "settings"},
 		ExternalURL:        c.ExternalURL,
@@ -280,6 +305,14 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
 		AutoRestart:        c.AutoRestart,
 		Theme:              c.Theme,
+
+		Variant:           s.vllmEnv.Variant,
+		RadianceVersion:   s.vllmEnv.RadianceVersion,
+		IsRadiance:        s.vllmEnv.IsRadiance(),
+		VLLMDeviceName:    s.deviceName(),
+		VenvRoot:          s.vllmEnv.VenvRoot,
+		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
+		Radiance:          c.Radiance,
 	}
 	s.render(w, "settings.html", data)
 }
@@ -410,3 +443,25 @@ func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
 	slog.Error("partial not found", "name", name)
 	io.WriteString(w, "<!-- partial not found: "+name+" -->")
 }
+
+// SetDeviceName updates the GPU device name tuned kernel configs are keyed by,
+// once the boot-time probe has resolved what the running vLLM reports.
+func (s *Server) SetDeviceName(name string) {
+	if s.tuner != nil {
+		s.tuner.SetDeviceName(name)
+	}
+}
+
+// deviceName is the live device name: the tuner holds the probed value, and
+// the config's architecture-derived one is the fallback before the probe lands.
+func (s *Server) deviceName() string {
+	if s.tuner != nil {
+		if n := s.tuner.DeviceName(); n != "" {
+			return n
+		}
+	}
+	return s.cfg.DeviceNameSuffix()
+}
+
+// VLLMEnv exposes the detected image environment to handlers and templates.
+func (s *Server) VLLMEnv() vllmenv.Env { return s.vllmEnv }

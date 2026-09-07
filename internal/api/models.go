@@ -345,7 +345,43 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	p(`<fieldset><legend>Advanced</legend>`)
 	p(`<label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"%s> Trust remote code</label>
 <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Warning: executes arbitrary code from the model repo</small>`, checked(c.TrustRemoteCode))
-	p(`<label title="Raw CLI flags appended to vllm serve. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4"></label>`, c.ExtraFlags)
+	p(`<div class="grid">`)
+	p(`<label title="Override vLLM's attention backend. Leave on auto unless a model or image needs a specific one.">Attention backend
+<select name="attention_backend">`)
+	for _, opt := range attentionBackendOptions(s.vllmEnv.IsRadiance()) {
+		p(`<option value="%s"%s>%s</option>`, opt.Val, selected(c.AttentionBackend == opt.Val), opt.Label)
+	}
+	p(`</select></label>`)
+	p(`<label title="Parser for models that emit a separate reasoning/thinking channel, e.g. qwen3 or deepseek_r1.">Reasoning parser <input type="text" name="reasoning_parser" value="%s" placeholder="(none)"></label>`, c.ReasoningParser)
+	p(`</div>`)
+
+	p(`<div class="grid">`)
+	p(`<label title="Required alongside prefix caching on hybrid linear-attention (gated-delta-net / mamba) models. 'align' snapshots the recurrent state at block boundaries so those layers become cacheable too.">Mamba cache mode
+<select name="mamba_cache_mode">`)
+	for _, opt := range []struct{ val, label string }{
+		{"", "(vLLM default)"},
+		{"align", "align — makes hybrid models prefix-cacheable"},
+	} {
+		p(`<option value="%s"%s>%s</option>`, opt.val, selected(c.MambaCacheMode == opt.val), opt.label)
+	}
+	p(`</select></label>`)
+	p(`<label title="Pin the KV cache pool size in bytes. 0 lets vLLM size it, which under-reports free VRAM on ROCm. Clear this before measuring anything memory-related — while set, the pool stops responding to other memory changes.">KV cache memory (bytes) <input type="number" name="kv_cache_memory" value="%d" min="0" step="1048576" placeholder="0 = auto"></label>`, c.KVCacheMemory)
+	p(`</div>`)
+
+	p(`<label title="Raw JSON for --speculative-config. Lossless: the target model verifies every drafted token.">Speculative config (JSON) <input type="text" name="speculative_config" value="%s" placeholder='{&#34;method&#34;:&#34;mtp&#34;,&#34;num_speculative_tokens&#34;:8}'></label>`, c.SpeculativeConfig)
+	p(`<label title="Raw JSON for --compilation-config. Most useful for trimming the CUDA-graph capture ladder to sizes this serve can actually reach.">Compilation config (JSON) <input type="text" name="compilation_config" value="%s" placeholder='{&#34;cudagraph_capture_sizes&#34;:[1,2,4,8,16,32]}'></label>`, c.CompilationConfig)
+
+	p(`<div class="grid">`)
+	p(`<label title="Pass --no-async-scheduling. Required when a speculative config sets disable_padded_drafter_batch, which is incompatible with async scheduling."><input type="checkbox" name="disable_async_scheduling" role="switch"%s> Disable async scheduling</label>`, checked(c.DisableAsyncScheduling))
+	p(`<label title="Serve a vision-language checkpoint text-only, skipping its vision tower."><input type="checkbox" name="language_model_only" role="switch"%s> Language model only</label>`, checked(c.LanguageModelOnly))
+	p(`</div>`)
+
+	p(`<div class="grid">`)
+	p(`<label title="Path to a Jinja chat template that overrides the one in the model repo.">Chat template <input type="text" name="chat_template" value="%s" placeholder="(use the model's own)"></label>`, c.ChatTemplate)
+	p(`<label title="Load the tokenizer from a different path or HF repo than the model.">Tokenizer <input type="text" name="tokenizer" value="%s" placeholder="(use the model's own)"></label>`, c.Tokenizer)
+	p(`</div>`)
+
+	p(`<label title="Raw CLI flags appended to vllm serve. Quoted values are kept together, so JSON with spaces survives. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="%s" placeholder="--disable-log-requests --swap-space 4"></label>`, c.ExtraFlags)
 	p(`</fieldset>`)
 
 	// ── Effective flags (read-only) ──
@@ -353,30 +389,19 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 	if effParser == "" && c.EnableAutoToolChoice {
 		effParser = m.ToolUse.ToolCallParser
 	}
-	effCfg := process.VLLMStartConfig{
-		Dtype:                c.Dtype,
-		MaxModelLen:          modelLen,
-		TensorParallelSize:   c.TensorParallelSize,
-		GPUMemoryUtilization: c.GPUMemoryUtilization,
-		EnforceEager:         c.EnforceEager,
-		TrustRemoteCode:      c.TrustRemoteCode,
-		MaxNumSeqs:           c.MaxNumSeqs,
-		Quantization:         c.Quantization,
-		LoadFormat:           c.LoadFormat,
-		EnablePrefixCaching:  c.EnablePrefixCaching,
-		KVCacheDtype:         c.KVCacheDtype,
-		EnableChunkedPrefill: c.EnableChunkedPrefill,
-		MaxNumBatchedTokens:  c.MaxNumBatchedTokens,
-		EnableAutoToolChoice: c.EnableAutoToolChoice,
-		ToolCallParser:       effParser,
-		Tokenizer:            c.Tokenizer,
-		ChatTemplate:         c.ChatTemplate,
-		ExtraFlags:           c.ExtraFlags,
-	}
+	effCfg := c.StartConfig()
+	effCfg.MaxModelLen = modelLen
+	effCfg.ToolCallParser = effParser
+
 	args := process.BuildArgs(effCfg)
 	modelPath := process.ResolveModelPath(m.LocalPath)
-	cmdLine := "vllm serve " + modelPath + " --host 0.0.0.0 --port 8000"
-	for _, a := range args {
+	// Mirror process.Manager.Start exactly -- this box is what the operator
+	// reads to reason about a failed launch, so a preview that differs from
+	// the real argv is worse than none.
+	bin, argv := s.vllmEnv.ServeCommand(modelPath, append(
+		[]string{"--host", "0.0.0.0", "--port", fmt.Sprintf("%d", s.cfg.VLLMPort)}, args...))
+	cmdLine := bin
+	for _, a := range argv {
 		cmdLine += " " + a
 	}
 
@@ -418,21 +443,31 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 	} else {
 		r.ParseForm()
 		cfg = models.VLLMConfig{
-			Dtype:                r.FormValue("dtype"),
-			MaxModelLen:          formInt(r, "max_model_len"),
-			TensorParallelSize:   formInt(r, "tensor_parallel_size"),
-			GPUMemoryUtilization: formFloat(r, "gpu_memory_utilization"),
-			EnforceEager:         r.FormValue("enforce_eager") == "on",
-			EnablePrefixCaching:  r.FormValue("enable_prefix_caching") == "on",
-			EnableChunkedPrefill: r.FormValue("enable_chunked_prefill") == "on",
-			MaxNumSeqs:           formInt(r, "max_num_seqs"),
-			Quantization:         r.FormValue("quantization"),
-			LoadFormat:           r.FormValue("load_format"),
-			KVCacheDtype:         r.FormValue("kv_cache_dtype"),
-			TrustRemoteCode:      r.FormValue("trust_remote_code") == "on",
-			EnableAutoToolChoice: r.FormValue("enable_auto_tool_choice") == "on",
-			ToolCallParser:       r.FormValue("tool_call_parser"),
-			ExtraFlags:           r.FormValue("extra_flags"),
+			Dtype:                  r.FormValue("dtype"),
+			MaxModelLen:            formInt(r, "max_model_len"),
+			TensorParallelSize:     formInt(r, "tensor_parallel_size"),
+			GPUMemoryUtilization:   formFloat(r, "gpu_memory_utilization"),
+			EnforceEager:           r.FormValue("enforce_eager") == "on",
+			EnablePrefixCaching:    r.FormValue("enable_prefix_caching") == "on",
+			EnableChunkedPrefill:   r.FormValue("enable_chunked_prefill") == "on",
+			MaxNumSeqs:             formInt(r, "max_num_seqs"),
+			Quantization:           r.FormValue("quantization"),
+			LoadFormat:             r.FormValue("load_format"),
+			KVCacheDtype:           r.FormValue("kv_cache_dtype"),
+			TrustRemoteCode:        r.FormValue("trust_remote_code") == "on",
+			EnableAutoToolChoice:   r.FormValue("enable_auto_tool_choice") == "on",
+			ToolCallParser:         r.FormValue("tool_call_parser"),
+			ReasoningParser:        r.FormValue("reasoning_parser"),
+			AttentionBackend:       r.FormValue("attention_backend"),
+			MambaCacheMode:         r.FormValue("mamba_cache_mode"),
+			SpeculativeConfig:      strings.TrimSpace(r.FormValue("speculative_config")),
+			CompilationConfig:      strings.TrimSpace(r.FormValue("compilation_config")),
+			KVCacheMemory:          int64(formInt(r, "kv_cache_memory")),
+			DisableAsyncScheduling: r.FormValue("disable_async_scheduling") == "on",
+			LanguageModelOnly:      r.FormValue("language_model_only") == "on",
+			Tokenizer:              r.FormValue("tokenizer"),
+			ChatTemplate:           r.FormValue("chat_template"),
+			ExtraFlags:             r.FormValue("extra_flags"),
 		}
 		if cfg.LoadFormat == "" {
 			cfg.LoadFormat = "auto"

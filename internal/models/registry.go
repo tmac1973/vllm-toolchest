@@ -95,9 +95,37 @@ type VLLMConfig struct {
 	TrustRemoteCode      bool    `json:"trust_remote_code"`
 	EnableAutoToolChoice bool    `json:"enable_auto_tool_choice"`
 	ToolCallParser       string  `json:"tool_call_parser,omitempty"`
+	ReasoningParser      string  `json:"reasoning_parser,omitempty"`
 	Tokenizer            string  `json:"tokenizer,omitempty"`
 	ChatTemplate         string  `json:"chat_template,omitempty"`
 	ExtraFlags           string  `json:"extra_flags,omitempty"`
+
+	// AttentionBackend overrides vLLM's backend choice, e.g.
+	// ROCM_AITER_UNIFIED_ATTN or R4D on the radiance image. Empty = vLLM picks.
+	AttentionBackend string `json:"attention_backend,omitempty"`
+
+	// MambaCacheMode is required alongside EnablePrefixCaching on hybrid
+	// linear-attention models; "align" makes their recurrent state cacheable.
+	MambaCacheMode string `json:"mamba_cache_mode,omitempty"`
+
+	// SpeculativeConfig is the raw JSON passed to --speculative-config,
+	// e.g. {"method":"mtp","num_speculative_tokens":8}.
+	SpeculativeConfig string `json:"speculative_config,omitempty"`
+
+	// CompilationConfig is the raw JSON passed to --compilation-config,
+	// most usefully to trim the CUDA-graph capture ladder.
+	CompilationConfig string `json:"compilation_config,omitempty"`
+
+	// KVCacheMemory pins the KV cache pool size in bytes (0 = let vLLM size
+	// it). Pinned, so clear it before measuring anything memory-related.
+	KVCacheMemory int64 `json:"kv_cache_memory,omitempty"`
+
+	// DisableAsyncScheduling passes --no-async-scheduling; required with
+	// speculative configs that set disable_padded_drafter_batch.
+	DisableAsyncScheduling bool `json:"disable_async_scheduling,omitempty"`
+
+	// LanguageModelOnly serves a vision-language checkpoint text-only.
+	LanguageModelOnly bool `json:"language_model_only,omitempty"`
 }
 
 type registryFile struct {

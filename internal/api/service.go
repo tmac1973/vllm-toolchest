@@ -78,29 +78,10 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 
 	modelPath := process.ResolveModelPath(m.LocalPath)
 
-	startCfg := process.VLLMStartConfig{
-		Dtype:                m.VLLMConfig.Dtype,
-		MaxModelLen:          m.VLLMConfig.MaxModelLen,
-		TensorParallelSize:   m.VLLMConfig.TensorParallelSize,
-		GPUMemoryUtilization: m.VLLMConfig.GPUMemoryUtilization,
-		EnforceEager:         m.VLLMConfig.EnforceEager,
-		TrustRemoteCode:      m.VLLMConfig.TrustRemoteCode,
-		MaxNumSeqs:           m.VLLMConfig.MaxNumSeqs,
-		Quantization:         m.VLLMConfig.Quantization,
-		LoadFormat:           m.VLLMConfig.LoadFormat,
-		EnablePrefixCaching:  m.VLLMConfig.EnablePrefixCaching,
-		KVCacheDtype:         m.VLLMConfig.KVCacheDtype,
-		EnableChunkedPrefill: m.VLLMConfig.EnableChunkedPrefill,
-		MaxNumBatchedTokens:  m.VLLMConfig.MaxNumBatchedTokens,
-		EnableAutoToolChoice: m.VLLMConfig.EnableAutoToolChoice,
-		ToolCallParser:       m.VLLMConfig.ToolCallParser,
-		Tokenizer:            m.VLLMConfig.Tokenizer,
-		ChatTemplate:         m.VLLMConfig.ChatTemplate,
-		ExtraFlags:           m.VLLMConfig.ExtraFlags,
-	}
+	startCfg := m.VLLMConfig.StartConfig()
 
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method)
+	env := process.BuildEnv(m.Quantization.Method, s.cfg.Radiance.Env()...)
 
 	if err := s.process.Start(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
@@ -153,24 +134,9 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modelPath := process.ResolveModelPath(m.LocalPath)
-	startCfg := process.VLLMStartConfig{
-		Dtype:                m.VLLMConfig.Dtype,
-		MaxModelLen:          m.VLLMConfig.MaxModelLen,
-		TensorParallelSize:   m.VLLMConfig.TensorParallelSize,
-		GPUMemoryUtilization: m.VLLMConfig.GPUMemoryUtilization,
-		EnforceEager:         m.VLLMConfig.EnforceEager,
-		TrustRemoteCode:      m.VLLMConfig.TrustRemoteCode,
-		MaxNumSeqs:           m.VLLMConfig.MaxNumSeqs,
-		Quantization:         m.VLLMConfig.Quantization,
-		LoadFormat:           m.VLLMConfig.LoadFormat,
-		EnablePrefixCaching:  m.VLLMConfig.EnablePrefixCaching,
-		KVCacheDtype:         m.VLLMConfig.KVCacheDtype,
-		EnableAutoToolChoice: m.VLLMConfig.EnableAutoToolChoice,
-		ToolCallParser:       m.VLLMConfig.ToolCallParser,
-		ExtraFlags:           m.VLLMConfig.ExtraFlags,
-	}
+	startCfg := m.VLLMConfig.StartConfig()
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method)
+	env := process.BuildEnv(m.Quantization.Method, s.cfg.Radiance.Env()...)
 
 	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {

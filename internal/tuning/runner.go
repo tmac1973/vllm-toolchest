@@ -49,6 +49,8 @@ type Manager struct {
 	dataDir    string
 	deviceName string
 	tunerPath  string // path to tune_fp8_wrapper.py inside container
+	python     string // interpreter that owns the vLLM install
+	configsDir string // vLLM's block-FP8 config dir, for hot-installing results
 	vllmStop   VLLMStopper
 
 	mu     sync.RWMutex
@@ -70,24 +72,62 @@ func NewManager(dataDir, deviceName, tunerPath string, vllmStop VLLMStopper) *Ma
 		dataDir:    dataDir,
 		deviceName: deviceName,
 		tunerPath:  tunerPath,
+		python:     "python",
+		configsDir: DefaultVLLMConfigsDir,
 		vllmStop:   vllmStop,
 		logBuf:     make([]string, 0, 256),
 		subs:       map[chan string]struct{}{},
 	}
 }
 
-func (m *Manager) DeviceName() string { return m.deviceName }
+// SetPython points the tuner at the interpreter that owns the vLLM install.
+func (m *Manager) SetPython(python string) {
+	if python == "" {
+		return
+	}
+	m.mu.Lock()
+	m.python = python
+	m.mu.Unlock()
+}
+
+// SetConfigsDir points the tuner at vLLM's block-FP8 config directory.
+func (m *Manager) SetConfigsDir(dir string) {
+	if dir == "" {
+		return
+	}
+	m.mu.Lock()
+	m.configsDir = dir
+	m.mu.Unlock()
+}
+
+// SetDeviceName updates the device name tuned configs are keyed by. Called
+// once the boot-time probe resolves what the running vLLM actually reports;
+// until then the manager holds the architecture-derived fallback.
+func (m *Manager) SetDeviceName(name string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	m.deviceName = name
+	m.mu.Unlock()
+}
+
+func (m *Manager) DeviceName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.deviceName
+}
 
 // TunedDir returns the directory where tuned config JSONs are persisted on
 // the data volume, keyed by GPU architecture so multi-host setups don't
 // clobber each other.
 func (m *Manager) TunedDir() string {
-	return filepath.Join(m.dataDir, "tuned-kernels", m.deviceName)
+	return filepath.Join(m.dataDir, "tuned-kernels", m.DeviceName())
 }
 
 // IsTuned reports whether a config JSON exists for the given shape.
 func (m *Manager) IsTuned(s Shape, blockN, blockK int) bool {
-	path := filepath.Join(m.TunedDir(), ConfigFilename(s, m.deviceName, blockN, blockK))
+	path := filepath.Join(m.TunedDir(), ConfigFilename(s, m.DeviceName(), blockN, blockK))
 	_, err := os.Stat(path)
 	return err == nil
 }
@@ -251,11 +291,15 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 		"--save-path", m.TunedDir(),
 	}
 
-	m.appendLog(fmt.Sprintf("[tuner] running: python %s", strings.Join(args, " ")))
+	m.mu.RLock()
+	python, configsDir := m.python, m.configsDir
+	m.mu.RUnlock()
+
+	m.appendLog(fmt.Sprintf("[tuner] running: %s %s", python, strings.Join(args, " ")))
 	m.appendLog(fmt.Sprintf("[tuner] shapes: %s", strings.Join(shapeStrs, ", ")))
 	m.appendLog(fmt.Sprintf("[tuner] output dir: %s", m.TunedDir()))
 
-	cmd := exec.CommandContext(ctx, "python", args...)
+	cmd := exec.CommandContext(ctx, python, args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		// tqdm updates its bar with \r overwrites many times per second.
@@ -299,6 +343,18 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 		}
 	}
 	m.appendLog(fmt.Sprintf("[tuner] done — %d/%d shapes have JSONs on disk", tuned, len(shapes)))
+
+	// Link the fresh results into vLLM's config dir so the next launch picks
+	// them up, rather than making the operator restart the container to get
+	// the boot-time install.
+	if n, warn, err := InstallTunedConfigs(m.dataDir, m.DeviceName(), configsDir); err != nil {
+		m.appendLog(fmt.Sprintf("[tuner] installing configs failed: %v", err))
+	} else {
+		m.appendLog(fmt.Sprintf("[tuner] installed %d config(s) into %s", n, configsDir))
+		if warn != "" {
+			m.appendLog("[tuner] " + warn)
+		}
+	}
 	finish(StateCompleted, "")
 }
 

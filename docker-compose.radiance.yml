@@ -1,0 +1,81 @@
+# vllm-toolchest on the vllm-radiance RDNA4 stack.
+#
+# Same shape as docker-compose.rocm.yml -- one container running the vllmctl
+# UI, which spawns vLLM as a child process -- but built on the vllm-radiance
+# image instead of compiling a vLLM stack from source.
+#
+# Requires an AMD RDNA4 card (gfx1201: Radeon AI PRO R9700, RX 9070/XT).
+# For anything else, use docker-compose.rocm.yml.
+services:
+  vllm-toolchest:
+    build:
+      context: .
+      dockerfile: Dockerfile.radiance
+      args:
+        # These two move together: the tuner benchmark script is fetched from
+        # the vLLM tag radiance was built against, and the build fails if the
+        # image's actual vLLM version disagrees.
+        RADIANCE_IMAGE: "${RADIANCE_IMAGE:-stilldeadcode/vllm-radiance:0.9.3}"
+        VLLM_VERSION: "${RADIANCE_VLLM_VERSION:-v0.27.1}"
+        GPU_ARCH: "${GPU_ARCH:-gfx1201}"
+    container_name: vllm-toolchest
+    ports:
+      - "${VLLMCTL_PORT:-3000}:3000"
+      - "${VLLMCTL_INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - vllmctl-data:/data:z
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${HOST_VIDEO_GID:-video}"
+      - "${HOST_RENDER_GID:-render}"
+    ipc: host
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_PTRACE   # py-spy
+      - SYS_NICE     # numactl mempolicy syscalls, only used if you set RADIANCE_NUMA_BIND
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    # List form, deliberately: `KEY: "${KEY:-}"` would define KEY as an EMPTY
+    # string inside the container, and radiance reads an empty RADIANCE_* var
+    # as "off" -- silently disabling the very features this image exists for.
+    # A bare `- KEY` passes the value through only when it is actually set in
+    # the shell or .env, and leaves it undefined otherwise, so the image's own
+    # defaults survive.
+    environment:
+      # Select your RDNA4 GPUs by HIP index, excluding any iGPU. Never use
+      # CUDA_VISIBLE_DEVICES on ROCm.
+      - HIP_VISIBLE_DEVICES
+
+      # Radiance feature switches. All optional -- the image ships working
+      # defaults, and these can also be set from the Settings page at runtime.
+      # See https://codeberg.org/StillDeadcode/vllm-radiance (DOCKERHUB.md) for
+      # the full per-knob reference.
+      - RADIANCE_USE_R4D
+      - RADIANCE_USE_R4D_AR
+      - RADIANCE_USE_R4D_AR_QUANT
+      - RADIANCE_PRESHUFFLE
+      - RADIANCE_FUSE_RMS_QUANT
+      - RADIANCE_SKINNY_GEMM
+      - RADIANCE_DYNAMIC_DRAFT
+      - RADIANCE_DRAFT_SCHEDULE
+      - RADIANCE_DRAFT_TAU
+      - RADIANCE_FAST_DRAFT
+      - RADIANCE_RUN_BWTEST
+      - RADIANCE_NUMA_BIND
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  vllmctl-data:
+    name: vllmctl-data
+    driver: local

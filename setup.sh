@@ -17,6 +17,7 @@ readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 
 GPU_VENDOR=""           # cuda, rocm
 GPU_INFO=""             # human-readable GPU description
+BUILD_VARIANT=""        # generic, radiance — which image to build (rocm only)
 AMD_GFX_TARGET=""       # detected gfx target (e.g. gfx1201) — passed as GPU_ARCH build arg
 AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
 HOST_VIDEO_GID=""       # host video group GID
@@ -171,6 +172,32 @@ detect_gpu() {
     GPU_INFO="No GPU detected (defaulting to CUDA)"
 }
 
+# vllm-radiance is compiled for a single GPU architecture and its prune step
+# asserts it, so the variant is only offered on RDNA4.
+radiance_supported() {
+    [[ "$GPU_VENDOR" == "rocm" ]] && [[ "$AMD_GFX_TARGET" == "gfx1201" ]]
+}
+
+# Choose the image variant. Explicit VARIANT= always wins; otherwise default to
+# the portable build and let install offer the RDNA4 one interactively.
+detect_variant() {
+    if [[ -n "${VARIANT:-}" ]]; then
+        case "$VARIANT" in
+            generic|radiance) BUILD_VARIANT="$VARIANT" ;;
+            *) fatal "Unknown VARIANT=$VARIANT (expected: generic or radiance)" ;;
+        esac
+        if [[ "$BUILD_VARIANT" == "radiance" && "$GPU_VENDOR" != "rocm" ]]; then
+            fatal "VARIANT=radiance needs an AMD ROCm GPU (detected backend: $GPU_VENDOR)"
+        fi
+        return
+    fi
+
+    # Already chosen in a previous run — .env is the record of that decision.
+    [[ -n "$BUILD_VARIANT" ]] && return
+
+    BUILD_VARIANT="generic"
+}
+
 # ─── Detection: Container runtime ────────────────────────────────────────────
 
 detect_container_runtime() {
@@ -320,6 +347,17 @@ check_prerequisites() {
     if [[ "$GPU_VENDOR" == "rocm" ]] && selinux_enforcing && ! selinux_device_bool_set; then
         PREREQS+=("selinux_device_bool")
         ACTIONS+=("Enable SELinux container_use_devices boolean")
+    fi
+
+    # The radiance image is compiled for gfx1201 only; on anything else it
+    # will not run, so fail here rather than after a long pull.
+    if [[ "$BUILD_VARIANT" == "radiance" ]] && ! radiance_supported; then
+        if [[ -z "$AMD_GFX_TARGET" ]]; then
+            warn "Could not detect a gfx target (rocminfo missing?); the radiance"
+            warn "image only runs on gfx1201. Use VARIANT=generic if this is not RDNA4."
+        else
+            fatal "VARIANT=radiance requires gfx1201 (RDNA4); detected ${AMD_GFX_TARGET}. Use VARIANT=generic."
+        fi
     fi
 
     ACTIONS+=("Build container image ($(dockerfile))")
@@ -526,6 +564,44 @@ prompt_models_dir() {
     echo "  → Models will be stored at: $path"
 }
 
+prompt_variant() {
+    if [[ -n "${VARIANT:-}" ]]; then
+        return  # explicitly forced on the command line
+    fi
+    if ! radiance_supported; then
+        return  # not RDNA4 — only the generic image is buildable here
+    fi
+
+    echo ""
+    echo -e "${BOLD}Image variant${NC}"
+    echo ""
+    echo "  Your GPU is RDNA4 (${AMD_GFX_TARGET}), so you can build either image."
+    echo ""
+    echo -e "  ${BOLD}1) generic${NC}   Builds ROCm + vLLM from source, tracking vLLM main."
+    echo    "               Portable, newest model support, no tuning for this card"
+    echo    "               beyond the RDNA4 correctness patches. Long build."
+    echo ""
+    echo -e "  ${BOLD}2) radiance${NC}  Layers this UI on the vllm-radiance image, a from-source"
+    echo    "               stack hand-tuned for gfx1201: custom attention, GEMM and"
+    echo    "               all-reduce kernels, tuned FP8/MoE configs and MTP drafting."
+    echo    "               Much faster to install (pulls a prebuilt base), but vLLM"
+    echo    "               and transformers are pinned, so model support is frozen"
+    echo    "               at that release. Third-party project, credited in README."
+    echo ""
+    echo    "               https://codeberg.org/StillDeadcode/vllm-radiance"
+    echo ""
+
+    local answer
+    read -rp "$(echo -e "  ${BOLD}Variant${NC} [1=generic/2=radiance] (${BUILD_VARIANT}): ")" answer
+    case "${answer:-}" in
+        1|generic)  BUILD_VARIANT="generic" ;;
+        2|radiance) BUILD_VARIANT="radiance" ;;
+        "")         ;;  # keep current
+        *)          warn "Unrecognised choice '$answer' — keeping ${BUILD_VARIANT}" ;;
+    esac
+    echo "  → Building the ${BUILD_VARIANT} image"
+}
+
 load_env_ports() {
     local env_file="${SCRIPT_DIR}/.env"
     if [[ -f "$env_file" ]]; then
@@ -536,17 +612,33 @@ load_env_ports() {
         [[ -n "$val" ]] && VLLMCTL_INFERENCE_PORT="$val" || true
         val="$(grep '^VLLMCTL_MODELS_DIR=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
         [[ -n "$val" ]] && VLLMCTL_MODELS_DIR="$val" || true
+        # The variant decides which compose/Dockerfile every later command
+        # uses, so up/down/logs/rebuild must read it back, not re-ask.
+        val="$(grep '^VLLMCTL_VARIANT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && BUILD_VARIANT="$val" || true
     fi
 }
 
 # ─── Container operations ────────────────────────────────────────────────────
 
+# The radiance variant has its own image; every other combination is keyed by
+# GPU vendor. Keeping GPU_VENDOR as the hardware family (rather than folding
+# radiance into it) is what lets the ROCm prerequisite checks, GID detection
+# and SELinux handling apply unchanged to both ROCm images.
+image_key() {
+    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+        echo "radiance"
+    else
+        echo "$GPU_VENDOR"
+    fi
+}
+
 compose_file() {
-    echo "docker-compose.${GPU_VENDOR}.yml"
+    echo "docker-compose.$(image_key).yml"
 }
 
 dockerfile() {
-    echo "Dockerfile.${GPU_VENDOR}"
+    echo "Dockerfile.$(image_key)"
 }
 
 # compose_cmd builds the full compose command with all required -f flags.
@@ -566,28 +658,39 @@ has_quadlet() {
 # Write .env file for docker-compose variable substitution
 write_env_file() {
     local env_file="${SCRIPT_DIR}/.env"
-    : > "$env_file"
 
-    echo "VLLMCTL_PORT=${VLLMCTL_PORT}" >> "$env_file"
-    echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}" >> "$env_file"
+    # Keys this script owns. Everything else in .env belongs to the user --
+    # HF_TOKEN, VLLMCTL_API_KEY, the RADIANCE_* switches -- and truncating the
+    # file would silently discard it on every install/rebuild.
+    local managed=(
+        VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
+        HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
+    )
 
-    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
-        echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}" >> "$env_file"
-        export VLLMCTL_MODELS_DIR
+    local preserved=""
+    if [[ -f "$env_file" ]]; then
+        local pattern
+        pattern="^($(IFS='|'; echo "${managed[*]}"))="
+        preserved="$(grep -Ev "$pattern" "$env_file" 2>/dev/null || true)"
     fi
 
-    if [[ -n "$AMD_GFX_VERSION" ]]; then
-        echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}" >> "$env_file"
-    fi
-    if [[ -n "$AMD_GFX_TARGET" ]]; then
-        echo "GPU_ARCH=${AMD_GFX_TARGET}" >> "$env_file"
-    fi
-    if [[ -n "$HOST_VIDEO_GID" ]]; then
-        echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}" >> "$env_file"
-    fi
-    if [[ -n "$HOST_RENDER_GID" ]]; then
-        echo "HOST_RENDER_GID=${HOST_RENDER_GID}" >> "$env_file"
-    fi
+    {
+        echo "VLLMCTL_PORT=${VLLMCTL_PORT}"
+        echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}"
+        echo "VLLMCTL_VARIANT=${BUILD_VARIANT}"
+
+        [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
+        [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
+        [[ -n "$AMD_GFX_TARGET" ]]     && echo "GPU_ARCH=${AMD_GFX_TARGET}"
+        [[ -n "$HOST_VIDEO_GID" ]]     && echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}"
+        [[ -n "$HOST_RENDER_GID" ]]    && echo "HOST_RENDER_GID=${HOST_RENDER_GID}"
+
+        # User-owned lines last, so they are visibly theirs to edit.
+        [[ -n "$preserved" ]] && printf '%s\n' "$preserved"
+    } > "$env_file"
+
+    [[ -n "$VLLMCTL_MODELS_DIR" ]] && export VLLMCTL_MODELS_DIR
+    return 0
 }
 
 container_up() {
@@ -701,18 +804,27 @@ generate_quadlet() {
         if [[ -n "$AMD_GFX_VERSION" ]]; then
             hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
         fi
+        local extra_caps=""
+        if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+            # py-spy profiling and the optional RADIANCE_NUMA_BIND mempolicy
+            # syscalls; both no-ops unless used.
+            extra_caps="AddCapability=SYS_PTRACE
+AddCapability=SYS_NICE"
+        fi
         gpu_args="AddDevice=/dev/kfd
 AddDevice=/dev/dri
 SecurityLabelDisable=true
 PodmanArgs=--ipc=host
 GroupAdd=${HOST_VIDEO_GID:-video}
 GroupAdd=${HOST_RENDER_GID:-render}
+${extra_caps}
 ${hsa_env}"
     fi
 
     cat <<EOF
 # Auto-generated by vllm-toolchest setup.sh
 # GPU backend: ${GPU_VENDOR}
+# Image variant: ${BUILD_VARIANT}
 # Runtime: ${CONTAINER_CMD}
 
 [Unit]
@@ -917,6 +1029,11 @@ print_summary() {
     echo ""
     echo -e "  ${CYAN}GPU${NC}           ${GPU_INFO}"
     echo -e "  ${CYAN}Backend${NC}       ${GPU_VENDOR}"
+    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT} (vllm-radiance, gfx1201-tuned)"
+    else
+        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT}"
+    fi
     echo -e "  ${CYAN}Runtime${NC}       ${CONTAINER_VERSION}"
     echo -e "  ${CYAN}Compose${NC}       ${COMPOSE_VERSION}"
     echo -e "  ${CYAN}Distro${NC}        ${DISTRO_NAME}"
@@ -998,12 +1115,27 @@ Auto-start:
 
 Info:
   status      Show detected environment and planned actions, then exit
-  detect      Print detected GPU backend (cuda/rocm) and exit
+  detect      Print detected GPU backend (cuda/rocm) and image variant, exit
   help        Show this help message
 
+Image variants (AMD only):
+  generic     Builds ROCm + vLLM from source, tracking vLLM main. Portable
+              across GPU generations, newest model support, long build.
+  radiance    Layers this UI on the third-party vllm-radiance image, a stack
+              hand-tuned for RDNA4 / gfx1201 (custom attention, GEMM and
+              all-reduce kernels, tuned FP8 + MoE configs, MTP drafting).
+              Fast to install, but vLLM and transformers are pinned, so model
+              support is frozen at that release.
+              https://codeberg.org/StillDeadcode/vllm-radiance
+
+  `install` offers the choice on an RDNA4 card; the answer is stored in .env
+  and reused by every later command. Force it with VARIANT= at any time.
+
 Environment variables:
-  GPU=cuda|rocm            Override GPU auto-detection
-  RUNTIME=docker|podman    Override container runtime auto-detection
+  GPU=cuda|rocm               Override GPU auto-detection
+  VARIANT=generic|radiance    Override image variant (skips the prompt)
+  RUNTIME=docker|podman       Override container runtime auto-detection
+  RADIANCE_IMAGE=<ref>        Base image for the radiance variant
 
 Port configuration is stored in .env (see .env.example for details).
 You can edit .env directly instead of using the interactive setup.
@@ -1017,6 +1149,8 @@ Examples:
   ./setup.sh quick                # fast rebuild (code changes only)
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
+  VARIANT=radiance ./setup.sh install   # build the RDNA4-tuned image
+  VARIANT=generic ./setup.sh rebuild    # switch back to the portable image
 USAGE
 }
 
@@ -1038,18 +1172,30 @@ main() {
     if [[ -n "${GPU:-}" ]]; then
         GPU_VENDOR="$GPU"
         GPU_INFO="(manually set: $GPU)"
+        # Forcing the vendor should skip vendor *detection*, not the AMD probes
+        # that feed the build: without these, GPU_ARCH, the HSA override and the
+        # video/render GIDs are all silently empty.
+        if [[ "$GPU_VENDOR" == "rocm" ]]; then
+            detect_amd_gfx_version
+            detect_host_gpu_gids
+        fi
     else
         detect_gpu
     fi
 
     if [[ "$command" == "detect" ]]; then
-        echo "$GPU_VENDOR"
+        load_env_ports
+        detect_variant
+        echo "$GPU_VENDOR $BUILD_VARIANT"
         exit 0
     fi
 
     detect_container_runtime
     detect_distro
+    # load_env_ports also restores BUILD_VARIANT from a previous install, so it
+    # has to run before detect_variant picks a default.
     load_env_ports
+    detect_variant
 
     case "$command" in
         up)        container_up;   ok "vllm-toolchest started"; exit 0 ;;
@@ -1070,6 +1216,14 @@ main() {
     esac
 
     # install, rebuild, status
+    # Ask which image to build first: the variant decides which Dockerfile the
+    # summary reports and which prerequisites are checked, so choosing after
+    # printing the summary would show the user the wrong plan. `status` is a
+    # dry run and never prompts.
+    if [[ "$command" != "status" ]]; then
+        prompt_variant
+    fi
+
     check_prerequisites
     print_summary
 
