@@ -1,12 +1,17 @@
-<article style="margin:0.5rem 0;">
-  <header style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Configuration: Model &amp; &#34;Friends&#34; &lt;b&gt;</span>
-    <small id="save-status-evil--model-&#34;x&gt;&lt;script&gt;" style="opacity:0.7;"></small>
-  </header>
+<article>
+  <div class="model-config-header">
+    <span>Configure <span class="mc-owner">&mdash; Model &amp; &#34;Friends&#34; &lt;b&gt;</span></span>
+    <span class="mc-restart">Restart required</span>
+  </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> 14.0 GB weights + 0.5 GB overhead = <strong>14.5 GB</strong> &mdash; Fits single GPU
   </div>
-  <form hx-put="/api/models/config?id=evil/model &#34;x&gt;&lt;script&gt;" hx-trigger="change" hx-target="#config-evil--model-&#34;x&gt;&lt;script&gt;" hx-swap="innerHTML" hx-include="closest form">
+  
+  <form hx-put="/api/models/config?id=evil/model &#34;x&gt;&lt;script&gt;" hx-trigger="change delay:500ms" hx-target="#config-evil--model-&#34;x&gt;&lt;script&gt;" hx-swap="innerHTML" hx-include="closest form"
+        hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
+        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
+        hx-on::response-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: '+(event.detail.xhr.responseText.trim()||('server returned '+event.detail.xhr.status)); e.style.display='block';}"
+        hx-on::send-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: could not reach the server.'; e.style.display='block';}">
 
     <fieldset><legend>Core</legend>
       <div class="grid">
@@ -76,6 +81,8 @@
     <fieldset><legend>Effective Command</legend>
       <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/evil/model --host 0.0.0.0 --port 8000 --dtype bfloat16 --max-model-len 12345 --gpu-memory-utilization 0.92 --trust-remote-code --max-num-seqs 4 --reasoning-parser qwen3 --speculative-config={&#34;method&#34;:&#34;mtp&#34;,&#34;num_speculative_tokens&#34;:8} --compilation-config={&#34;cudagraph_capture_sizes&#34;:[1,2,4,8]} --chat-template /tmp/tpl &amp; more.jinja --swap-space 4 --served-model-name my model</pre>
     </fieldset>
+    <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
+    <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>
   </form>
 
   <dialog id="quant-help-evil--model-&#34;x&gt;&lt;script&gt;"><article style="max-width:600px;">

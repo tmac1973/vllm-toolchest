@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 )
 
@@ -201,7 +202,11 @@ func TestConfigPanelEscapesJSONValues(t *testing.T) {
 // -influenced and reach both attributes and text in the model list.
 func TestModelListEscapesHostileNames(t *testing.T) {
 	dir := t.TempDir()
-	s := &Server{cfg: &config.Config{DataDir: dir}, registry: models.NewRegistry(dir)}
+	s := &Server{
+		cfg:      &config.Config{DataDir: dir},
+		registry: models.NewRegistry(dir),
+		process:  process.NewManager("127.0.0.1", 8000),
+	}
 	s.initTemplates()
 	if err := s.registry.Register(&models.Model{
 		ID:          `evil"><script>alert(1)</script>`,

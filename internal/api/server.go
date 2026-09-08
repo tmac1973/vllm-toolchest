@@ -212,12 +212,14 @@ func (s *Server) buildRouter() chi.Router {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/dashboard", s.handleDashboard)
+		r.Get("/gpu-map", s.handleGPUMap)
 
 		r.Route("/models", func(r chi.Router) {
 			r.Get("/", s.handleListModels)
 			r.Post("/scan", s.handleScanModels)
 			r.Get("/get", s.handleGetModel)
 			r.Get("/config-panel", s.handleModelConfigPanel)
+			r.Put("/activate", s.handleActivateModel)
 			r.Put("/config", s.handleUpdateModelConfig)
 			r.Delete("/delete", s.handleDeleteModel)
 		})

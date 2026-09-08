@@ -102,15 +102,17 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		modelLen = maxCtx
 	}
 
+	est := effectiveVRAM(m)
+
 	v := modelConfigView{
 		ID:          m.ID,
 		SafeID:      safeID(m.ID),
-		DisplayName: m.DisplayName,
+		DisplayName: displayNameOf(m),
 
-		WeightGB:   m.VRAMEstimate.WeightMemoryGB,
-		OverheadGB: m.VRAMEstimate.ActivationGB,
-		TotalGB:    m.VRAMEstimate.TotalSingleGPUGB,
-		FitLabel:   m.VRAMEstimate.FitLabel,
+		WeightGB:   est.WeightMemoryGB,
+		OverheadGB: est.ActivationGB,
+		TotalGB:    est.TotalSingleGPUGB,
+		FitLabel:   est.FitLabel,
 
 		MaxCtx:     maxCtx,
 		ModelLen:   modelLen,

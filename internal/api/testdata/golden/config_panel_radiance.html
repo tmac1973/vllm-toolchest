@@ -1,12 +1,17 @@
-<article style="margin:0.5rem 0;">
-  <header style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Configuration: Qwen3.8-27B-FP8</span>
-    <small id="save-status-unsloth--Qwen3-8-27B-FP8" style="opacity:0.7;"></small>
-  </header>
+<article>
+  <div class="model-config-header">
+    <span>Configure <span class="mc-owner">&mdash; Qwen3.8-27B-FP8</span></span>
+    <span class="mc-restart">Restart required</span>
+  </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> 28.8 GB weights + 1.0 GB overhead = <strong>29.8 GB</strong> &mdash; Needs TP=2
   </div>
-  <form hx-put="/api/models/config?id=unsloth/Qwen3.8-27B-FP8" hx-trigger="change" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML" hx-include="closest form">
+  
+  <form hx-put="/api/models/config?id=unsloth/Qwen3.8-27B-FP8" hx-trigger="change delay:500ms" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML" hx-include="closest form"
+        hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
+        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
+        hx-on::response-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: '+(event.detail.xhr.responseText.trim()||('server returned '+event.detail.xhr.status)); e.style.display='block';}"
+        hx-on::send-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: could not reach the server.'; e.style.display='block';}">
 
     <fieldset><legend>Core</legend>
       <div class="grid">
@@ -77,6 +82,8 @@
     <fieldset><legend>Effective Command</legend>
       <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/unsloth/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --max-model-len 32768 --tensor-parallel-size 2 --kv-cache-dtype fp8 --enable-chunked-prefill --enable-auto-tool-choice --tool-call-parser hermes</pre>
     </fieldset>
+    <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
+    <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>
   </form>
 
   <dialog id="quant-help-unsloth--Qwen3-8-27B-FP8"><article style="max-width:600px;">

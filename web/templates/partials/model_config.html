@@ -1,13 +1,22 @@
 {{define "model_config" -}}
-<article style="margin:0.5rem 0;">
-  <header style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Configuration: {{.DisplayName}}</span>
-    <small id="save-status-{{.SafeID}}" style="opacity:0.7;"></small>
-  </header>
+<article>
+  <div class="model-config-header">
+    <span>Configure <span class="mc-owner">&mdash; {{.DisplayName}}</span></span>
+    <span class="mc-restart">Restart required</span>
+  </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> {{printf "%.1f" .WeightGB}} GB weights + {{printf "%.1f" .OverheadGB}} GB overhead = <strong>{{printf "%.1f" .TotalGB}} GB</strong> &mdash; {{.FitLabel}}
   </div>
-  <form hx-put="/api/models/config?id={{.ID}}" hx-trigger="change" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML" hx-include="closest form">
+  {{/* A rejected save leaves the form unswapped and htmx says nothing about
+       it, so the panel just looks frozen — including for changes whose
+       re-render would reveal new fields. Surface the response text, and put
+       the scroll position back afterwards: the panel is halfway down a long
+       page and every auto-save jumped it. */}}
+  <form hx-put="/api/models/config?id={{.ID}}" hx-trigger="change delay:500ms" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML" hx-include="closest form"
+        hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
+        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
+        hx-on::response-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: '+(event.detail.xhr.responseText.trim()||('server returned '+event.detail.xhr.status)); e.style.display='block';}"
+        hx-on::send-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: could not reach the server.'; e.style.display='block';}">
 
     <fieldset><legend>Core</legend>
       <div class="grid">
@@ -122,6 +131,8 @@
     <fieldset><legend>Effective Command</legend>
       <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">{{.EffectiveCommand}}</pre>
     </fieldset>
+    <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
+    <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>
   </form>
 
   <dialog id="quant-help-{{.SafeID}}"><article style="max-width:600px;">

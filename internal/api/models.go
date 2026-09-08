@@ -8,13 +8,15 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
-// modelRow is one row of the models table.
+// modelRow is one card on the models page.
 type modelRow struct {
 	ID          string
 	SafeID      string
 	DisplayName string
+	URL         string
 	Orphaned    bool
 	Quant       quantBadge
 	SizeLabel   string
@@ -23,14 +25,23 @@ type modelRow struct {
 	// has no tool support — which is how the template decides whether to
 	// render the badge at all.
 	ToolParser string
+	// Active is the model Start will launch; Serving is the one the running
+	// process actually has loaded. They differ after a change that has not
+	// been restarted into, which is what NeedsRestart marks.
+	Active       bool
+	Serving      bool
+	NeedsRestart bool
+	// SearchText is what the filter box matches against, lowercased once here
+	// rather than on every keystroke.
+	SearchText string
 }
 
-func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+func (s *Server) modelRows() []modelRow {
 	list := s.registry.List()
 
-	if !isHTMX(r) {
-		respondJSON(w, list)
-		return
+	servingID := ""
+	if st := s.process.GetStatus(); st.State == process.StateRunning || st.State == process.StateStarting {
+		servingID = st.ModelID
 	}
 
 	rows := make([]modelRow, 0, len(list))
@@ -38,20 +49,66 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		row := modelRow{
 			ID:          m.ID,
 			SafeID:      safeID(m.ID),
-			DisplayName: m.DisplayName,
+			DisplayName: displayNameOf(m),
+			URL:         hfModelURL(m.ID),
 			Orphaned:    m.Orphaned,
 			Quant:       newQuantBadge(m.Quantization),
 			SizeLabel:   huggingface.FormatBytes(m.TotalSizeBytes),
-			VRAM:        newVRAMLabel(m.VRAMEstimate),
+			VRAM:        newVRAMLabel(effectiveVRAM(m)),
+			Active:      m.ID == s.cfg.ActiveModel,
+			Serving:     m.ID == servingID,
 		}
 		if m.ToolUse.HasToolSupport {
 			row.ToolParser = m.ToolUse.ToolCallParser
 		}
+		// Only worth flagging while something is actually running: with the
+		// server stopped, Start will pick up the choice anyway.
+		row.NeedsRestart = row.Active && servingID != "" && !row.Serving
+		row.SearchText = strings.ToLower(strings.Join([]string{
+			m.ID, row.DisplayName, row.Quant.Label, m.HFConfig.ModelType,
+		}, " "))
 		rows = append(rows, row)
+	}
+	return rows
+}
+
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	if !isHTMX(r) {
+		respondJSON(w, s.registry.List())
+		return
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "model_list", struct{ Rows []modelRow }{rows})
+	s.renderPartial(w, "model_list", struct{ Rows []modelRow }{s.modelRows()})
+}
+
+// handleActivateModel records which model the Start button launches. The whole
+// list comes back: the previously-active card has to lose its radio, and the
+// restart markers move with the choice.
+func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	m, ok := s.registry.Get(id)
+	if !ok {
+		http.Error(w, "model not found", http.StatusNotFound)
+		return
+	}
+	if m.Orphaned {
+		http.Error(w, "model files are missing", http.StatusConflict)
+		return
+	}
+
+	s.cfg.ActiveModel = id
+	if err := s.cfg.Save(""); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isHTMX(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	respondHTML(w)
+	s.renderPartial(w, "model_list", struct{ Rows []modelRow }{s.modelRows()})
 }
 
 func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
@@ -158,9 +215,17 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if err := s.registry.Delete(id, true); err != nil {
+	// Removing the registry entry and deleting tens of gigabytes are separate
+	// decisions, so the caller has to say which one it meant.
+	keepFiles := r.URL.Query().Get("keep_files") == "true"
+	if err := s.registry.Delete(id, !keepFiles); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+	// Nothing should still be pointed at a model that is gone.
+	if s.cfg.ActiveModel == id {
+		s.cfg.ActiveModel = ""
+		_ = s.cfg.Save("")
 	}
 
 	if isHTMX(r) {
@@ -252,11 +317,21 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOp
 	}
 }
 
-// quantBadge is a model's quantization rendered as a coloured pill by the
-// "quant_badge" template.
+// effectiveVRAM is the estimate to display for a model.
+//
+// A record written before the estimate was stored carries none, and the value
+// is arithmetic over fields already loaded — so compute it rather than showing
+// a dash on the card and zeros in the config panel.
+func effectiveVRAM(m *models.Model) models.VRAMEstimate {
+	if m.VRAMEstimate.WeightMemoryGB == 0 && m.HFConfig.HiddenSize > 0 {
+		return models.EstimateVRAM(m)
+	}
+	return m.VRAMEstimate
+}
+
+// quantBadge is a model's quantization, as one short label.
 type quantBadge struct {
 	Label string
-	Color string
 }
 
 func newQuantBadge(q models.QuantMeta) quantBadge {
@@ -270,7 +345,7 @@ func newQuantBadge(q models.QuantMeta) quantBadge {
 	if q.GGUFQuantType != "" {
 		label = "GGUF " + q.GGUFQuantType
 	}
-	return quantBadge{Label: label, Color: quantBadgeColor(q.Method)}
+	return quantBadge{Label: label}
 }
 
 // vramLabel is a model's VRAM estimate and fit verdict, rendered by the

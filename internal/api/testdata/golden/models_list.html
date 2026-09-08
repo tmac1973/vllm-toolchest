@@ -1,60 +1,202 @@
-<table><thead><tr>
-    <th>Model</th><th>Quant</th><th>Size</th><th>VRAM</th><th>Tools</th><th></th>
-  </tr></thead><tbody><tr>
-      <td>
-        <a href="#" hx-get="/api/models/config-panel?id=TheBloke/Mixtral-8x7B-AWQ" hx-target="#config-TheBloke--Mixtral-8x7B-AWQ" hx-swap="innerHTML">
-          <strong>Mixtral-8x7B-AWQ</strong>
-        </a>
-        <br><small style="opacity:0.6;">TheBloke/Mixtral-8x7B-AWQ</small>
-      </td>
-      <td><span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:#2d8a4e;color:#fff;">AWQ 4-bit</span></td>
-      <td>23.0 GB</td>
-      <td><span style="color:#2d8a4e;">23.5 GB<br><small>Fits single GPU</small></span></td>
-      <td><ins title="mistral">tool use</ins></td>
-      <td>
-        <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-                hx-delete="/api/models/delete?id=TheBloke/Mixtral-8x7B-AWQ"
-                hx-confirm="Delete Mixtral-8x7B-AWQ? This removes all model files."
-                hx-target="closest tr"
-                hx-swap="outerHTML">Delete</button>
-      </td>
-    </tr>
-    <tr id="config-TheBloke--Mixtral-8x7B-AWQ-row"><td colspan="6"><div id="config-TheBloke--Mixtral-8x7B-AWQ"></div></td></tr><tr>
-      <td>
-        <a href="#" hx-get="/api/models/config-panel?id=evil/model &#34;x&gt;&lt;script&gt;" hx-target="#config-evil--model-&#34;x&gt;&lt;script&gt;" hx-swap="innerHTML">
-          <strong>Model &amp; &#34;Friends&#34; &lt;b&gt;</strong>
-        </a> <del>missing</del>
-        <br><small style="opacity:0.6;">evil/model &#34;x&gt;&lt;script&gt;</small>
-      </td>
-      <td><span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:#555;color:#fff;">FP16</span></td>
-      <td>14.0 GB</td>
-      <td><span style="color:#2d8a4e;">14.5 GB<br><small>Fits single GPU</small></span></td>
-      <td></td>
-      <td>
-        <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-                hx-delete="/api/models/delete?id=evil/model &#34;x&gt;&lt;script&gt;"
-                hx-confirm="Delete Model &amp; &#34;Friends&#34; &lt;b&gt;? This removes all model files."
-                hx-target="closest tr"
-                hx-swap="outerHTML">Delete</button>
-      </td>
-    </tr>
-    <tr id="config-evil--model-&#34;x&gt;&lt;script&gt;-row"><td colspan="6"><div id="config-evil--model-&#34;x&gt;&lt;script&gt;"></div></td></tr><tr>
-      <td>
-        <a href="#" hx-get="/api/models/config-panel?id=unsloth/Qwen3.8-27B-FP8" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML">
-          <strong>Qwen3.8-27B-FP8</strong>
-        </a>
-        <br><small style="opacity:0.6;">unsloth/Qwen3.8-27B-FP8</small>
-      </td>
-      <td><span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:#7a3db8;color:#fff;">FP8 8-bit</span></td>
-      <td>28.8 GB</td>
-      <td><span style="color:#b86e00;">29.8 GB<br><small>Needs TP=2</small></span></td>
-      <td><ins title="hermes">tool use</ins></td>
-      <td>
-        <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-                hx-delete="/api/models/delete?id=unsloth/Qwen3.8-27B-FP8"
-                hx-confirm="Delete Qwen3.8-27B-FP8? This removes all model files."
-                hx-target="closest tr"
-                hx-swap="outerHTML">Delete</button>
-      </td>
-    </tr>
-    <tr id="config-unsloth--Qwen3-8-27B-FP8-row"><td colspan="6"><div id="config-unsloth--Qwen3-8-27B-FP8"></div></td></tr></tbody></table>
+<div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by name, quant, architecture…"
+           oninput="filterModels(this.value)" aria-label="Filter models">
+</div>
+<div class="model-card-header">
+    <div></div>
+    <div>Model</div>
+    <div>Quant</div>
+    <div>VRAM est.</div>
+    <div>Size</div>
+    <div></div>
+</div>
+<div class="model-card-list">
+    <article class="model-card"
+         id="model-card-TheBloke--Mixtral-8x7B-AWQ"
+         data-search="thebloke/mixtral-8x7b-awq mixtral-8x7b-awq awq 4-bit mixtral">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+            <input type="radio" name="active-model" style="margin:0;"
+                   
+                   
+                   title="Serve this model when the server starts"
+                   
+                   hx-put="/api/models/activate?id=TheBloke/Mixtral-8x7B-AWQ"
+                   hx-target="#model-list"
+                   hx-swap="innerHTML"
+                   >
+        </div>
+        <div class="model-card-name">Mixtral-8x7B-AWQ<a href="https://huggingface.co/TheBloke/Mixtral-8x7B-AWQ" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a> <mark style="padding:0 0.3rem;font-size:0.75rem;" title="Tool calling via the mistral parser">tools</mark>
+            <br><small style="opacity:0.6;">TheBloke/Mixtral-8x7B-AWQ</small>
+        </div>
+        <div class="model-card-quant"><kbd>AWQ 4-bit</kbd></div>
+        <div class="model-card-vram" title="Estimated VRAM at the configured context length"><span style="color:#2d8a4e;">23.5 GB<br><small>Fits single GPU</small></span></div>
+        <div class="model-card-size">23.0 GB</div>
+        <div class="model-card-actions">
+            <div role="group">
+                <button type="button" class="outline"
+                        hx-get="/api/models/config-panel?id=TheBloke/Mixtral-8x7B-AWQ"
+                        hx-target="#config-TheBloke--Mixtral-8x7B-AWQ"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('config-TheBloke--Mixtral-8x7B-AWQ'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Configure
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Mixtral-8x7B-AWQ</strong> (AWQ 4-bit) from the registry?</p>
+                    <p><small>Its files take 23.0 GB on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=TheBloke/Mixtral-8x7B-AWQ&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=TheBloke/Mixtral-8x7B-AWQ"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-TheBloke--Mixtral-8x7B-AWQ"></div>
+</article>
+    <article class="model-card model-card-orphan"
+         id="model-card-evil--model-&#34;x&gt;&lt;script&gt;"
+         data-search="evil/model &#34;x&gt;&lt;script&gt; model &amp; &#34;friends&#34; &lt;b&gt; fp16 llama">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+            <input type="radio" name="active-model" style="margin:0;"
+                   
+                   disabled
+                   title="Model files are missing — cannot be served"
+                   >
+        </div>
+        <div class="model-card-name">Model &amp; &#34;Friends&#34; &lt;b&gt;<a href="https://huggingface.co/evil/model%20%22x%3e%3cscript%3e" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a> <del>missing</del>
+            <br><small style="opacity:0.6;">evil/model &#34;x&gt;&lt;script&gt;</small>
+        </div>
+        <div class="model-card-quant"><kbd>FP16</kbd></div>
+        <div class="model-card-vram" title="Estimated VRAM at the configured context length"><span style="color:#2d8a4e;">14.5 GB<br><small>Fits single GPU</small></span></div>
+        <div class="model-card-size">14.0 GB</div>
+        <div class="model-card-actions">
+            <div role="group">
+                <button type="button" class="outline"
+                        hx-get="/api/models/config-panel?id=evil/model &#34;x&gt;&lt;script&gt;"
+                        hx-target="#config-evil--model-&#34;x&gt;&lt;script&gt;"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('config-evil--model-&#34;x&gt;&lt;script&gt;'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Configure
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Model &amp; &#34;Friends&#34; &lt;b&gt;</strong> (FP16) from the registry?</p>
+                    <p><small>Its files take 14.0 GB on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=evil/model &#34;x&gt;&lt;script&gt;&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=evil/model &#34;x&gt;&lt;script&gt;"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-evil--model-&#34;x&gt;&lt;script&gt;"></div>
+</article>
+    <article class="model-card"
+         id="model-card-unsloth--Qwen3-8-27B-FP8"
+         data-search="unsloth/qwen3.8-27b-fp8 qwen3.8-27b-fp8 fp8 8-bit qwen3_moe">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+            <input type="radio" name="active-model" style="margin:0;"
+                   
+                   
+                   title="Serve this model when the server starts"
+                   
+                   hx-put="/api/models/activate?id=unsloth/Qwen3.8-27B-FP8"
+                   hx-target="#model-list"
+                   hx-swap="innerHTML"
+                   >
+        </div>
+        <div class="model-card-name">Qwen3.8-27B-FP8<a href="https://huggingface.co/unsloth/Qwen3.8-27B-FP8" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a> <mark style="padding:0 0.3rem;font-size:0.75rem;" title="Tool calling via the hermes parser">tools</mark>
+            <br><small style="opacity:0.6;">unsloth/Qwen3.8-27B-FP8</small>
+        </div>
+        <div class="model-card-quant"><kbd>FP8 8-bit</kbd></div>
+        <div class="model-card-vram" title="Estimated VRAM at the configured context length"><span style="color:#b86e00;">29.8 GB<br><small>Needs TP=2</small></span></div>
+        <div class="model-card-size">28.8 GB</div>
+        <div class="model-card-actions">
+            <div role="group">
+                <button type="button" class="outline"
+                        hx-get="/api/models/config-panel?id=unsloth/Qwen3.8-27B-FP8"
+                        hx-target="#config-unsloth--Qwen3-8-27B-FP8"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('config-unsloth--Qwen3-8-27B-FP8'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Configure
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Qwen3.8-27B-FP8</strong> (FP8 8-bit) from the registry?</p>
+                    <p><small>Its files take 28.8 GB on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=unsloth/Qwen3.8-27B-FP8&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=unsloth/Qwen3.8-27B-FP8"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-unsloth--Qwen3-8-27B-FP8"></div>
+</article>
+</div>
