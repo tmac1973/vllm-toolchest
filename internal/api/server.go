@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,15 +39,17 @@ type Server struct {
 	probe      *probeManager
 	tuner      *tuning.Manager
 	vllmEnv    vllmenv.Env
+	version    string
 }
 
 func NewServer(cfg *config.Config) *Server {
-	return NewServerWithEnv(cfg, vllmenv.Detect())
+	return NewServerWithEnv(cfg, vllmenv.Detect(), "dev")
 }
 
 // NewServerWithEnv builds the server against an already-detected vLLM
-// environment, so main can log and reuse the same detection.
-func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
+// environment, so main can log and reuse the same detection. version is the
+// build stamp shown under the sidebar brand.
+func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Server {
 	mon := monitor.New(3 * time.Second)
 	mon.Start()
 
@@ -64,6 +67,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
 		vllmEnv:    env,
+		version:    version,
 	}
 	// Radiance's entrypoint takes the same arguments `vllm serve` does, so
 	// launching through it keeps its startup banner and topology sweep in the
@@ -113,7 +117,31 @@ func (s *Server) templateFuncs() template.FuncMap {
 		// whether to render a link at all.
 		"hfModelURL": hfModelURL,
 		"add":        func(a, b int) int { return a + b },
+
+		// version is the build stamp under the sidebar brand.
+		"version": s.versionLabel,
+		// themeDefault is the saved theme a browser with no choice of its own
+		// starts from.
+		"themeDefault": func() string { return s.cfg.Theme },
 	}
+}
+
+// versionLabel renders the build stamp for display. Released versions
+// (e.g. "1.2.3") get a "v" prefix; anything git describe produced for an
+// untagged or dirty tree already carries its own marker and reads fine
+// without one.
+func (s *Server) versionLabel() string {
+	v := s.version
+	if v == "" || v == "dev" {
+		return "dev"
+	}
+	if strings.HasPrefix(v, "v") || strings.HasPrefix(v, "dev") {
+		return v
+	}
+	if _, err := strconv.Atoi(strings.SplitN(v, ".", 2)[0]); err == nil {
+		return "v" + v
+	}
+	return v
 }
 
 // initTemplates parses the layout and partials once, then clones that base per

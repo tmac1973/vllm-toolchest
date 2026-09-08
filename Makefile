@@ -26,15 +26,21 @@ endif
 
 COMPOSE_FILE := docker-compose.$(IMAGE_KEY).yml
 
+# ─── Version ────────────────────────────────────────────────────────
+# Stamped into the binary and shown under the sidebar brand, so a running
+# instance can say which build it is. Falls back to "dev" outside a checkout.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
+
 # ─── Local development ──────────────────────────────────────────────
 build:
-	go build -o bin/vllmctl ./cmd/vllmctl
+	go build -ldflags "$(LDFLAGS)" -o bin/vllmctl ./cmd/vllmctl
 
 run: build
 	./bin/vllmctl --config config.yaml
 
 dev:
-	go run ./cmd/vllmctl --config config.yaml
+	go run -ldflags "$(LDFLAGS)" ./cmd/vllmctl --config config.yaml
 
 # ─── Container (auto-detect GPU) ────────────────────────────────────
 docker:

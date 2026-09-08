@@ -19,6 +19,10 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=...". The
+// Makefile fills it from git describe; a plain `go build` leaves it at "dev".
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "/data/config/vllmctl.yaml", "config file path")
 	flag.Parse()
@@ -54,7 +58,7 @@ func main() {
 	// or when running outside the container.
 	installTuned(cfg.DataDir, cfg.DeviceNameSuffix(), env)
 
-	srv := api.NewServerWithEnv(cfg, env)
+	srv := api.NewServerWithEnv(cfg, env, version)
 
 	// Resolve the device name vLLM actually reports, in the background: the
 	// probe imports vLLM and initializes the GPU, which takes tens of seconds

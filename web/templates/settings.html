@@ -288,8 +288,11 @@
 
 <article>
     <header>Theme</header>
-    <label title="Color theme for the web UI. Saved in your browser.">
+    <p>Applied immediately in this browser, and saved as the default every
+       other browser starts from.</p>
+    <label>
         <select name="theme" onchange="setTheme(this.value);">
+            <option value="graphite"{{if eq .Theme "graphite"}} selected{{end}}>Graphite</option>
             <option value="dark"{{if eq .Theme "dark"}} selected{{end}}>Dark</option>
             <option value="light"{{if eq .Theme "light"}} selected{{end}}>Light</option>
             <option value="terminal-green"{{if eq .Theme "terminal-green"}} selected{{end}}>Terminal Green</option>
