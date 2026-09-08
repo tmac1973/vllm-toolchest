@@ -31,7 +31,8 @@ func TestFreeBytesAtUnknownOnGarbage(t *testing.T) {
 }
 
 func TestAvailableForDownloadReservesTheSafetyMargin(t *testing.T) {
-	d := NewDownloader(t.TempDir(), "")
+	tmp := t.TempDir()
+	d := NewDownloader(tmp, filepath.Join(tmp, "models"), "")
 
 	free := d.FreeBytes()
 	if free < 0 {
@@ -51,7 +52,8 @@ func TestAvailableForDownloadReservesTheSafetyMargin(t *testing.T) {
 // Bytes an in-flight download has yet to write are not bytes a new one can
 // have, or two downloads started together both "fit" and neither does.
 func TestPendingBytesCountsWhatIsStillOwed(t *testing.T) {
-	d := NewDownloader(t.TempDir(), "")
+	tmp := t.TempDir()
+	d := NewDownloader(tmp, filepath.Join(tmp, "models"), "")
 	if got := d.PendingBytes(); got != 0 {
 		t.Fatalf("PendingBytes with nothing running = %d, want 0", got)
 	}
@@ -79,7 +81,8 @@ func TestPendingBytesCountsWhatIsStillOwed(t *testing.T) {
 
 // A download that overshot its declared total must not push the budget up.
 func TestPendingBytesIgnoresOvershoot(t *testing.T) {
-	d := NewDownloader(t.TempDir(), "")
+	tmp := t.TempDir()
+	d := NewDownloader(tmp, filepath.Join(tmp, "models"), "")
 	d.active["x--y"] = &download{
 		status:     "downloading",
 		totalBytes: 1000,

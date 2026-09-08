@@ -89,7 +89,7 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 
 	startCfg := vllmStartConfigFor(m, cfg)
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method, e.s.cfg.Radiance.Env()...)
+	env := e.s.launchEnv(m.Quantization.Method)
 
 	// Restart handles the stop-if-running case for us.
 	if err := e.s.process.Restart(modelID, modelPath, args, env); err != nil {

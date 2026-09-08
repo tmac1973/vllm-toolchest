@@ -3,6 +3,7 @@ package api
 import (
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 	dir := t.TempDir()
 	s := &Server{
 		cfg:      &config.Config{DataDir: dir, VLLMPort: 8000},
-		registry: models.NewRegistry(dir),
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		vllmEnv:  env,
 	}
 	s.initTemplates()
@@ -204,7 +205,7 @@ func TestModelListEscapesHostileNames(t *testing.T) {
 	dir := t.TempDir()
 	s := &Server{
 		cfg:      &config.Config{DataDir: dir},
-		registry: models.NewRegistry(dir),
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		process:  process.NewManager("127.0.0.1", 8000),
 	}
 	s.initTemplates()

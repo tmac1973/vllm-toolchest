@@ -49,7 +49,7 @@ func errStat(path string) error {
 
 // FreeBytes is the free space where downloads land, or -1 if unknown.
 func (d *Downloader) FreeBytes() int64 {
-	return freeBytesAt(filepath.Join(d.dataDir, "models"))
+	return freeBytesAt(d.modelsDir)
 }
 
 // PendingBytes is what in-flight downloads have yet to write. Space they will

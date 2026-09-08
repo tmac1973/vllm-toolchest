@@ -21,7 +21,7 @@ func writeFile(t *testing.T, path string, size int) {
 // visible — without it they would be disk usage with no way to reclaim it.
 func TestListIncomplete(t *testing.T) {
 	dir := t.TempDir()
-	d := NewDownloader(dir, "")
+	d := NewDownloader(dir, filepath.Join(dir, "models"), "")
 	models := filepath.Join(dir, "models")
 
 	// Two partial files for one model.
@@ -55,7 +55,8 @@ func TestListIncomplete(t *testing.T) {
 }
 
 func TestListIncompleteEmpty(t *testing.T) {
-	d := NewDownloader(t.TempDir(), "")
+	tmp := t.TempDir()
+	d := NewDownloader(tmp, filepath.Join(tmp, "models"), "")
 	if got := d.ListIncomplete(); len(got) != 0 {
 		t.Errorf("got %+v, want none", got)
 	}
@@ -63,7 +64,7 @@ func TestListIncompleteEmpty(t *testing.T) {
 
 func TestDiscardRemovesPartialsAndEmptyOwner(t *testing.T) {
 	dir := t.TempDir()
-	d := NewDownloader(dir, "")
+	d := NewDownloader(dir, filepath.Join(dir, "models"), "")
 	models := filepath.Join(dir, "models")
 	writeFile(t, filepath.Join(models, "unsloth", "Qwen3.8-27B-FP8", "model.safetensors.part"), 1000)
 
@@ -82,7 +83,7 @@ func TestDiscardRemovesPartialsAndEmptyOwner(t *testing.T) {
 // An owner with another model still under it must survive.
 func TestDiscardKeepsOwnerWithOtherModels(t *testing.T) {
 	dir := t.TempDir()
-	d := NewDownloader(dir, "")
+	d := NewDownloader(dir, filepath.Join(dir, "models"), "")
 	models := filepath.Join(dir, "models")
 	writeFile(t, filepath.Join(models, "unsloth", "A", "model.safetensors.part"), 10)
 	writeFile(t, filepath.Join(models, "unsloth", "B", "model.safetensors"), 10)
@@ -97,7 +98,8 @@ func TestDiscardKeepsOwnerWithOtherModels(t *testing.T) {
 
 // The guard against a path that would take out the whole data directory.
 func TestDiscardRefusesEmptyModelID(t *testing.T) {
-	d := NewDownloader(t.TempDir(), "")
+	tmp := t.TempDir()
+	d := NewDownloader(tmp, filepath.Join(tmp, "models"), "")
 	if err := d.Discard(""); err == nil {
 		t.Error("Discard(\"\") should refuse")
 	}
@@ -108,7 +110,7 @@ func TestDiscardRefusesEmptyModelID(t *testing.T) {
 // every model on the box.
 func TestDiscardRefusesNonModelIDs(t *testing.T) {
 	dir := t.TempDir()
-	d := NewDownloader(dir, "")
+	d := NewDownloader(dir, filepath.Join(dir, "models"), "")
 	models := filepath.Join(dir, "models")
 	writeFile(t, filepath.Join(models, "unsloth", "A", "model.safetensors"), 10)
 

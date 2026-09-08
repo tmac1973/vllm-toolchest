@@ -16,7 +16,11 @@ import (
 type CompletionFunc func(downloadID, modelID, modelDir string)
 
 type Downloader struct {
-	dataDir       string
+	dataDir string
+	// modelsDir is where model files are written. Separate from dataDir
+	// because the Settings page can point it somewhere else entirely — a
+	// second disk, usually — while registry state stays under dataDir.
+	modelsDir     string
 	token         string
 	maxConcurrent int
 	onComplete    CompletionFunc
@@ -25,9 +29,10 @@ type Downloader struct {
 	active map[string]*download
 }
 
-func NewDownloader(dataDir, token string) *Downloader {
+func NewDownloader(dataDir, modelsDir, token string) *Downloader {
 	return &Downloader{
 		dataDir:       dataDir,
+		modelsDir:     modelsDir,
 		token:         token,
 		maxConcurrent: 3,
 		active:        make(map[string]*download),
@@ -285,8 +290,7 @@ func (d *Downloader) Discard(modelID string) error {
 	}
 
 	dir := d.modelDir(modelID)
-	root := filepath.Join(d.dataDir, "models")
-	if dir == "" || dir == d.dataDir || dir == root {
+	if dir == "" || dir == d.dataDir || dir == d.modelsDir {
 		return fmt.Errorf("refusing to remove %q", dir)
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -442,9 +446,9 @@ func (d *Downloader) cleanup(downloadID string, dl *download) {
 func (d *Downloader) modelDir(modelID string) string {
 	parts := strings.SplitN(modelID, "/", 2)
 	if len(parts) == 2 {
-		return filepath.Join(d.dataDir, "models", parts[0], parts[1])
+		return filepath.Join(d.modelsDir, parts[0], parts[1])
 	}
-	return filepath.Join(d.dataDir, "models", modelID)
+	return filepath.Join(d.modelsDir, modelID)
 }
 
 // Cancel stops an in-progress download.

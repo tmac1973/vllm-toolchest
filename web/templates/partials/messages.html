@@ -22,3 +22,22 @@
 
 {{/* A failure. */}}
 {{define "error_message"}}<p><del>{{.}}</del></p>{{end}}
+
+{{/* A save that succeeded but has something to say about what was saved.
+     Deliberately not an error: the values were written and do apply — a
+     risky environment variable warns rather than blocking, so the
+     confirmation has to stay visible above the warnings. */}}
+{{define "saved_with_warnings"}}
+<p><ins>Settings saved.</ins></p>
+{{range .}}<p><mark>&#9888; {{.}}</mark></p>{{end}}
+{{end}}
+
+{{/* The launch environment as KEY=VALUE lines. A line that replaces a value
+     the container image exports says so inline: the vLLM process is started
+     with the container environment plus these appended, and the later entry
+     wins, so this direction — ours replacing theirs — is the one that
+     happens. */}}
+{{define "effective_env"}}
+{{- range .}}{{.Text}}{{if .Replaces}}   ← replaces {{.Replaces}}{{end}}
+{{end -}}
+{{end}}

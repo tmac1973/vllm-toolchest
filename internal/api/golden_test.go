@@ -198,7 +198,7 @@ func newGoldenServer(t *testing.T, env vllmenv.Env) *Server {
 			DefaultDtype:   "auto",
 			ToolUseEnabled: true,
 		},
-		registry: models.NewRegistry(dir),
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		monitor:  monitor.New(0),
 		process:  process.NewManager("127.0.0.1", 8000),
 		vllmEnv:  env,

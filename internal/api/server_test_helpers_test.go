@@ -34,7 +34,7 @@ func newTestServer(t *testing.T, backendURL string) *Server {
 
 	s := &Server{
 		cfg:      cfg,
-		registry: models.NewRegistry(dir),
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		monitor:  monitor.New(0),
 	}
 	s.bench = benchmark.NewStore(dir)

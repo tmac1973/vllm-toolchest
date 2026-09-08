@@ -3,9 +3,11 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
@@ -58,14 +60,7 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	modelPath := process.ResolveModelPath(m.LocalPath)
-
-	startCfg := m.VLLMConfig.StartConfig()
-
-	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method, s.cfg.Radiance.Env()...)
-
-	if err := s.process.Start(m.ID, modelPath, args, env); err != nil {
+	if err := s.startModel(m); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
 			s.renderPartial(w, "error_message", fmt.Sprintf("Failed to start: %s", err))
@@ -118,7 +113,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	modelPath := process.ResolveModelPath(m.LocalPath)
 	startCfg := m.VLLMConfig.StartConfig()
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method, s.cfg.Radiance.Env()...)
+	env := s.launchEnv(m.Quantization.Method)
 
 	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
@@ -191,4 +186,41 @@ func (s *Server) handleServiceHealth(w http.ResponseWriter, r *http.Request) {
 		"model":      status.ModelID,
 		"healthy":    status.State == process.StateRunning,
 	})
+}
+
+// startModel launches one registry model. Shared by the Server page's Start
+// button and the auto-start path so the two cannot drift into launching the
+// same model two different ways.
+func (s *Server) startModel(m *models.Model) error {
+	return s.process.Start(
+		m.ID,
+		process.ResolveModelPath(m.LocalPath),
+		process.BuildArgs(m.VLLMConfig.StartConfig()),
+		s.launchEnv(m.Quantization.Method),
+	)
+}
+
+// AutoStart launches the active model if the setting is on, for the container
+// startup path. It reports problems to the log and returns rather than
+// retrying: the UI is already listening by the time this runs, so a failure
+// here leaves an operator able to look at the log and press Start, which is
+// better than a boot loop.
+func (s *Server) AutoStart() {
+	if !s.cfg.AutoStart {
+		return
+	}
+	id := s.cfg.ActiveModel
+	if id == "" {
+		slog.Warn("auto-start is on but no model is active; nothing to start")
+		return
+	}
+	m, ok := s.registry.Get(id)
+	if !ok {
+		slog.Warn("auto-start model is not in the registry", "model", id)
+		return
+	}
+	slog.Info("auto-starting vLLM", "model", m.ID)
+	if err := s.startModel(m); err != nil {
+		slog.Error("auto-start failed", "model", m.ID, "error", err)
+	}
 }

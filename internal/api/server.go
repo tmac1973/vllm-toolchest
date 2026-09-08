@@ -53,8 +53,8 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 	mon := monitor.New(3 * time.Second)
 	mon.Start()
 
-	reg := models.NewRegistry(cfg.DataDir)
-	dl := huggingface.NewDownloader(cfg.DataDir, cfg.HFToken)
+	reg := models.NewRegistry(cfg.DataDir, cfg.ModelsPath())
+	dl := huggingface.NewDownloader(cfg.DataDir, cfg.ModelsPath(), cfg.HFToken)
 	dl.SetOnComplete(func(downloadID, modelID, modelDir string) {
 		reg.RegisterFromDownload(modelID, modelDir)
 	})
@@ -380,6 +380,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		PreferMarlin        bool
 		DefaultKVCacheDtype string
 		AutoRestart         bool
+		AutoStart           bool
 		Theme               string
 
 		Variant           string
@@ -389,6 +390,15 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VenvRoot          string
 		AttentionBackends []backendOption
 		Radiance          config.RadianceConfig
+
+		RuntimeEnvRows  []runtimeEnvRow
+		RuntimeEnvExtra string
+		EnvWarnings     []string
+		EffectiveEnv    []envLine
+
+		DataDir          string
+		ModelsDir        string
+		DefaultModelsDir string
 	}{
 		pageData:            pageData{Title: "Settings", Nav: "settings"},
 		ExternalURL:         c.ExternalURL,
@@ -406,6 +416,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		PreferMarlin:        c.PreferMarlin,
 		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
 		AutoRestart:         c.AutoRestart,
+		AutoStart:           c.AutoStart,
 		Theme:               c.Theme,
 
 		Variant:           s.vllmEnv.Variant,
@@ -415,6 +426,15 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VenvRoot:          s.vllmEnv.VenvRoot,
 		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
 		Radiance:          c.Radiance,
+
+		RuntimeEnvRows:  s.runtimeEnvRows(),
+		RuntimeEnvExtra: c.RuntimeEnvExtra,
+		EnvWarnings:     c.EnvSet().Warnings(),
+		EffectiveEnv:    s.effectiveEnvLines(),
+
+		DataDir:          c.DataDir,
+		ModelsDir:        c.ModelDir,
+		DefaultModelsDir: c.DefaultModelsPath(),
 	}
 	s.render(w, "settings.html", data)
 }

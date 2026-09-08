@@ -146,17 +146,22 @@ type registryFile struct {
 
 // Registry manages the model inventory.
 type Registry struct {
-	mu       sync.RWMutex
-	models   map[string]*Model
-	dataDir  string
-	filePath string
+	mu      sync.RWMutex
+	models  map[string]*Model
+	dataDir string
+	// modelsDir is where model files live; see config.ModelsPath. Kept apart
+	// from dataDir so the files can sit on another disk while models.json
+	// stays with the rest of the registry state.
+	modelsDir string
+	filePath  string
 }
 
-func NewRegistry(dataDir string) *Registry {
+func NewRegistry(dataDir, modelsDir string) *Registry {
 	r := &Registry{
-		models:   make(map[string]*Model),
-		dataDir:  dataDir,
-		filePath: filepath.Join(dataDir, "config", "models.json"),
+		models:    make(map[string]*Model),
+		dataDir:   dataDir,
+		modelsDir: modelsDir,
+		filePath:  filepath.Join(dataDir, "config", "models.json"),
 	}
 	r.load()
 	return r
@@ -339,7 +344,7 @@ func (r *Registry) Maintenance() {
 }
 
 func (r *Registry) scanForNewModels() {
-	modelsDir := filepath.Join(r.dataDir, "models")
+	modelsDir := r.modelsDir
 	orgs, _ := os.ReadDir(modelsDir)
 	for _, org := range orgs {
 		if !org.IsDir() {

@@ -82,6 +82,11 @@ func main() {
 		}
 	}()
 
+	// Auto-start after the listener is up, and in the background: loading a
+	// model takes minutes, and doing it before serving would leave the UI
+	// unreachable for exactly as long as the operator most wants to watch it.
+	go srv.AutoStart()
+
 	<-ctx.Done()
 	slog.Info("shutting down")
 	httpSrv.Shutdown(context.Background())

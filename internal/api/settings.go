@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
@@ -82,6 +84,17 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg
 	contentType := r.Header.Get("Content-Type")
 
+	// Collected while applying the runtime environment, rendered with the
+	// save confirmation: a risky variable is saved and reported, never
+	// refused.
+	var envWarnings []string
+
+	// The models directory is read at construction time by the registry and
+	// the downloader, so changing it needs a restart to take effect. Saying
+	// so is the difference between a setting that looks broken and one that
+	// is merely deferred.
+	var modelsDirChanged bool
+
 	if strings.Contains(contentType, "json") {
 		var updates map[string]interface{}
 		json.NewDecoder(r.Body).Decode(&updates)
@@ -145,6 +158,81 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			c.ActiveModel = r.FormValue("active_model")
 		}
 
+		// Models directory override. Validated rather than trusted: a
+		// non-existent or relative path here would send every later download
+		// somewhere nobody can find, and the registry would scan an empty
+		// directory and report the models gone.
+		if r.Form.Has("models_dir") {
+			dir := strings.TrimSpace(r.FormValue("models_dir"))
+			if dir != "" {
+				if !filepath.IsAbs(dir) {
+					settingsFail(s, w, r, "Models directory must be an absolute path.")
+					return
+				}
+				info, err := os.Stat(dir)
+				if err != nil {
+					settingsFail(s, w, r, fmt.Sprintf("Models directory %s: %s", dir, err))
+					return
+				}
+				if !info.IsDir() {
+					settingsFail(s, w, r, fmt.Sprintf("Models directory %s is not a directory.", dir))
+					return
+				}
+			}
+			// Only a real change earns the restart warning. The settings
+			// page submits every field on any change, so comparing first is
+			// what stops an unrelated edit from claiming a restart is due.
+			if dir != c.ModelDir {
+				c.ModelDir = dir
+				modelsDirChanged = true
+			}
+		}
+
+		// Auto-start. Its own marker for the same reason the settings form has
+		// one: an unchecked box submits nothing, so a form that did not carry
+		// this field would read as "off".
+		if r.Form.Has("auto_start_touched") {
+			c.AutoStart = r.FormValue("auto_start") == "on"
+		}
+
+		// Runtime environment. Like the settings form, this is gated on a
+		// marker: the curated table submits a field per row, so a form
+		// without the marker (the settings form, the auto-start toggle)
+		// would otherwise read every row as empty and clear the lot.
+		if r.Form.Has("runtime_env_touched") {
+			curated := map[string]string{}
+			for _, o := range config.RuntimeEnvOptions() {
+				if !r.Form.Has("env_" + o.Name) {
+					// Not submitted at all — keep what is stored rather than
+					// treating absence as a clear.
+					if v := c.RuntimeEnv[o.Name]; v != "" {
+						curated[o.Name] = v
+					}
+					continue
+				}
+				if v := strings.TrimSpace(r.FormValue("env_" + o.Name)); v != "" {
+					curated[o.Name] = v
+				}
+			}
+			extra := c.RuntimeEnvExtra
+			if r.Form.Has("runtime_env_extra") {
+				extra = r.FormValue("runtime_env_extra")
+			}
+			set := config.EnvSet{Curated: curated, Extra: extra}
+			if err := set.Validate(); err != nil {
+				if isHTMX(r) {
+					respondHTML(w)
+					s.renderPartial(w, "error_message", err.Error())
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			c.RuntimeEnv = curated
+			c.RuntimeEnvExtra = extra
+			envWarnings = set.Warnings()
+		}
+
 		// Radiance switches. These are tri-state in the UI: "" leaves the
 		// image's own default in place rather than pinning a value that would
 		// then drift as radiance is updated.
@@ -198,10 +286,33 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
+		// Warnings ride along with the confirmation rather than replacing it:
+		// the value was saved and does apply, and a message that only warned
+		// would read as a refusal.
+		if modelsDirChanged {
+			envWarnings = append(envWarnings,
+				"the models directory is read when the service starts — restart the container for this to take effect")
+		}
+		if len(envWarnings) > 0 {
+			s.renderPartial(w, "saved_with_warnings", envWarnings)
+			return
+		}
 		s.renderPartial(w, "ok_message", "Settings saved.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// settingsFail reports a rejected settings change through whichever channel
+// the caller used. htmx does not swap a non-2xx response, so an htmx caller is
+// given 200 and the error partial; everything else gets a real status code.
+func settingsFail(s *Server, w http.ResponseWriter, r *http.Request, msg string) {
+	if isHTMX(r) {
+		respondHTML(w)
+		s.renderPartial(w, "error_message", msg)
+		return
+	}
+	http.Error(w, msg, http.StatusBadRequest)
 }
 
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {

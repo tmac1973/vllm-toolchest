@@ -404,6 +404,28 @@
         button.action-icon:hover { color: var(--pico-primary); }
         .action-icon-placeholder { display: inline-block; width: 1.1rem; }
 
+        /* Settings: the curated runtime-environment table. Two columns, the
+           value control given a fixed width so the pickers line up and the
+           descriptions get everything else. */
+        .env-table { margin-bottom: 0; }
+        .env-table td {
+            vertical-align: middle;
+            font-size: 0.9em;
+            padding: 0.3rem 0.5rem;
+        }
+        .env-table td code { font-size: 0.8em; }
+        .env-table .env-platform { color: var(--pico-muted-color); }
+        .env-table .env-value { width: 13rem; }
+        .env-table .env-value select,
+        .env-table .env-value input { margin: 0; }
+        /* Long KEY=VALUE lines wrap rather than widening the card. */
+        .effective-env {
+            font-size: 0.8em;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            opacity: 0.75;
+        }
+
         /* Model-list filter controls */
         .model-list-controls {
             display: flex;
