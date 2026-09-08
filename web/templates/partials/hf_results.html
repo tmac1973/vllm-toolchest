@@ -47,11 +47,38 @@
     </tbody>
   </table>
 </details>
+<p style="font-size:0.85rem;color:var(--pico-muted-color);margin-bottom:0.5rem;">
+  {{- if lt .AvailableBytes 0}}
+  <small>Disk space unavailable — downloads are not gated by free space.</small>
+  {{- else}}
+  <strong>{{.AvailableLabel}}</strong> available for new downloads
+  <small>(free: {{.FreeLabel}} &middot; reserved: {{.MarginLabel}} safety margin + in-flight downloads)</small>
+  {{- end}}
+</p>
 <div id="dl-{{.SafeID}}">
+  {{- if .AlreadyHave}}
+  <ins title="Already in your local model registry">Downloaded</ins>
+  <a href="/models" style="margin-left:0.4rem;font-size:0.85rem;">View in Models &rarr;</a>
+  {{- else if not .FitsOnDisk}}
+  {{/* Not disabled-and-silent: the tooltip is the only place the numbers
+       behind the refusal appear. */}}
+  <button type="button" disabled
+          style="margin:0;opacity:0.5;cursor:not-allowed;"
+          title="Not enough free disk space — needs {{.SizeLabel}}, and only {{.AvailableLabel}} is available after the {{.MarginLabel}} safety margin and any in-flight downloads. Free some space and try again.">
+    Won't Fit ({{.SizeLabel}})
+  </button>
+  {{- else if .Partial}}
+  <button hx-post="/api/hf/download?model_id={{.ID}}"
+          hx-target="#dl-{{.SafeID}}"
+          hx-swap="innerHTML"
+          style="margin:0;"{{if .Disabled}} disabled{{end}}
+          title="Continue from the {{.PartialLabel}} already on disk">Resume ({{.PartialLabel}} of {{.SizeLabel}} done)</button>
+  {{- else}}
   <button hx-post="/api/hf/download?model_id={{.ID}}"
           hx-target="#dl-{{.SafeID}}"
           hx-swap="innerHTML"
           style="margin:0;"{{if .Disabled}} disabled{{end}}>Download ({{.SizeLabel}})</button>
+  {{- end}}
 </div>
 {{- end}}
 

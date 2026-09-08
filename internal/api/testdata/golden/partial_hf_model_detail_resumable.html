@@ -6,12 +6,10 @@
   <div><small>Download Size</small><br><strong>28.8 GB</strong></div>
 </div>
 <details style="margin-bottom:0.5rem;">
-  <summary>2 files to download</summary>
+  <summary>0 files to download</summary>
   <table style="font-size:0.85rem;">
     <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
     <tbody>
-      <tr><td><code>model-00001-of-00007.safetensors</code></td><td>4.6 GB</td><td>weight</td></tr>
-      <tr><td><code>config.json</code></td><td>1.4 KB</td><td>config</td></tr>
     </tbody>
   </table>
 </details>
@@ -23,5 +21,6 @@
   <button hx-post="/api/hf/download?model_id=unsloth/Qwen3.8-27B-FP8"
           hx-target="#dl-unsloth--Qwen3-8-27B-FP8"
           hx-swap="innerHTML"
-          style="margin:0;">Download (28.8 GB)</button>
+          style="margin:0;"
+          title="Continue from the 12.1 GB already on disk">Resume (12.1 GB of 28.8 GB done)</button>
 </div>

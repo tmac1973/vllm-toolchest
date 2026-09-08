@@ -320,25 +320,43 @@ but it is not parity work.
 
 ---
 
-## Phase 2 — Download / Browse parity
+## Phase 2 — Download / Browse parity — **done**
 
-Keep vllm's quant-format filter and variant grouping — llama has no equivalent.
+Kept vllm's quant-format filter and variant grouping — llama has no equivalent
+— and fixed both of them along the way (see below).
 
-- **Disk-space budget.** Port `llama-toolchest/internal/huggingface/disk.go`.
-  Render the "X GiB available for new downloads (free / reserved)" line and
-  disable the button as `Won't Fit` with the explanatory tooltip when a file
-  exceeds the budget after the safety margin and in-flight downloads.
-- **Already-downloaded state** — `Downloaded` mark plus a `View` link to
-  `/models`, instead of offering the download again.
-- **Resume from the file list** for partial downloads. The panel already
-  offers it (Phase 1d); this is the same action from the file table.
-- **Deferred VRAM estimates.** llama renders the file table immediately and
-  fills VRAM/fit cells later via `hx-swap-oob` (`hf_file_estimates`). Measure
-  first: vllm computes estimates from `config.json` rather than by reading GGUF
-  headers, so this may not be needed. Adopt only if the file list is visibly
-  slow.
+- **Disk-space budget.** Done. `internal/huggingface/disk.go` uses
+  `syscall.Statfs` rather than llama's gopsutil dependency: this project has
+  two dependencies and reads system stats from `/proc` directly, so a library
+  for one call would be out of character. Renders the "X available for new
+  downloads (free · reserved)" line and refuses an oversized model as
+  *Won't Fit* with the numbers in the tooltip.
+- **Already-downloaded state.** Done. The panel offered "Download (28.8 GB)"
+  for a model already in the registry.
+- **Resume from the file list.** Done — the panel's button becomes
+  "Resume (12.1 GB of 28.8 GB done)" when a stopped transfer left bytes behind.
+- **Deferred VRAM estimates.** **Not needed — measured and dropped.** The file
+  list renders in 0.04–0.33s. llama defers because it reads GGUF headers over
+  the network; vllm computes from the `config.json` it has already fetched.
 
-ModelScope as a second source is noted but not committed — it is a large surface
+Two things this phase turned up that were not on the list:
+
+- **The format filter only ever sieved one page.** It narrowed whatever 50
+  repos a query returned by download count, so searching "qwen" for MXFP4 found
+  nothing — not because there are none, but because none are popular enough to
+  reach that page. The bucket's tags now go into the Hub query. Repeated
+  `filter=` parameters AND rather than OR, so a bucket spanning several tags
+  issues one request per tag and merges.
+- **Formats outside a short list were mislabelled as FP16.** Detection matched
+  three tags and six name suffixes; compressed-tensors, MXFP4, quark,
+  auto-round, modelopt and fbgemm_fp8 all came back empty, and empty was
+  rewritten to FP16. A `w4a16` search returned 36 repos badged FP16, every one
+  4-bit. The search API returns `quantization_config` given `&config=true`, so
+  detection asks that first, tags second, name last — the name is wrong often
+  enough to matter, with 18 of 450 sampled repos carrying "AWQ" in the name
+  while being compressed-tensors.
+
+ModelScope as a second source remains uncommitted — a large surface
 (`internal/modelscope`, `internal/modelsource`, per-source URL builders) for a
 capability vllm-toolchest has never had.
 

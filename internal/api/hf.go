@@ -157,6 +157,7 @@ type hfModelDetail struct {
 	QuantInfo    string
 	VRAMLabel    string
 	SizeLabel    string
+	TotalBytes   int64
 	Files        []hfDetailFile
 	// GatedWarning is set when the model needs a token this server does not
 	// have; Disabled then keeps the button from offering a download that
@@ -164,6 +165,22 @@ type hfModelDetail struct {
 	GatedWarning bool
 	VRAMWarning  string
 	Disabled     bool
+
+	// AlreadyHave is set when this model is in the registry: offering to
+	// download it again would silently re-fetch tens of gigabytes.
+	AlreadyHave bool
+	// Partial is set when a stopped download left files on disk, so the
+	// button offers to continue rather than to start.
+	Partial      bool
+	PartialLabel string
+
+	// The disk budget. AvailableBytes is -1 when free space could not be
+	// determined, which reads as "unknown" rather than gating anything.
+	AvailableBytes int64
+	AvailableLabel string
+	FreeLabel      string
+	MarginLabel    string
+	FitsOnDisk     bool
 }
 
 type hfDetailFile struct {
@@ -198,6 +215,14 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 
 	gated := detail.Gated.IsGated() && s.cfg.HFToken == ""
 
+	available := s.downloader.AvailableForDownload()
+	// -1 means free space is unknown. Gating on that would grey out every
+	// button with no way to find out why, so it is treated as "no answer" and
+	// the download is allowed.
+	fits := available < 0 || detail.TotalSize <= available
+
+	_, alreadyHave := s.registry.Get(detail.ID)
+
 	v := hfModelDetail{
 		ID:           detail.ID,
 		SafeID:       safeID(detail.ID),
@@ -205,9 +230,29 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 		QuantInfo:    quantInfo,
 		VRAMLabel:    formatVRAM(detail.VRAMEstGB),
 		SizeLabel:    huggingface.FormatBytes(detail.TotalSize),
+		TotalBytes:   detail.TotalSize,
 		GatedWarning: gated,
 		VRAMWarning:  vramWarning,
 		Disabled:     gated,
+		AlreadyHave:  alreadyHave,
+
+		AvailableBytes: available,
+		AvailableLabel: huggingface.FormatBytes(available),
+		FreeLabel:      huggingface.FormatBytes(s.downloader.FreeBytes()),
+		MarginLabel:    huggingface.FormatBytes(huggingface.DiskSafetyMarginBytes),
+		FitsOnDisk:     fits,
+	}
+
+	// A stopped download left bytes behind; the button should continue it
+	// rather than imply a fresh start.
+	if !alreadyHave {
+		for _, inc := range s.downloader.ListIncomplete() {
+			if inc.ModelID == detail.ID {
+				v.Partial = true
+				v.PartialLabel = huggingface.FormatBytes(inc.OnDisk)
+				break
+			}
+		}
 	}
 	for _, f := range detail.Files {
 		if f.Category == "skip" {
