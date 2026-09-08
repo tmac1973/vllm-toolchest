@@ -10,9 +10,6 @@ import (
 )
 
 func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 
 	if !isHTMX(r) {
@@ -21,44 +18,18 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
-	var badge string
-	switch status.State {
-	case process.StateRunning:
-		badge = `<ins>Running</ins>`
-	case process.StateStarting:
-		badge = `<mark>Starting...</mark>`
-	case process.StateStopping:
-		badge = `<mark>Stopping...</mark>`
-	case process.StateError:
-		badge = `<del>Error</del>`
-	default:
-		badge = `Stopped`
-	}
-
-	hp(`<div>
-  <p>Status: %s</p>`, badge)
-
-	if status.ModelID != "" {
-		hp(`<p>Model: <strong>%s</strong></p>`, status.ModelID)
-	}
-	if status.Uptime != "" {
-		hp(`<p>Uptime: %s (PID: %d)</p>`, status.Uptime, status.PID)
-	}
-	if status.Error != "" {
-		hp(`<p><small><del>%s</del></small></p>`, status.Error)
-	}
-	fmt.Fprint(w, `</div>`)
-
-	// Clear the stale action result message via OOB swap when state settles
-	if status.State != process.StateStarting && status.State != process.StateStopping {
-		fmt.Fprint(w, `<div id="service-action-result" hx-swap-oob="innerHTML"></div>`)
-	}
+	s.renderPartial(w, "service_status", struct {
+		process.Status
+		// Settled reports that the process has stopped moving between
+		// states, which is when the leftover start/stop message is cleared.
+		Settled bool
+	}{
+		Status:  status,
+		Settled: status.State != process.StateStarting && status.State != process.StateStopping,
+	})
 }
 
 func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	var req struct {
 		ModelID string `json:"model_id"`
 	}
@@ -92,7 +63,7 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.process.Start(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><del>Failed to start: %s</del></p>`, err)
+			s.renderPartial(w, "error_message", fmt.Sprintf("Failed to start: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -101,20 +72,17 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		hp(`<p><mark>Starting vLLM with %s...</mark></p>`, m.DisplayName)
+		s.renderPartial(w, "notice", fmt.Sprintf("Starting vLLM with %s...", m.DisplayName))
 		return
 	}
 	respondJSON(w, map[string]string{"status": "starting"})
 }
 
 func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	if err := s.process.Stop(); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><del>%s</del></p>`, err)
+			s.renderPartial(w, "error_message", err.Error())
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -123,16 +91,13 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		fmt.Fprint(w, `<p>vLLM stopped.</p>`)
+		s.renderPartial(w, "plain_message", "vLLM stopped.")
 		return
 	}
 	respondJSON(w, map[string]string{"status": "stopped"})
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 	if status.ModelID == "" {
 		http.Error(w, "no model was running", http.StatusBadRequest)
@@ -153,7 +118,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><del>%s</del></p>`, err)
+			s.renderPartial(w, "error_message", err.Error())
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -162,7 +127,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		fmt.Fprint(w, `<p><mark>Restarting vLLM...</mark></p>`)
+		s.renderPartial(w, "notice", "Restarting vLLM...")
 		return
 	}
 	respondJSON(w, map[string]string{"status": "restarting"})

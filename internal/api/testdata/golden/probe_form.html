@@ -1,0 +1,15 @@
+<article>
+  <header><strong>Probe maximum context length</strong></header>
+  <p style="opacity:0.7;"><small>Binary-search the largest <code>--max-model-len</code> the model can serve without OOM, across several GPU-memory-utilization and max_num_seqs levels. Main vLLM must be stopped.</small></p>
+  <form hx-post="/api/benchmarks/probe-context" hx-target="#probe-progress" hx-swap="innerHTML">
+    <label>Model
+      <select name="model_id" required><option value="TheBloke/Mixtral-8x7B-AWQ">Mixtral-8x7B-AWQ</option><option value="unsloth/Qwen3.8-27B-FP8">Qwen3.8-27B-FP8</option>
+      </select>
+    </label>
+    <label>Tensor parallel size
+      <select name="tp_size"><option value="1" selected>1</option><option value="2">2</option></select>
+    </label>
+    <button type="submit">Start probe</button>
+  </form>
+  <div id="probe-progress"></div>
+</article>

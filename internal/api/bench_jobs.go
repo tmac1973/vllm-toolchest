@@ -20,7 +20,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderJobList(w, s, jobs)
+	s.renderJobList(w, jobs)
 }
 
 // handleGetJob returns one job with its cells. Dual-mode.
@@ -36,16 +36,16 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderJobDetail(w, s, job)
+	s.renderJobDetail(w, job)
 }
 
 // createJobRequest is the POST body for new jobs.
 type createJobRequest struct {
-	Name        string                       `json:"name"`
-	Description string                       `json:"description,omitempty"`
-	ModelIDs    []string                     `json:"model_ids"`
-	Presets     []string                     `json:"presets"`
-	Overrides   *benchmark.ConfigOverrides   `json:"overrides,omitempty"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	ModelIDs    []string                   `json:"model_ids"`
+	Presets     []string                   `json:"presets"`
+	Overrides   *benchmark.ConfigOverrides `json:"overrides,omitempty"`
 }
 
 // handleCreateJob persists a new batch job and dispatches it.
@@ -134,7 +134,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started job <code>%s</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>`, esc(job.ID))
+	s.renderPartial(w, "job_started", job.ID)
 }
 
 // handleCancelJob cancels the in-flight job with the given id.
@@ -212,59 +212,55 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 
 // handleJobForm renders the new-job form partial.
 func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
-	respondHTML(w)
-	allModels := s.registry.List()
-
-	fmt.Fprint(w, `<article>
-  <header><strong>New batch job</strong></header>
-  <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
-    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
-    <label>Description <input type="text" name="description" placeholder="optional"></label>
-
-    <label>Models</label>
-    <div>`)
-
-	if len(allModels) == 0 {
-		fmt.Fprint(w, `<small style="opacity:0.7;">No models in the registry. <a href="/models/browse">Browse HuggingFace</a> first.</small>`)
-	}
-	for _, m := range allModels {
+	type modelChoice struct{ ID, Name string }
+	var choices []modelChoice
+	for _, m := range s.registry.List() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
-		fmt.Fprintf(w, `<label><input type="checkbox" name="model_ids" value="%s"> %s <small style="opacity:0.6;">(%s)</small></label>`,
-			esc(m.ID), esc(displayNameOf(m)), esc(m.ID))
+		choices = append(choices, modelChoice{ID: m.ID, Name: displayNameOf(m)})
 	}
 
-	fmt.Fprint(w, `</div>
+	respondHTML(w)
+	s.renderPartial(w, "job_form", struct {
+		Models  []modelChoice
+		Presets []benchmark.Preset
+	}{choices, benchmark.Presets()})
+}
 
-    <label>Presets</label>
-    <div>`)
-	for _, p := range benchmark.Presets() {
-		fmt.Fprintf(w, `<label><input type="checkbox" name="presets" value="%s"> <code>%s</code> <small style="opacity:0.7;">— %s</small></label>`,
-			esc(p.Name), esc(p.Name), esc(p.Description))
-	}
-	fmt.Fprint(w, `</div>
-
-    <button type="submit">Submit job</button>
-  </form>
-  <div id="bench-job-result"></div>
-</article>`)
+// jobRow is one job's summary line plus the runs it produced.
+type jobRow struct {
+	ID          string
+	Name        string
+	Kind        string
+	Status      string
+	CellSummary string
+	CreatedAt   string
+	CanCancel   bool
+	CanRetry    bool
+	CanDelete   bool
+	Runs        []runRow
 }
 
 // renderJobList renders the job-grouped table for the benchmarks page.
-func renderJobList(w http.ResponseWriter, s *Server, jobs []benchmark.BenchmarkJob) {
-	if len(jobs) == 0 {
-		fmt.Fprint(w, `<p style="opacity:0.7;">No benchmark jobs yet.</p>`)
-		return
-	}
-
+func (s *Server) renderJobList(w http.ResponseWriter, jobs []benchmark.BenchmarkJob) {
+	rows := make([]jobRow, 0, len(jobs))
 	for _, job := range jobs {
-		runs := s.bench.RunsForJob(job.ID)
-
-		cellSummary := fmt.Sprintf("%d cell(s)", len(job.Cells))
+		row := jobRow{
+			ID:          job.ID,
+			Name:        job.Name,
+			Kind:        job.Kind,
+			Status:      job.Status,
+			CellSummary: fmt.Sprintf("%d cell(s)", len(job.Cells)),
+			CreatedAt:   job.CreatedAt.Format("Jan 2 15:04"),
+			CanCancel:   job.Status == benchmark.JobStatusRunning,
+			CanRetry:    job.Status == benchmark.JobStatusFailed || job.Status == benchmark.JobStatusCanceled,
+			// The ad-hoc job is the bucket every unattached run lands in;
+			// deleting it would have nowhere to put them.
+			CanDelete: job.ID != benchmark.AdhocJobID,
+		}
 		if len(job.Cells) > 0 {
-			done := 0
-			failed := 0
+			done, failed := 0, 0
 			for _, c := range job.Cells {
 				switch c.Status {
 				case benchmark.CellStatusCompleted:
@@ -273,121 +269,55 @@ func renderJobList(w http.ResponseWriter, s *Server, jobs []benchmark.BenchmarkJ
 					failed++
 				}
 			}
-			cellSummary = fmt.Sprintf("%d/%d done, %d failed", done, len(job.Cells), failed)
+			row.CellSummary = fmt.Sprintf("%d/%d done, %d failed", done, len(job.Cells), failed)
 		}
-
-		actions := ""
-		switch job.Status {
-		case benchmark.JobStatusRunning:
-			actions = fmt.Sprintf(`<a href="#" hx-post="/api/benchmark-jobs/%s/cancel" hx-confirm="Cancel this job?">cancel</a>`, job.ID)
-		case benchmark.JobStatusFailed, benchmark.JobStatusCanceled:
-			actions = fmt.Sprintf(`<a href="#" hx-post="/api/benchmark-jobs/%s/retry-failed" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">retry failed</a>`, job.ID)
-		}
-		if job.ID != benchmark.AdhocJobID {
-			if actions != "" {
-				actions += " &middot; "
+		for _, run := range s.bench.RunsForJob(job.ID) {
+			r := runRow{
+				ID:        run.ID,
+				ModelName: run.ModelName,
+				Preset:    run.Preset,
+				AvgGen:    "\u2014",
+				AvgTTFT:   "\u2014",
+				Status:    run.Status,
 			}
-			actions += fmt.Sprintf(
-				`<a href="#" hx-delete="/api/benchmark-jobs/%s?runs=orphan" hx-confirm="Delete job (orphan runs to ad-hoc)?" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">delete</a>`,
-				job.ID,
-			)
-		}
-
-		fmt.Fprintf(w, `<article style="margin-bottom:1rem;">
-  <header>
-    <strong>%s</strong>
-    <small style="opacity:0.7;">&middot; %s &middot; %s &middot; %s &middot; %s</small>
-    <span style="float:right;font-size:0.85em;">%s</span>
-  </header>`,
-			esc(job.Name),
-			job.Kind,
-			statusBadgeJob(job.Status),
-			cellSummary,
-			job.CreatedAt.Format("Jan 2 15:04"),
-			actions,
-		)
-
-		if len(runs) > 0 {
-			fmt.Fprint(w, `<table style="margin-top:0.5rem;"><thead><tr>
-  <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th></th>
-</tr></thead><tbody>`)
-			for _, run := range runs {
-				var avgGen, avgTTFT string
-				if run.Summary != nil {
-					avgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
-					avgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
-				} else {
-					avgGen = "—"
-					avgTTFT = "—"
-				}
-				fmt.Fprintf(w, `<tr>
-  <td><small>%s</small></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
-  <td><small>
-    <a href="#" hx-get="/api/benchmarks/%s" hx-target="#bench-detail-%s" hx-swap="innerHTML">details</a>
-  </small></td>
-</tr>
-<tr><td colspan="6"><div id="bench-detail-%s"></div></td></tr>`,
-					esc(run.ModelName), run.Preset, avgGen, avgTTFT, statusBadge(run.Status),
-					run.ID, run.ID, run.ID)
+			if run.Summary != nil {
+				r.AvgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
+				r.AvgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
 			}
-			fmt.Fprint(w, `</tbody></table>`)
+			row.Runs = append(row.Runs, r)
 		}
-
-		fmt.Fprint(w, `</article>`)
+		rows = append(rows, row)
 	}
+	s.renderPartial(w, "job_list", rows)
 }
 
-func renderJobDetail(w http.ResponseWriter, s *Server, job *benchmark.BenchmarkJob) {
-	fmt.Fprintf(w, `<article>
-  <header><strong>%s</strong> &middot; %s &middot; %s</header>
-  <p><small>%s</small></p>
-  <table><thead><tr><th>Model</th><th>Preset</th><th>Status</th><th>Attempt</th><th>Run</th></tr></thead><tbody>`,
-		esc(job.Name), esc(job.Kind), statusBadgeJob(job.Status), esc(job.Description))
+// jobCellRow is one cell of a job's model x preset matrix.
+type jobCellRow struct {
+	ModelID string
+	Preset  string
+	Status  string
+	Error   string
+	Attempt int
+	RunID   string
+}
+
+func (s *Server) renderJobDetail(w http.ResponseWriter, job *benchmark.BenchmarkJob) {
+	cells := make([]jobCellRow, 0, len(job.Cells))
 	for _, c := range job.Cells {
-		runLink := "—"
-		if c.BenchmarkRunID != "" {
-			runLink = fmt.Sprintf(`<a href="#" hx-get="/api/benchmarks/%s">view</a>`, c.BenchmarkRunID)
-		}
-		errText := ""
-		if c.Error != "" {
-			errText = fmt.Sprintf(`<br><small><del>%s</del></small>`, esc(c.Error))
-		}
-		fmt.Fprintf(w, `<tr>
-  <td><small>%s</small></td><td>%s</td><td>%s%s</td><td>%d</td><td><small>%s</small></td>
-</tr>`,
-			esc(c.ModelID), c.Preset, statusBadgeCell(c.Status), errText, c.Attempt, runLink)
+		cells = append(cells, jobCellRow{
+			ModelID: c.ModelID,
+			Preset:  c.Preset,
+			Status:  c.Status,
+			Error:   c.Error,
+			Attempt: c.Attempt,
+			RunID:   c.BenchmarkRunID,
+		})
 	}
-	fmt.Fprint(w, `</tbody></table></article>`)
-}
-
-func statusBadgeJob(s string) string {
-	switch s {
-	case benchmark.JobStatusRunning:
-		return `<mark>running</mark>`
-	case benchmark.JobStatusCompleted:
-		return `<ins>completed</ins>`
-	case benchmark.JobStatusFailed:
-		return `<del>failed</del>`
-	case benchmark.JobStatusCanceled:
-		return `<small>canceled</small>`
-	case benchmark.JobStatusPending:
-		return `<small>pending</small>`
-	default:
-		return s
-	}
-}
-
-func statusBadgeCell(s string) string {
-	switch s {
-	case benchmark.CellStatusRunning:
-		return `<mark>running</mark>`
-	case benchmark.CellStatusCompleted:
-		return `<ins>done</ins>`
-	case benchmark.CellStatusFailed:
-		return `<del>failed</del>`
-	case benchmark.CellStatusSkipped:
-		return `<small>skipped</small>`
-	default:
-		return s
-	}
+	s.renderPartial(w, "job_detail", struct {
+		Name        string
+		Kind        string
+		Status      string
+		Description string
+		Cells       []jobCellRow
+	}{job.Name, job.Kind, job.Status, job.Description, cells})
 }

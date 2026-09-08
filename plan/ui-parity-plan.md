@@ -38,11 +38,70 @@ independent of each other.
 
 ---
 
-## Phase 0 — Move HTML rendering into templates
+## Phase 0 — Move HTML rendering into templates — **done**
 
 No visible change. This is a precondition: the Models card system, the shared
 grid CSS and the OOB-swap patterns in later phases are impractical to maintain
 inside `fmt.Fprintf` strings, and `models.go` alone is 713 lines of them.
+
+### Outcome
+
+Every HTML-emitting handler now renders a partial. `internal/api/htmlout.go`
+(`htmlPrinter`, `esc`, `safeHTML`) is gone — `html/template` does the escaping,
+and does it per context rather than uniformly.
+
+New partials: `model_list`, `model_config`, `dashboard_cards`,
+`service_status`, `hf_results`, `benchmark_runs`, `benchmark_jobs`,
+`bench_about`, `probe`, `messages`.
+
+Verification, in three layers:
+
+- `internal/api/golden_test.go` records every fragment a local, deterministic
+  Server can produce, byte for byte, and classifies a mismatch as
+  whitespace-only or substantive. Run with `-update` to re-record.
+- `internal/api/partials_test.go` renders the partials the handler-level
+  recordings cannot reach — a live download, a finished run, a populated job,
+  a running service — straight from view data. This caught a real bug during
+  the conversion: `$` inside `hf_results`' nested range points at the whole
+  payload, not the group, so every variant badge targeted an empty id.
+- The three config panels were rendered before and after into the same page
+  shell and screenshotted: pixel-identical PNGs. The whitespace changes a
+  readable template introduces do not reach the rendered page.
+
+### Fixed along the way
+
+Each of these was found by the conversion and is a deliberate change, not a
+side effect:
+
+- **`Registry.List()` returned models in map order.** The models table
+  reshuffled its rows on every htmx refresh, and the benchmark and probe model
+  pickers reordered between openings. Now sorted by ID.
+- **A custom context length was silently reset on the next save.** The context
+  picker rendered `name="max_model_len"` unconditionally, so on a model whose
+  context was already custom both it and the custom number box submitted that
+  field; the picker's `"custom"` came first, parsed to 0, and the operator's
+  value was replaced by the model default. The picker now carries the name only
+  when the custom box does not.
+- **Probe results came out in map order too** — the utilization and
+  concurrency tables reordered on every 3s poll. Now sorted.
+- **`onclick`/`onchange` handlers were HTML-escaped, not JS-escaped.** An id
+  containing a quote produced a broken handler. `html/template` escapes by
+  context, so this is now correct by construction. Only reachable with a model
+  id no HuggingFace repo can have, but it is the same class of bug as the one
+  commit `8e22446` fixed.
+
+### Noted, not fixed
+
+- `hx-get="/api/models/config-panel?id=…"` interpolates the model ID into a
+  query string without URL-escaping it. Harmless for real HF repo names (no
+  spaces, quotes or ampersands are valid), and Phase 1d moves these to
+  `/api/models/{id}/…` anyway.
+- `/api/service/logs` returns raw log lines under `text/html`. The client
+  assigns them with `textContent`, so nothing is interpreted; Phase 1c replaces
+  this endpoint with the SSE stream.
+- Several files carry pre-existing `gofmt` drift (struct-tag alignment in
+  `settings.go`, `config.go`, `vram.go` and others). Left alone rather than
+  mixed into this diff.
 
 ### What moves
 

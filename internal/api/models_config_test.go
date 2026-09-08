@@ -19,6 +19,7 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 		registry: models.NewRegistry(dir),
 		vllmEnv:  env,
 	}
+	s.initTemplates()
 
 	m := &models.Model{
 		ID:        "org/model",
@@ -46,8 +47,10 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 	return s, m
 }
 
-// The config panel is built with hand-written Printf'd HTML, where a mismatched
-// verb count silently renders "%!d(MISSING)" into the page instead of failing.
+// html/template resolves field names when it executes, not when it parses, so
+// a field renamed on the Go side renders as empty rather than failing — and the
+// control it fed silently loses its value. Execute the panel and look for the
+// fields.
 func TestModelConfigPanelRenders(t *testing.T) {
 	s, m := configTestServer(t, vllmenv.Env{
 		Variant: vllmenv.VariantRadiance, Launcher: []string{"/opt/radiance_entrypoint.sh"},
@@ -199,6 +202,7 @@ func TestConfigPanelEscapesJSONValues(t *testing.T) {
 func TestModelListEscapesHostileNames(t *testing.T) {
 	dir := t.TempDir()
 	s := &Server{cfg: &config.Config{DataDir: dir}, registry: models.NewRegistry(dir)}
+	s.initTemplates()
 	if err := s.registry.Register(&models.Model{
 		ID:          `evil"><script>alert(1)</script>`,
 		DisplayName: `<img src=x onerror=alert(2)>`,

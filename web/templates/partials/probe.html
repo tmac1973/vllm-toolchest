@@ -1,0 +1,55 @@
+{{define "probe_form" -}}
+{{if .Blocked -}}
+<article><em>Stop the main vLLM process before probing. <a href="/service">Service page &rarr;</a></em></article>
+{{- else -}}
+<article>
+  <header><strong>Probe maximum context length</strong></header>
+  <p style="opacity:0.7;"><small>Binary-search the largest <code>--max-model-len</code> the model can serve without OOM, across several GPU-memory-utilization and max_num_seqs levels. Main vLLM must be stopped.</small></p>
+  <form hx-post="/api/benchmarks/probe-context" hx-target="#probe-progress" hx-swap="innerHTML">
+    <label>Model
+      <select name="model_id" required>
+      {{- range .Models}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    <label>Tensor parallel size
+      <select name="tp_size"><option value="1" selected>1</option><option value="2">2</option></select>
+    </label>
+    <button type="submit">Start probe</button>
+  </form>
+  <div id="probe-progress"></div>
+</article>
+{{- end}}
+{{- end}}
+
+{{/* The probe result: a utilization sweep and a concurrency sweep, each row
+     offering to write its finding back onto the model's config. */}}
+{{define "probe_result" -}}
+<article id="probe-progress">
+  <header><strong>Context probe results</strong> &middot; <small>tp={{.TPSize}}</small> &middot; <small>{{.Timestamp}}</small></header>
+  <h4>By GPU memory utilization</h4>
+  <table><thead><tr><th>util</th><th>max context</th><th></th></tr></thead><tbody>
+  {{- range .ByUtilization}}
+    <tr>
+      <td>{{.Label}}</td><td>{{.MaxContext}}</td>
+      <td>{{template "probe_apply" .Vals}}</td>
+    </tr>
+  {{- end}}
+  </tbody></table>
+  <h4>By max_num_seqs (at highest probed utilization)</h4>
+  <table><thead><tr><th>max_num_seqs</th><th>max context</th><th></th></tr></thead><tbody>
+  {{- range .ByConcurrency}}
+    <tr>
+      <td>{{.Label}}</td><td>{{.MaxContext}}</td>
+      <td>{{template "probe_apply" .Vals}}</td>
+    </tr>
+  {{- end}}
+  </tbody></table>
+</article>
+{{- end}}
+
+{{define "probe_apply"}}<button class="secondary outline" style="padding:0.1rem 0.5rem;"
+       hx-post="/api/benchmarks/probe-context/apply"
+       hx-vals='{{.}}'
+       hx-ext="json-enc">apply</button>{{end}}
+
+{{define "probe_started"}}<p>Started probe <code>{{.ProbeID}}</code> for <code>{{.ModelID}}</code>. <a href="#" hx-get="/api/benchmarks/probe-context/{{.ProbeID}}/progress" hx-target="#probe-progress" hx-swap="innerHTML" hx-trigger="every 3s">Refresh progress</a></p>{{end}}

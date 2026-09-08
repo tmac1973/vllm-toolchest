@@ -1,0 +1,113 @@
+{{define "run_list" -}}
+{{if not . -}}
+<p style="opacity:0.7;">No benchmark runs yet. Load a model and start a run from the form above.</p>
+{{- else -}}
+<table><thead><tr>
+    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th>When</th><th></th>
+  </tr></thead><tbody>
+{{- range . -}}
+<tr>
+      <td><strong>{{.ModelName}}</strong><br><small style="opacity:0.6;">{{.ModelID}}</small></td>
+      <td>{{.Preset}}</td>
+      <td>{{.AvgGen}}</td>
+      <td>{{.AvgTTFT}}</td>
+      <td>{{template "run_status" .Status}}</td>
+      <td><small>{{.When}}</small></td>
+      <td><small>
+        {{- if .Running -}}
+        <a href="#" hx-post="/api/benchmarks/{{.ID}}/cancel" hx-confirm="Cancel this run?">cancel</a>
+        {{- else -}}
+        <a href="#" hx-get="/api/benchmarks/{{.ID}}" hx-target="#bench-detail-{{.ID}}" hx-swap="innerHTML">details</a> &middot; <a href="#" hx-delete="/api/benchmarks/{{.ID}}" hx-confirm="Delete this run?" hx-target="#bench-runs" hx-swap="none" hx-on::after-request="if(event.detail.successful) htmx.ajax('GET','/api/benchmarks/','#bench-runs')">delete</a>
+        {{- end -}}
+      </small></td>
+    </tr>
+    <tr><td colspan="7"><div id="bench-detail-{{.ID}}"></div></td></tr>
+{{- end -}}
+</tbody></table>
+{{- end}}
+{{- end}}
+
+{{define "run_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>completed</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{define "run_detail" -}}
+<article style="margin:0.5rem 0;">
+  <header><strong>{{.Preset}}</strong> &middot; <small>{{.CreatedAt}}</small></header>
+  {{- if .Error}}
+  <p><del>error:</del> {{.Error}}</p>
+  {{- end}}
+  {{- if .Progress}}
+  <p><em>{{.Progress}}</em></p>
+  {{- end}}
+  <small>
+    <strong>config</strong>:
+    {{.ConfigLine}}
+  </small>
+  {{- if .Results}}
+  <table><thead><tr>
+    <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
+  </tr></thead><tbody>
+  {{- range .Results}}
+    <tr>
+      <td>{{.N}}</td><td>{{.PromptTokens}}</td><td>{{.GenTokens}}</td><td>{{printf "%.0f" .TTFTMs}}</td><td>{{printf "%.0f" .TotalMs}}</td><td>{{printf "%.1f" .PromptTokPerSec}}</td><td>{{printf "%.1f" .GenTokPerSec}}</td>
+    </tr>
+  {{- end}}
+  </tbody></table>
+  {{- end}}
+  {{- if .Summary}}
+  <p><strong>summary</strong>: {{.Summary}}</p>
+  {{- end}}
+  {{- if .Warnings}}
+  <small><strong>warnings</strong>:<ul>
+  {{- range .Warnings}}
+    <li>{{.}}</li>
+  {{- end}}
+  </ul></small>
+  {{- end}}
+</article>
+{{- end}}
+
+{{define "benchmark_form" -}}
+{{if not .LoadedID -}}
+<article><em>Start a model on the <a href="/service">Service</a> page before running benchmarks.</em></article>
+{{- else -}}
+<article>
+  <header><strong>New benchmark</strong> &middot; <small>running against <code>{{.LoadedName}}</code></small></header>
+  <form hx-post="/api/benchmarks/" hx-target="#bench-start-result" hx-swap="innerHTML">
+    <input type="hidden" name="model_id" value="{{.LoadedID}}">
+    <label>Preset
+      <select name="preset" required>
+      {{- range .Presets}}<option value="{{.Name}}">{{.Label}}</option>{{end}}
+      </select>
+    </label>
+    <button type="submit">Start run</button>
+  </form>
+  <div id="bench-start-result"></div>
+</article>
+{{- end}}
+{{- end}}
+
+{{define "run_started"}}<p>Started run <code>{{.}}</code>. <a href="#" hx-get="/api/benchmarks/" hx-target="#bench-runs">Refresh list</a></p>{{end}}
+
+{{/* The passive timing table: what real traffic through the proxy measured. */}}
+{{define "timings_list" -}}
+{{if not . -}}
+<p style="opacity:0.6;"><small>No active inference traffic captured yet. Recent /v1/chat/completions activity will populate this.</small></p>
+{{- else -}}
+<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
+{{- range .}}
+  <tr>
+    <td><small>{{.ModelID}}</small></td>
+    <td>{{printf "%.1f" .AvgGenTPS}} t/s</td>
+    <td>{{.Count}}</td>
+    <td><small>{{.LastSeen}}</small></td>
+  </tr>
+{{- end}}
+</tbody></table>
+{{- end}}
+{{- end}}

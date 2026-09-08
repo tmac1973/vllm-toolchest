@@ -1,0 +1,21 @@
+<table><thead><tr>
+    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th>When</th><th></th>
+  </tr></thead><tbody><tr>
+      <td><strong>Qwen3.8-27B-FP8</strong><br><small style="opacity:0.6;">unsloth/Qwen3.8-27B-FP8</small></td>
+      <td>internal-thorough</td>
+      <td>102.2 t/s</td>
+      <td>928 ms</td>
+      <td><ins>completed</ins></td>
+      <td><small>Sep 7 19:31</small></td>
+      <td><small><a href="#" hx-get="/api/benchmarks/r1" hx-target="#bench-detail-r1" hx-swap="innerHTML">details</a> &middot; <a href="#" hx-delete="/api/benchmarks/r1" hx-confirm="Delete this run?" hx-target="#bench-runs" hx-swap="none" hx-on::after-request="if(event.detail.successful) htmx.ajax('GET','/api/benchmarks/','#bench-runs')">delete</a></small></td>
+    </tr>
+    <tr><td colspan="7"><div id="bench-detail-r1"></div></td></tr><tr>
+      <td><strong>Mixtral-8x7B-AWQ</strong><br><small style="opacity:0.6;">TheBloke/Mixtral-8x7B-AWQ</small></td>
+      <td>internal-quick</td>
+      <td>—</td>
+      <td>—</td>
+      <td><mark>running</mark></td>
+      <td><small>Sep 8 09:02</small></td>
+      <td><small><a href="#" hx-post="/api/benchmarks/r2/cancel" hx-confirm="Cancel this run?">cancel</a></small></td>
+    </tr>
+    <tr><td colspan="7"><div id="bench-detail-r2"></div></td></tr></tbody></table>

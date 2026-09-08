@@ -1,0 +1,38 @@
+{{define "model_list"}}
+{{- if not .Rows -}}
+<p>No models registered. <a href="/models/browse">Download models from HuggingFace &rarr;</a></p>
+{{- else -}}
+<table><thead><tr>
+    <th>Model</th><th>Quant</th><th>Size</th><th>VRAM</th><th>Tools</th><th></th>
+  </tr></thead><tbody>
+{{- range .Rows -}}
+<tr>
+      <td>
+        <a href="#" hx-get="/api/models/config-panel?id={{.ID}}" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML">
+          <strong>{{.DisplayName}}</strong>
+        </a>{{if .Orphaned}} <del>missing</del>{{end}}
+        <br><small style="opacity:0.6;">{{.ID}}</small>
+      </td>
+      <td>{{template "quant_badge" .Quant}}</td>
+      <td>{{.SizeLabel}}</td>
+      <td>{{template "vram_label" .VRAM}}</td>
+      <td>{{if .ToolParser}}<ins title="{{.ToolParser}}">tool use</ins>{{end}}</td>
+      <td>
+        <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
+                hx-delete="/api/models/delete?id={{.ID}}"
+                hx-confirm="Delete {{.DisplayName}}? This removes all model files."
+                hx-target="closest tr"
+                hx-swap="outerHTML">Delete</button>
+      </td>
+    </tr>
+    <tr id="config-{{.SafeID}}-row"><td colspan="6"><div id="config-{{.SafeID}}"></div></td></tr>
+{{- end -}}
+</tbody></table>
+{{- end -}}
+{{end}}
+
+{{/* One model's quantization badge. Takes a quantBadge. */}}
+{{define "quant_badge"}}<span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:0.2rem;font-size:0.7rem;background:{{.Color}};color:#fff;">{{.Label}}</span>{{end}}
+
+{{/* One model's VRAM estimate and how it fits. Takes a vramLabel. */}}
+{{define "vram_label"}}{{if .Unknown}}—{{else}}<span style="color:{{.Color}};">{{printf "%.1f" .TotalGB}} GB<br><small>{{.FitLabel}}</small></span>{{end}}{{end}}

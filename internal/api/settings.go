@@ -79,9 +79,6 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	c := s.cfg
 	contentType := r.Header.Get("Content-Type")
 
@@ -181,7 +178,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if err := c.Save(""); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><del>Failed to save: %s</del></p>`, err)
+			s.renderPartial(w, "error_message", fmt.Sprintf("Failed to save: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -190,16 +187,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if isHTMX(r) {
 		respondHTML(w)
-		fmt.Fprint(w, `<p><ins>Settings saved.</ins></p>`)
+		s.renderPartial(w, "ok_message", "Settings saved.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs come from HuggingFace and
-	// error text quotes whatever input produced it.
-	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 	health := map[string]interface{}{
 		"vllm_running": status.State == "running",
@@ -221,9 +215,9 @@ func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	if isHTMX(r) {
 		respondHTML(w)
 		if status.State == "running" {
-			fmt.Fprint(w, `<p><ins>vLLM is running and healthy.</ins></p>`)
+			s.renderPartial(w, "ok_message", "vLLM is running and healthy.")
 		} else {
-			hp(`<p>vLLM is %s.</p>`, status.State)
+			s.renderPartial(w, "plain_message", fmt.Sprintf("vLLM is %s.", status.State))
 		}
 		return
 	}

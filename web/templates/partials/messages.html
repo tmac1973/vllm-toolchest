@@ -1,0 +1,24 @@
+{{/* The one-line responses handlers swap into a result slot. Kept here rather
+     than inline in Go so nothing in this package builds HTML from a string
+     again — that is how an unescaped model ID got into the page before. */}}
+
+{{/* Something went wrong, or the user needs to do something first. */}}
+{{define "notice"}}<p><mark>{{.}}</mark></p>{{end}}
+
+{{/* Neutral status text. */}}
+{{define "plain_message"}}<p>{{.}}</p>{{end}}
+
+{{/* Something finished. */}}
+{{define "ok_message"}}<p><ins>{{.}}</ins></p>{{end}}
+
+{{/* Handed back when a download starts: an empty bar that immediately begins
+     polling itself, so the operator sees movement before the first byte. */}}
+{{define "download_started" -}}
+<div hx-get="/api/hf/download/{{.}}/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
+  <progress value="0" max="100" style="margin:0;"></progress>
+  <small>Starting download...</small>
+</div>
+{{- end}}
+
+{{/* A failure. */}}
+{{define "error_message"}}<p><del>{{.}}</del></p>{{end}}

@@ -26,6 +26,7 @@ import (
 type Server struct {
 	cfg        *config.Config
 	pages      map[string]*template.Template
+	partials   *template.Template
 	router     chi.Router
 	monitor    *monitor.Monitor
 	hfClient   *huggingface.Client
@@ -79,13 +80,13 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
 	s.tuner.SetConfigsDir(env.BlockFP8ConfigsDir)
 
 	reg.Maintenance()
-	s.pages = s.parseTemplates()
+	s.initTemplates()
 	s.router = s.buildRouter()
 	return s
 }
 
-func (s *Server) parseTemplates() map[string]*template.Template {
-	funcMap := template.FuncMap{
+func (s *Server) templateFuncs() template.FuncMap {
+	return template.FuncMap{
 		"divf": func(a, b interface{}) float64 {
 			af, bf := toFloat64(a), toFloat64(b)
 			if bf == 0 {
@@ -100,12 +101,33 @@ func (s *Server) parseTemplates() map[string]*template.Template {
 			return (value / max) * 100
 		},
 		"formatBytes": huggingface.FormatBytes,
-	}
 
-	base := template.Must(template.New("").Funcs(funcMap).ParseFS(web.Templates,
+		// cssID makes a model ID usable as an element id and as the tail of a
+		// querySelector — model IDs carry slashes and dots, which are selector
+		// syntax.
+		"cssID": safeID,
+		// divGB renders a byte count in GiB.
+		"divGB": func(bytes int64) float64 { return float64(bytes) / (1024 * 1024 * 1024) },
+		// hfModelURL is the HuggingFace page for a model, or "" when the ID is
+		// not a linkable owner/name pair — which is how the templates decide
+		// whether to render a link at all.
+		"hfModelURL": hfModelURL,
+		"add":        func(a, b int) int { return a + b },
+	}
+}
+
+// initTemplates parses the layout and partials once, then clones that base per
+// page so each page's {{define "content"}} does not collide with the others.
+//
+// The partials are kept as their own handle as well: fragment handlers render
+// them directly, and looking one up by walking the pages map (which is what
+// this used to do) picked whichever page Go's map iteration reached first.
+func (s *Server) initTemplates() {
+	base := template.Must(template.New("").Funcs(s.templateFuncs()).ParseFS(web.Templates,
 		"templates/layout.html",
 		"templates/partials/*.html",
 	))
+	s.partials = template.Must(base.Clone())
 
 	pages := map[string]*template.Template{}
 	pageFiles := []string{
@@ -121,7 +143,17 @@ func (s *Server) parseTemplates() map[string]*template.Template {
 		clone := template.Must(base.Clone())
 		pages[pf] = template.Must(clone.ParseFS(web.Templates, "templates/"+pf))
 	}
-	return pages
+	s.pages = pages
+}
+
+// hfModelURL returns the HuggingFace page for an owner/name model ID, or ""
+// for anything that is not one.
+func hfModelURL(modelID string) string {
+	parts := strings.Split(modelID, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return "https://huggingface.co/" + modelID
 }
 
 func (s *Server) Router() http.Handler {
@@ -263,22 +295,22 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg
 	data := struct {
 		pageData
-		ExternalURL        string
-		VLLMPort           int
-		HasAPIKey          bool
-		HasHFToken         bool
-		DefaultDtype       string
-		GPUMemoryUtil      float64
-		MaxNumSeqs         int
-		AttentionBackend   string
-		EnforceEager       bool
-		EnablePrefixCache  bool
-		ToolUseEnabled     bool
-		DefaultToolParser  string
-		PreferMarlin       bool
+		ExternalURL         string
+		VLLMPort            int
+		HasAPIKey           bool
+		HasHFToken          bool
+		DefaultDtype        string
+		GPUMemoryUtil       float64
+		MaxNumSeqs          int
+		AttentionBackend    string
+		EnforceEager        bool
+		EnablePrefixCache   bool
+		ToolUseEnabled      bool
+		DefaultToolParser   string
+		PreferMarlin        bool
 		DefaultKVCacheDtype string
-		AutoRestart        bool
-		Theme              string
+		AutoRestart         bool
+		Theme               string
 
 		Variant           string
 		RadianceVersion   string
@@ -288,23 +320,23 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		AttentionBackends []backendOption
 		Radiance          config.RadianceConfig
 	}{
-		pageData:           pageData{Title: "Settings", Nav: "settings"},
-		ExternalURL:        c.ExternalURL,
-		VLLMPort:           c.VLLMPort,
-		HasAPIKey:          c.APIKey != "",
-		HasHFToken:         c.HFToken != "",
-		DefaultDtype:       c.DefaultDtype,
-		GPUMemoryUtil:      c.GPUMemoryUtil,
-		MaxNumSeqs:         c.MaxNumSeqs,
-		AttentionBackend:   c.AttentionBackend,
-		EnforceEager:       c.EnforceEager,
-		EnablePrefixCache:  c.EnablePrefixCache,
-		ToolUseEnabled:     c.ToolUseEnabled,
-		DefaultToolParser:  c.DefaultToolParser,
-		PreferMarlin:       c.PreferMarlin,
+		pageData:            pageData{Title: "Settings", Nav: "settings"},
+		ExternalURL:         c.ExternalURL,
+		VLLMPort:            c.VLLMPort,
+		HasAPIKey:           c.APIKey != "",
+		HasHFToken:          c.HFToken != "",
+		DefaultDtype:        c.DefaultDtype,
+		GPUMemoryUtil:       c.GPUMemoryUtil,
+		MaxNumSeqs:          c.MaxNumSeqs,
+		AttentionBackend:    c.AttentionBackend,
+		EnforceEager:        c.EnforceEager,
+		EnablePrefixCache:   c.EnablePrefixCache,
+		ToolUseEnabled:      c.ToolUseEnabled,
+		DefaultToolParser:   c.DefaultToolParser,
+		PreferMarlin:        c.PreferMarlin,
 		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
-		AutoRestart:        c.AutoRestart,
-		Theme:              c.Theme,
+		AutoRestart:         c.AutoRestart,
+		Theme:               c.Theme,
 
 		Variant:           s.vllmEnv.Variant,
 		RadianceVersion:   s.vllmEnv.RadianceVersion,
@@ -324,94 +356,72 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// dashboardGPU is one GPU's line on the dashboard card.
+type dashboardGPU struct {
+	Name    string
+	UsedGB  float64
+	TotalGB float64
+	// Versions is the driver and ROCm line, already joined, or "" when
+	// neither is known.
+	Versions string
+}
+
+// dashboardTiming is one model's row in the live-activity table.
+type dashboardTiming struct {
+	ModelID   string
+	AvgGenTPS float64
+	Count     int
+	LastSeen  string
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	metrics := s.monitor.Current()
-	apiURL := strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1"
 
-	// GPU card
-	gpuHTML := "<p>No GPU detected</p>"
-	if len(metrics.GPU) > 0 {
-		var buf strings.Builder
-		for _, g := range metrics.GPU {
-			buf.WriteString(fmt.Sprintf(`<p><strong>%s</strong></p>`, g.Name))
-			buf.WriteString(fmt.Sprintf(`<p>VRAM: %.1f / %.1f GB</p>`,
-				float64(g.VRAMUsedMB)/1024, float64(g.VRAMTotalMB)/1024))
-			if g.ROCmVersion != "" || g.DriverVersion != "" {
-				buf.WriteString("<p>")
-				if g.DriverVersion != "" {
-					buf.WriteString(fmt.Sprintf("Driver: %s", g.DriverVersion))
-				}
-				if g.ROCmVersion != "" {
-					if g.DriverVersion != "" {
-						buf.WriteString(" &middot; ")
-					}
-					buf.WriteString(fmt.Sprintf("ROCm: %s", g.ROCmVersion))
-				}
-				buf.WriteString("</p>")
-			}
+	gpus := make([]dashboardGPU, 0, len(metrics.GPU))
+	for _, g := range metrics.GPU {
+		var versions string
+		switch {
+		case g.DriverVersion != "" && g.ROCmVersion != "":
+			versions = fmt.Sprintf("Driver: %s \u00b7 ROCm: %s", g.DriverVersion, g.ROCmVersion)
+		case g.DriverVersion != "":
+			versions = "Driver: " + g.DriverVersion
+		case g.ROCmVersion != "":
+			versions = "ROCm: " + g.ROCmVersion
 		}
-		gpuHTML = buf.String()
+		gpus = append(gpus, dashboardGPU{
+			Name:     g.Name,
+			UsedGB:   float64(g.VRAMUsedMB) / 1024,
+			TotalGB:  float64(g.VRAMTotalMB) / 1024,
+			Versions: versions,
+		})
 	}
 
-	// Tool use indicator
-	toolUseLabel := "disabled"
-	if s.cfg.ToolUseEnabled {
-		toolUseLabel = "<ins>enabled</ins>"
-	}
-
-	// Service status
-	svcStatus := s.process.GetStatus()
-	var svcBadge, svcModel string
-	switch svcStatus.State {
-	case "running":
-		svcBadge = "<ins>Running</ins>"
-	case "starting":
-		svcBadge = "<mark>Starting...</mark>"
-	case "error":
-		svcBadge = "<del>Error</del>"
-	default:
-		svcBadge = "Stopped"
-	}
-	if svcStatus.ModelID != "" {
-		svcModel = fmt.Sprintf(`<p>Model: <strong>%s</strong></p>`, svcStatus.ModelID)
+	timings := []dashboardTiming{}
+	for _, a := range s.bench.RunningAverages() {
+		timings = append(timings, dashboardTiming{
+			ModelID:   a.ModelID,
+			AvgGenTPS: a.AvgGenTPS,
+			Count:     a.Count,
+			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
+		})
 	}
 
 	respondHTML(w)
-	fmt.Fprintf(w, `<div class="grid">
-    <article>
-        <header>vLLM Service</header>
-        <p>%s</p>
-        %s
-        <p><a href="/service">Manage &rarr;</a></p>
-    </article>
-    <article>
-        <header>GPU</header>
-        %s
-    </article>
-    <article>
-        <header>Models</header>
-        <p><strong>%d</strong> models registered</p>
-        <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
-    </article>
-    <article>
-        <header>API Endpoint</header>
-        <pre style="user-select: all; cursor: pointer;">%s</pre>
-        <p>Tool use: %s</p>
-        <p><a href="/settings">Settings &rarr;</a></p>
-    </article>
-</div>`, svcBadge, svcModel, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
-
-	if avgs := s.bench.RunningAverages(); len(avgs) > 0 {
-		fmt.Fprint(w, `<article style="margin-top:1rem;">
-    <header>Live inference activity <small style="opacity:0.6;">(passive timing from the OpenAI proxy)</small></header>
-    <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
-		for _, a := range avgs {
-			fmt.Fprintf(w, `<tr><td><small>%s</small></td><td>%.1f t/s</td><td>%d</td><td><small>%s</small></td></tr>`,
-				esc(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
-		}
-		fmt.Fprint(w, `</tbody></table>
-</article>`)
-	}
+	s.renderPartial(w, "dashboard_cards", struct {
+		Service        process.Status
+		GPUs           []dashboardGPU
+		ModelCount     int
+		APIURL         string
+		ToolUseEnabled bool
+		Timings        []dashboardTiming
+	}{
+		Service:        s.process.GetStatus(),
+		GPUs:           gpus,
+		ModelCount:     len(s.registry.List()),
+		APIURL:         strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1",
+		ToolUseEnabled: s.cfg.ToolUseEnabled,
+		Timings:        timings,
+	})
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -430,18 +440,24 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	}
 }
 
-func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
-	// Look for the partial in any of the parsed page templates
-	for _, tmpl := range s.pages {
-		if t := tmpl.Lookup(name); t != nil {
-			if err := t.Execute(w, data); err != nil {
-				slog.Error("partial render error", "name", name, "error", err)
-			}
-			return
-		}
+// renderPartial writes one partial to w. Callers are fragment handlers
+// responding to htmx, so there is no page around the output to carry an error:
+// a failure is logged and left as an HTML comment, which is visible in the
+// swapped-in markup without breaking the surrounding page.
+func (s *Server) renderPartial(w io.Writer, name string, data any) {
+	t := s.partials.Lookup(name)
+	if t == nil {
+		slog.Error("partial not found", "name", name)
+		io.WriteString(w, "<!-- partial not found: "+name+" -->")
+		return
 	}
-	slog.Error("partial not found", "name", name)
-	io.WriteString(w, "<!-- partial not found: "+name+" -->")
+	if err := t.Execute(w, data); err != nil {
+		// html/template writes what it rendered before the error, so the
+		// response is already partly written by this point; the comment marks
+		// where it stopped.
+		slog.Error("partial render error", "name", name, "error", err)
+		io.WriteString(w, "<!-- render error: "+name+" -->")
+	}
 }
 
 // SetDeviceName updates the GPU device name tuned kernel configs are keyed by,

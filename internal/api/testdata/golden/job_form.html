@@ -1,0 +1,18 @@
+<article>
+  <header><strong>New batch job</strong></header>
+  <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
+    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" placeholder="optional"></label>
+
+    <label>Models</label>
+    <div><label><input type="checkbox" name="model_ids" value="TheBloke/Mixtral-8x7B-AWQ"> Mixtral-8x7B-AWQ <small style="opacity:0.6;">(TheBloke/Mixtral-8x7B-AWQ)</small></label><label><input type="checkbox" name="model_ids" value="unsloth/Qwen3.8-27B-FP8"> Qwen3.8-27B-FP8 <small style="opacity:0.6;">(unsloth/Qwen3.8-27B-FP8)</small></label>
+    </div>
+
+    <label>Presets</label>
+    <div><label><input type="checkbox" name="presets" value="internal-quick"> <code>internal-quick</code> <small style="opacity:0.7;">— Single streaming chat completion at 512-token prompt / 128 gen tokens. Sanity check after model load.</small></label><label><input type="checkbox" name="presets" value="internal-standard"> <code>internal-standard</code> <small style="opacity:0.7;">— Three streaming chat completions at 128 / 512 / 2048-token prompts (128 gen tokens). Captures TTFT and gen-TPS scaling across short contexts.</small></label><label><input type="checkbox" name="presets" value="internal-thorough"> <code>internal-thorough</code> <small style="opacity:0.7;">— Five repetitions at 128 / 512 / 2048 / 8192-token prompts with 256 generated tokens. Stresses long-context prefill.</small></label><label><input type="checkbox" name="presets" value="internal-long-ctx"> <code>internal-long-ctx</code> <small style="opacity:0.7;">— Single 32768-token prompt with 512 generated tokens. Stresses KV cache, paged attention, and KV-cache dtype on long contexts.</small></label><label><input type="checkbox" name="presets" value="benchy-quick"> <code>benchy-quick</code> <small style="opacity:0.7;">— Single-shot llama-benchy run. Smoke test for the engine-agnostic comparison path.</small></label><label><input type="checkbox" name="presets" value="benchy-standard"> <code>benchy-standard</code> <small style="opacity:0.7;">— Three-run llama-benchy benchmark at 2048-token prompts. Comparable to llama-toolchest&#39;s benchy-standard.</small></label><label><input type="checkbox" name="presets" value="benchy-concurrency"> <code>benchy-concurrency</code> <small style="opacity:0.7;">— Stress vLLM&#39;s continuous batching by sweeping concurrency. Highlights where prefill saturates vs. throughput scales.</small></label>
+    </div>
+
+    <button type="submit">Submit job</button>
+  </form>
+  <div id="bench-job-result"></div>
+</article>

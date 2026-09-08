@@ -11,14 +11,11 @@ import (
 )
 
 func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs, authors and tags below come
-	// straight from the HuggingFace API.
-	hp := htmlPrinter(w)
 	query := r.URL.Query().Get("q")
 	if query == "" {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p>Enter a search query above.</p>`)
+			s.renderPartial(w, "plain_message", "Enter a search query above.")
 			return
 		}
 		respondJSON(w, []any{})
@@ -29,7 +26,7 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>Search error: %s</mark></p>`, err)
+			s.renderPartial(w, "notice", fmt.Sprintf("Search error: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -57,81 +54,71 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups := huggingface.GroupResults(results)
 	respondHTML(w)
+	s.renderPartial(w, "hf_results", struct {
+		Groups      []hfResultGroup
+		QuantFilter string
+	}{
+		Groups:      hfResultGroups(huggingface.GroupResults(results)),
+		QuantFilter: quantFilter,
+	})
+}
 
-	if len(groups) == 0 {
-		if quantFilter != "" {
-			hp(`<p>No %s models found. Try a different format or broaden your search.</p>`, quantFilter)
-		} else {
-			hp(`<p>No models found.</p>`)
-		}
-		return
-	}
+// hfResultGroup is one repo family in the search results: the primary repo,
+// plus one badge per distinct quantization somebody published it in.
+type hfResultGroup struct {
+	ID        string
+	SafeID    string
+	Author    string
+	Downloads string
+	Likes     string
+	Gated     bool
+	Variants  []hfResultVariant
+}
 
+type hfResultVariant struct {
+	ID     string
+	Format string
+	Color  string
+}
+
+func hfResultGroups(groups []huggingface.ModelGroup) []hfResultGroup {
+	out := make([]hfResultGroup, 0, len(groups))
 	for _, g := range groups {
-		primary := g.Variants[0]
-		sid := safeID(primary.ID)
-
-		gatedBadge := safeHTML("")
-		if primary.Gated.IsGated() {
-			gatedBadge = ` <small style="color:var(--pico-del-color);">[gated]</small>`
-		}
-
-		hp(`<article style="margin-bottom:0.5rem;">
-  <header style="padding:0.5rem 1rem;">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <div>
-        <strong>%s</strong>%s
-        <a href="https://huggingface.co/%s" target="_blank" rel="noopener" style="font-size:0.75rem;margin-left:0.5rem;text-decoration:none;" title="View on HuggingFace">&#8599;</a>
-        <br><small style="opacity:0.7;">%s &middot; %s downloads &middot; %s likes</small>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">`,
-			primary.ID, gatedBadge, primary.ID,
-			primary.Author,
-			formatCount(primary.Downloads), formatCount(primary.Likes))
-
-		// Variant badges -- one per unique quant format, prefer primary author
-		// Deduplicate: keep one repo per quant format, preferring the primary author
-		type badge struct {
-			id, author, format string
-		}
-		seen := map[string]bool{}
-		var badges []badge
-		for _, v := range g.Variants {
-			label := v.QuantFormat
-			if label == "" {
-				label = "FP16"
-			}
-			if seen[label] {
-				continue
-			}
-			seen[label] = true
-			badges = append(badges, badge{id: v.ID, author: v.Author, format: label})
-		}
-
-		for _, b := range badges {
-			color := quantBadgeColor(b.format)
-			hp(`<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#detail-%s" hx-swap="innerHTML" title="%s" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;text-decoration:none;cursor:pointer;">%s</a>`,
-				b.id, sid, b.id, color, b.format)
-		}
-
-		hp(`</div>
-    </div>
-  </header>
-  <div id="detail-%s" style="padding:0 1rem;"></div>
-</article>`, sid)
-
 		if len(g.Variants) == 0 {
 			continue
 		}
+		primary := g.Variants[0]
+		row := hfResultGroup{
+			ID:        primary.ID,
+			SafeID:    safeID(primary.ID),
+			Author:    primary.Author,
+			Downloads: formatCount(primary.Downloads),
+			Likes:     formatCount(primary.Likes),
+			Gated:     primary.Gated.IsGated(),
+		}
+		// One badge per quantization format. Several repos often publish the
+		// same format; the first one wins, which is the primary author's.
+		seen := map[string]bool{}
+		for _, v := range g.Variants {
+			format := v.QuantFormat
+			if format == "" {
+				format = "FP16"
+			}
+			if seen[format] {
+				continue
+			}
+			seen[format] = true
+			row.Variants = append(row.Variants, hfResultVariant{
+				ID: v.ID, Format: format, Color: quantBadgeColor(format),
+			})
+		}
+		out = append(out, row)
 	}
+	return out
 }
 
 func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs, authors and tags below come
-	// straight from the HuggingFace API.
-	hp := htmlPrinter(w)
 	modelID := r.URL.Query().Get("id")
 	if modelID == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
@@ -142,7 +129,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>Error loading model details: %s</mark></p>`, err)
+			s.renderPartial(w, "notice", fmt.Sprintf("Error loading model details: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -155,7 +142,34 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
+	s.renderPartial(w, "hf_model_detail", s.newHFModelDetail(detail))
+}
 
+// hfModelDetail is the expanded panel under a search result: what the model
+// is, what it will cost, and the button that starts the download.
+type hfModelDetail struct {
+	ID           string
+	SafeID       string
+	Architecture string
+	QuantInfo    string
+	VRAMLabel    string
+	SizeLabel    string
+	Files        []hfDetailFile
+	// GatedWarning is set when the model needs a token this server does not
+	// have; Disabled then keeps the button from offering a download that
+	// cannot succeed.
+	GatedWarning bool
+	VRAMWarning  string
+	Disabled     bool
+}
+
+type hfDetailFile struct {
+	Filename  string
+	SizeLabel string
+	Category  string
+}
+
+func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail {
 	quantInfo := "FP16/BF16 (unquantized)"
 	if detail.QuantFormat != "" {
 		quantInfo = detail.QuantFormat
@@ -167,78 +181,45 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	gatedWarning := ""
-	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
-		gatedWarning = `<p><mark>This is a gated model. Configure your HF token in <a href="/settings">Settings</a> to download.</mark></p>`
-	}
-
-	vramWarning := ""
-	metrics := s.monitor.Current()
-	if detail.VRAMEstGB > 0 && len(metrics.GPU) > 0 {
+	// Compared against the first GPU only: this is a "will it obviously not
+	// fit" warning, not the tensor-parallel planning the model card does.
+	var vramWarning string
+	if metrics := s.monitor.Current(); detail.VRAMEstGB > 0 && len(metrics.GPU) > 0 {
 		gpuVRAM := float64(metrics.GPU[0].VRAMTotalMB) / 1024
 		if detail.VRAMEstGB > gpuVRAM {
-			vramWarning = fmt.Sprintf(`<p><mark>Estimated VRAM (%.1f GB) exceeds GPU memory (%.0f GB). Consider a quantized variant or TP=2.</mark></p>`,
+			vramWarning = fmt.Sprintf(
+				"Estimated VRAM (%.1f GB) exceeds GPU memory (%.0f GB). Consider a quantized variant or TP=2.",
 				detail.VRAMEstGB, gpuVRAM)
 		}
 	}
 
-	hp(`%s%s
-<div class="grid" style="margin-bottom:0.5rem;">
-  <div><small>Architecture</small><br><strong>%s</strong></div>
-  <div><small>Quantization</small><br><strong>%s</strong></div>
-  <div><small>Est. VRAM</small><br><strong>%s</strong></div>
-  <div><small>Download Size</small><br><strong>%s</strong></div>
-</div>`,
-		gatedWarning, vramWarning,
-		orDash(detail.Architecture),
-		quantInfo,
-		formatVRAM(detail.VRAMEstGB),
-		huggingface.FormatBytes(detail.TotalSize))
+	gated := detail.Gated.IsGated() && s.cfg.HFToken == ""
 
-	// Collapsible file list
-	downloadableFiles := 0
-	for _, f := range detail.Files {
-		if f.Category != "skip" {
-			downloadableFiles++
-		}
+	v := hfModelDetail{
+		ID:           detail.ID,
+		SafeID:       safeID(detail.ID),
+		Architecture: orDash(detail.Architecture),
+		QuantInfo:    quantInfo,
+		VRAMLabel:    formatVRAM(detail.VRAMEstGB),
+		SizeLabel:    huggingface.FormatBytes(detail.TotalSize),
+		GatedWarning: gated,
+		VRAMWarning:  vramWarning,
+		Disabled:     gated,
 	}
-
-	hp(`<details style="margin-bottom:0.5rem;">
-  <summary>%d files to download</summary>
-  <table style="font-size:0.85rem;">
-    <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
-    <tbody>`, downloadableFiles)
-
 	for _, f := range detail.Files {
 		if f.Category == "skip" {
 			continue
 		}
-		hp(`<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
-			f.Filename, huggingface.FormatBytes(f.Size), f.Category)
+		v.Files = append(v.Files, hfDetailFile{
+			Filename:  f.Filename,
+			SizeLabel: huggingface.FormatBytes(f.Size),
+			Category:  f.Category,
+		})
 	}
-	hp(`</tbody></table></details>`)
-
-	// Download button
-	sid := safeID(detail.ID)
-	disabled := ""
-	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
-		disabled = ` disabled`
-	}
-	hp(`<div id="dl-%s">
-  <button hx-post="/api/hf/download?model_id=%s"
-          hx-target="#dl-%s"
-          hx-swap="innerHTML"
-          style="margin:0;"%s>Download (%s)</button>
-</div>`,
-		sid,
-		detail.ID, sid, disabled,
-		huggingface.FormatBytes(detail.TotalSize))
+	return v
 }
 
 func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs, authors and tags below come
-	// straight from the HuggingFace API.
-	hp := htmlPrinter(w)
 	// Accept model_id from query param, form body, or JSON body
 	modelID := r.URL.Query().Get("model_id")
 	if modelID == "" {
@@ -256,7 +237,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if modelID == "" {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>Missing model_id</mark></p>`)
+			s.renderPartial(w, "notice", "Missing model_id")
 			return
 		}
 		http.Error(w, "missing model_id", http.StatusBadRequest)
@@ -267,7 +248,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>Error: %s</mark></p>`, err)
+			s.renderPartial(w, "notice", fmt.Sprintf("Error: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -301,7 +282,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if len(filesToDownload) == 0 {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>No downloadable weight files found.</mark></p>`)
+			s.renderPartial(w, "notice", "No downloadable weight files found.")
 			return
 		}
 		http.Error(w, "no downloadable files", http.StatusBadRequest)
@@ -312,7 +293,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><mark>Error: %s</mark></p>`, err)
+			s.renderPartial(w, "notice", fmt.Sprintf("Error: %s", err))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -323,27 +304,58 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		respondHTML(w)
 		// Show inline progress polling + trigger the active-downloads section to refresh
 		w.Header().Set("HX-Trigger", "download-started")
-		hp(`<div hx-get="/api/hf/download/%s/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
-  <progress value="0" max="100" style="margin:0;"></progress>
-  <small>Starting download...</small>
-</div>`, downloadID)
+		s.renderPartial(w, "download_started", downloadID)
 		return
 	}
 
 	respondJSON(w, map[string]string{"download_id": downloadID})
 }
 
+// downloadView is one download's progress, shaped for the templates. Percent
+// is precomputed: a template cannot divide without turning integers into
+// floats first.
+type downloadView struct {
+	ID              string
+	ModelID         string
+	Status          string
+	Error           string
+	Percent         int
+	DownloadedLabel string
+	TotalLabel      string
+	SpeedLabel      string
+	CompletedFiles  int
+	TotalFiles      int
+}
+
+func newDownloadView(d huggingface.DownloadProgress) downloadView {
+	pct := 0
+	if d.TotalBytes > 0 {
+		pct = int(d.BytesDownloaded * 100 / d.TotalBytes)
+	}
+	return downloadView{
+		ID:              d.ID,
+		ModelID:         d.ModelID,
+		Status:          d.Status,
+		Error:           d.Error,
+		Percent:         pct,
+		DownloadedLabel: huggingface.FormatBytes(d.BytesDownloaded),
+		TotalLabel:      huggingface.FormatBytes(d.TotalBytes),
+		SpeedLabel:      huggingface.FormatBytes(d.SpeedBPS) + "/s",
+		CompletedFiles:  d.CompletedFiles,
+		TotalFiles:      d.TotalFiles,
+	}
+}
+
 func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs, authors and tags below come
-	// straight from the HuggingFace API.
-	hp := htmlPrinter(w)
 	id := chi.URLParam(r, "id")
 
 	d := s.downloader.GetProgress(id)
 	if d == nil {
+		// The download has already been reaped, which for the poller that got
+		// here means it finished.
 		if isHTMX(r) {
 			respondHTML(w)
-			hp(`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
+			s.renderPartial(w, "download_progress", downloadView{Status: "complete"})
 			return
 		}
 		http.Error(w, "download not found", http.StatusNotFound)
@@ -355,36 +367,15 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	view := newDownloadView(*d)
+	view.ID = id
 	respondHTML(w)
-	pct := 0
-	if d.TotalBytes > 0 {
-		pct = int(d.BytesDownloaded * 100 / d.TotalBytes)
-	}
-
-	switch d.Status {
-	case "complete":
-		hp(`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
-	case "failed":
-		hp(`<p><del>Download failed: %s</del></p>`, d.Error)
-	case "cancelled":
-		hp(`<p>Download cancelled.</p>`)
-	default:
-		speed := huggingface.FormatBytes(d.SpeedBPS) + "/s"
-		total := huggingface.FormatBytes(d.TotalBytes)
-		downloaded := huggingface.FormatBytes(d.BytesDownloaded)
-		// Keep polling
-		hp(`<div hx-get="/api/hf/download/%s/progress" hx-trigger="every 2s" hx-swap="innerHTML">
-  <progress value="%d" max="100" style="margin:0;"></progress>
-  <small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>
-</div>`, id, pct, downloaded, total, speed, pct, d.CompletedFiles, d.TotalFiles)
-	}
+	s.renderPartial(w, "download_progress", view)
 }
 
-// handleHFActiveDownloads returns progress for all active downloads (used by both browse and models pages).
+// handleHFActiveDownloads returns progress for all active downloads (used by
+// both the browse and models pages).
 func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request) {
-	// Escapes string arguments: model IDs, authors and tags below come
-	// straight from the HuggingFace API.
-	hp := htmlPrinter(w)
 	downloads := s.downloader.ActiveDownloads()
 
 	if !isHTMX(r) {
@@ -392,32 +383,16 @@ func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	respondHTML(w)
-	activeCount := 0
+	views := []downloadView{}
 	for _, dl := range downloads {
 		if dl.Status == "complete" {
 			continue
 		}
-		activeCount++
-		pct := 0
-		if dl.TotalBytes > 0 {
-			pct = int(dl.BytesDownloaded * 100 / dl.TotalBytes)
-		}
-		speed := huggingface.FormatBytes(dl.SpeedBPS) + "/s"
-		hp(`<article style="margin-bottom:0.5rem;padding:0.75rem 1rem;">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <strong>%s</strong>
-    <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
-            hx-delete="/api/hf/download/%s" hx-target="closest article" hx-swap="outerHTML">Cancel</button>
-  </div>
-  <progress value="%d" max="100" style="margin:0.25rem 0;"></progress>
-  <small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>
-</article>`,
-			dl.ModelID, dl.ID, pct,
-			huggingface.FormatBytes(dl.BytesDownloaded),
-			huggingface.FormatBytes(dl.TotalBytes),
-			speed, pct, dl.CompletedFiles, dl.TotalFiles)
+		views = append(views, newDownloadView(dl))
 	}
+
+	respondHTML(w)
+	s.renderPartial(w, "active_downloads", views)
 }
 
 func (s *Server) handleHFDownloadCancel(w http.ResponseWriter, r *http.Request) {

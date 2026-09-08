@@ -23,22 +23,19 @@ func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, map[string]any{"averages": avgs, "total": len(avgs)})
 		return
 	}
-	respondHTML(w)
-	if len(avgs) == 0 {
-		fmt.Fprint(w, `<p style="opacity:0.6;"><small>No active inference traffic captured yet. Recent /v1/chat/completions activity will populate this.</small></p>`)
-		return
-	}
-	fmt.Fprint(w, `<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
+
+	rows := make([]dashboardTiming, 0, len(avgs))
 	for _, a := range avgs {
-		fmt.Fprintf(w, `<tr>
-  <td><small>%s</small></td>
-  <td>%.1f t/s</td>
-  <td>%d</td>
-  <td><small>%s</small></td>
-</tr>`,
-			esc(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+		rows = append(rows, dashboardTiming{
+			ModelID:   a.ModelID,
+			AvgGenTPS: a.AvgGenTPS,
+			Count:     a.Count,
+			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
+		})
 	}
-	fmt.Fprint(w, `</tbody></table>`)
+
+	respondHTML(w)
+	s.renderPartial(w, "timings_list", rows)
 }
 
 // handleTimingsForModel returns recent timing samples plus the running
@@ -59,44 +56,26 @@ func (s *Server) handleTimingsForModel(w http.ResponseWriter, r *http.Request) {
 // all registered models and presets; the model selector is disabled when
 // vLLM isn't currently serving (or is serving a different model).
 func (s *Server) handleBenchmarkForm(w http.ResponseWriter, r *http.Request) {
-	respondHTML(w)
-	status := s.process.GetStatus()
+	// Only the model vLLM currently has loaded can be benchmarked ad-hoc:
+	// there is one process, and swapping models is what batch jobs are for.
 	loadedID := ""
-	if status.State == process.StateRunning {
+	if status := s.process.GetStatus(); status.State == process.StateRunning {
 		loadedID = status.ModelID
 	}
-
-	registered := s.registry.List()
-	if loadedID == "" {
-		fmt.Fprint(w, `<article><em>Start a model on the <a href="/service">Service</a> page before running benchmarks.</em></article>`)
-		return
-	}
-
-	// Find the loaded model's display name (the only one eligible).
 	loadedName := loadedID
-	for _, m := range registered {
+	for _, m := range s.registry.List() {
 		if m.ID == loadedID {
 			loadedName = displayNameOf(m)
 			break
 		}
 	}
 
-	fmt.Fprintf(w, `<article>
-  <header><strong>New benchmark</strong> &middot; <small>running against <code>%s</code></small></header>
-  <form hx-post="/api/benchmarks/" hx-target="#bench-start-result" hx-swap="innerHTML">
-    <input type="hidden" name="model_id" value="%s">
-    <label>Preset
-      <select name="preset" required>`,
-		esc(loadedName), esc(loadedID))
-	for _, p := range benchmark.Presets() {
-		fmt.Fprintf(w, `<option value="%s">%s</option>`, esc(p.Name), esc(p.Label))
-	}
-	fmt.Fprint(w, `      </select>
-    </label>
-    <button type="submit">Start run</button>
-  </form>
-  <div id="bench-start-result"></div>
-</article>`)
+	respondHTML(w)
+	s.renderPartial(w, "benchmark_form", struct {
+		LoadedID   string
+		LoadedName string
+		Presets    []benchmark.Preset
+	}{loadedID, loadedName, benchmark.Presets()})
 }
 
 // handleListBenchmarks returns all benchmark runs, optionally filtered by
@@ -131,7 +110,7 @@ func (s *Server) handleListBenchmarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
-	renderRunList(w, runs)
+	s.renderRunList(w, runs)
 }
 
 // handleGetBenchmark returns a single run by ID. Dual-mode.
@@ -147,13 +126,13 @@ func (s *Server) handleGetBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderRunDetail(w, run)
+	s.renderRunDetail(w, run)
 }
 
 // startRunRequest is the POST /api/benchmarks body.
 type startRunRequest struct {
-	ModelID string                       `json:"model_id"`
-	Preset  string                       `json:"preset"`
+	ModelID string `json:"model_id"`
+	Preset  string `json:"preset"`
 	// Overrides are accepted but ignored for the ad-hoc path in step 2;
 	// the model's saved config wins. Job runs (step 4) will honor them.
 	Overrides *benchmark.ConfigOverrides `json:"overrides,omitempty"`
@@ -288,7 +267,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	}
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started run <code>%s</code>. <a href="#" hx-get="/api/benchmarks/" hx-target="#bench-runs">Refresh list</a></p>`, esc(run.ID))
+	s.renderPartial(w, "run_started", run.ID)
 }
 
 // handleCancelBenchmark cancels the in-flight run with the given id.
@@ -373,114 +352,93 @@ func (s *Server) handleBenchmarkProgress(w http.ResponseWriter, r *http.Request)
 }
 
 // renderRunList lists runs in a simple table for the benchmarks page.
-func renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
-	if len(runs) == 0 {
-		fmt.Fprint(w, `<p style="opacity:0.7;">No benchmark runs yet. Load a model and start a run from the form above.</p>`)
-		return
-	}
+// runRow is one line of the benchmark run table.
+type runRow struct {
+	ID        string
+	ModelName string
+	ModelID   string
+	Preset    string
+	AvgGen    string
+	AvgTTFT   string
+	Status    string
+	Running   bool
+	When      string
+}
 
-	fmt.Fprint(w, `<table><thead><tr>
-    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th>When</th><th></th>
-  </tr></thead><tbody>`)
+func (s *Server) renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
+	rows := make([]runRow, 0, len(runs))
 	for _, run := range runs {
-		var avgGen, avgTTFT string
+		row := runRow{
+			ID:        run.ID,
+			ModelName: run.ModelName,
+			ModelID:   run.ModelID,
+			Preset:    run.Preset,
+			AvgGen:    "\u2014",
+			AvgTTFT:   "\u2014",
+			Status:    run.Status,
+			Running:   run.Status == benchmark.StatusRunning,
+			When:      run.CreatedAt.Format("Jan 2 15:04"),
+		}
 		if run.Summary != nil {
-			avgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
-			avgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
-		} else {
-			avgGen = "—"
-			avgTTFT = "—"
+			row.AvgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
+			row.AvgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
 		}
-		when := run.CreatedAt.Format("Jan 2 15:04")
-		actions := fmt.Sprintf(
-			`<a href="#" hx-get="/api/benchmarks/%s" hx-target="#bench-detail-%s" hx-swap="innerHTML">details</a>`,
-			run.ID, run.ID,
-		)
-		if run.Status == benchmark.StatusRunning {
-			actions = fmt.Sprintf(
-				`<a href="#" hx-post="/api/benchmarks/%s/cancel" hx-confirm="Cancel this run?">cancel</a>`,
-				run.ID,
-			)
-		} else {
-			actions += fmt.Sprintf(
-				` &middot; <a href="#" hx-delete="/api/benchmarks/%s" hx-confirm="Delete this run?" hx-target="#bench-runs" hx-swap="none" hx-on::after-request="if(event.detail.successful) htmx.ajax('GET','/api/benchmarks/','#bench-runs')">delete</a>`,
-				run.ID,
-			)
-		}
-		fmt.Fprintf(w, `<tr>
-      <td><strong>%s</strong><br><small style="opacity:0.6;">%s</small></td>
-      <td>%s</td>
-      <td>%s</td>
-      <td>%s</td>
-      <td>%s</td>
-      <td><small>%s</small></td>
-      <td><small>%s</small></td>
-    </tr>
-    <tr><td colspan="7"><div id="bench-detail-%s"></div></td></tr>`,
-			esc(run.ModelName), esc(run.ModelID),
-			run.Preset, avgGen, avgTTFT,
-			statusBadge(run.Status),
-			when,
-			actions,
-			run.ID,
-		)
+		rows = append(rows, row)
 	}
-	fmt.Fprint(w, `</tbody></table>`)
+	s.renderPartial(w, "run_list", rows)
+}
+
+// runResultRow is one test point within a run.
+type runResultRow struct {
+	N               int
+	PromptTokens    int
+	GenTokens       int
+	TTFTMs          float64
+	TotalMs         float64
+	PromptTokPerSec float64
+	GenTokPerSec    float64
 }
 
 // renderRunDetail renders the expanded detail view of a single run.
-func renderRunDetail(w http.ResponseWriter, run *benchmark.BenchmarkRun) {
-	fmt.Fprintf(w, `<article style="margin:0.5rem 0;">
-  <header><strong>%s</strong> &middot; <small>%s</small></header>`,
-		esc(run.Preset), esc(run.CreatedAt.Format("2006-01-02 15:04:05")))
-
-	if run.Error != "" {
-		fmt.Fprintf(w, `<p><del>error:</del> %s</p>`, esc(run.Error))
-	}
-
-	if run.ProgressDetail != "" && run.Status == benchmark.StatusRunning {
-		fmt.Fprintf(w, `<p><em>%s</em></p>`, esc(run.ProgressDetail))
-	}
-
-	// Config snapshot
+func (s *Server) renderRunDetail(w http.ResponseWriter, run *benchmark.BenchmarkRun) {
 	c := run.Config
-	fmt.Fprintf(w, `<small>
-  <strong>config</strong>:
-  max_model_len=%d, tp=%d, gpu_mem_util=%.2f, dtype=%s, kv_cache=%s, eager=%v, quant=%s
-</small>`,
-		c.MaxModelLen, c.TensorParallelSize, c.GPUMemoryUtilization,
-		c.Dtype, c.KVCacheDtype, c.EnforceEager, c.QuantMethod)
-
-	// Per-test-point table
-	if len(run.Results) > 0 {
-		fmt.Fprint(w, `<table><thead><tr>
-  <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
-</tr></thead><tbody>`)
-		for i, res := range run.Results {
-			fmt.Fprintf(w, `<tr>
-  <td>%d</td><td>%d</td><td>%d</td><td>%.0f</td><td>%.0f</td><td>%.1f</td><td>%.1f</td>
-</tr>`,
-				i+1, res.PromptTokens, res.GenTokens, res.TTFTMs, res.TotalMs,
-				res.PromptTokPerSec, res.GenTokPerSec)
-		}
-		fmt.Fprint(w, `</tbody></table>`)
+	view := struct {
+		Preset     string
+		CreatedAt  string
+		Error      string
+		Progress   string
+		ConfigLine string
+		Results    []runResultRow
+		Summary    string
+		Warnings   []string
+	}{
+		Preset:    run.Preset,
+		CreatedAt: run.CreatedAt.Format("2006-01-02 15:04:05"),
+		Error:     run.Error,
+		ConfigLine: fmt.Sprintf(
+			"max_model_len=%d, tp=%d, gpu_mem_util=%.2f, dtype=%s, kv_cache=%s, eager=%v, quant=%s",
+			c.MaxModelLen, c.TensorParallelSize, c.GPUMemoryUtilization,
+			c.Dtype, c.KVCacheDtype, c.EnforceEager, c.QuantMethod),
+		Warnings: run.Warnings,
 	}
-
+	// Progress detail is only meaningful while the run is still moving.
+	if run.Status == benchmark.StatusRunning {
+		view.Progress = run.ProgressDetail
+	}
+	for i, res := range run.Results {
+		view.Results = append(view.Results, runResultRow{
+			N: i + 1, PromptTokens: res.PromptTokens, GenTokens: res.GenTokens,
+			TTFTMs: res.TTFTMs, TotalMs: res.TotalMs,
+			PromptTokPerSec: res.PromptTokPerSec, GenTokPerSec: res.GenTokPerSec,
+		})
+	}
 	if run.Summary != nil {
-		fmt.Fprintf(w, `<p><strong>summary</strong>: avg gen %.1f t/s (min %.1f, max %.1f), avg TTFT %.0f ms, avg prompt %.1f t/s</p>`,
+		view.Summary = fmt.Sprintf(
+			"avg gen %.1f t/s (min %.1f, max %.1f), avg TTFT %.0f ms, avg prompt %.1f t/s",
 			run.Summary.AvgGenTokPerSec, run.Summary.MinGenTokPerSec, run.Summary.MaxGenTokPerSec,
 			run.Summary.AvgTTFTMs, run.Summary.AvgPromptTokPerSec)
 	}
-
-	if len(run.Warnings) > 0 {
-		fmt.Fprint(w, `<small><strong>warnings</strong>:<ul>`)
-		for _, w2 := range run.Warnings {
-			fmt.Fprintf(w, `<li>%s</li>`, esc(w2))
-		}
-		fmt.Fprint(w, `</ul></small>`)
-	}
-
-	fmt.Fprint(w, `</article>`)
+	s.renderPartial(w, "run_detail", view)
 }
 
 // configSnapshotFromModel extracts the 7 perf-relevant fields from a
@@ -550,17 +508,3 @@ func newRunID() string {
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
-
-func statusBadge(s string) string {
-	switch s {
-	case benchmark.StatusRunning:
-		return `<mark>running</mark>`
-	case benchmark.StatusCompleted:
-		return `<ins>completed</ins>`
-	case benchmark.StatusFailed:
-		return `<del>failed</del>`
-	default:
-		return s
-	}
-}
-

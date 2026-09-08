@@ -1,0 +1,85 @@
+{{define "hf_results" -}}
+{{if not .Groups -}}
+{{if .QuantFilter}}<p>No {{.QuantFilter}} models found. Try a different format or broaden your search.</p>{{else}}<p>No models found.</p>{{end}}
+{{- else -}}
+{{range .Groups -}}
+{{- /* $ is the whole payload, not this group, so the group's id has to be
+       carried into the inner range by hand. */ -}}
+{{- $sid := .SafeID -}}
+<article style="margin-bottom:0.5rem;">
+  <header style="padding:0.5rem 1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <strong>{{.ID}}</strong>{{if .Gated}} <small style="color:var(--pico-del-color);">[gated]</small>{{end}}
+        <a href="https://huggingface.co/{{.ID}}" target="_blank" rel="noopener" style="font-size:0.75rem;margin-left:0.5rem;text-decoration:none;" title="View on HuggingFace">&#8599;</a>
+        <br><small style="opacity:0.7;">{{.Author}} &middot; {{.Downloads}} downloads &middot; {{.Likes}} likes</small>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
+        {{- range .Variants}}
+        <a href="#" hx-get="/api/hf/model?id={{.ID}}" hx-target="#detail-{{$sid}}" hx-swap="innerHTML" title="{{.ID}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:{{.Color}};color:#fff;text-decoration:none;cursor:pointer;">{{.Format}}</a>
+        {{- end}}
+      </div>
+    </div>
+  </header>
+  <div id="detail-{{.SafeID}}" style="padding:0 1rem;"></div>
+</article>
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{define "hf_model_detail" -}}
+{{if .GatedWarning}}<p><mark>This is a gated model. Configure your HF token in <a href="/settings">Settings</a> to download.</mark></p>{{end}}
+{{- if .VRAMWarning}}<p><mark>{{.VRAMWarning}}</mark></p>{{end}}
+<div class="grid" style="margin-bottom:0.5rem;">
+  <div><small>Architecture</small><br><strong>{{.Architecture}}</strong></div>
+  <div><small>Quantization</small><br><strong>{{.QuantInfo}}</strong></div>
+  <div><small>Est. VRAM</small><br><strong>{{.VRAMLabel}}</strong></div>
+  <div><small>Download Size</small><br><strong>{{.SizeLabel}}</strong></div>
+</div>
+<details style="margin-bottom:0.5rem;">
+  <summary>{{len .Files}} files to download</summary>
+  <table style="font-size:0.85rem;">
+    <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
+    <tbody>
+    {{- range .Files}}
+      <tr><td><code>{{.Filename}}</code></td><td>{{.SizeLabel}}</td><td>{{.Category}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table>
+</details>
+<div id="dl-{{.SafeID}}">
+  <button hx-post="/api/hf/download?model_id={{.ID}}"
+          hx-target="#dl-{{.SafeID}}"
+          hx-swap="innerHTML"
+          style="margin:0;"{{if .Disabled}} disabled{{end}}>Download ({{.SizeLabel}})</button>
+</div>
+{{- end}}
+
+{{/* One download's progress, polling itself until it settles. */}}
+{{define "download_progress" -}}
+{{if eq .Status "complete"}}<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>
+{{- else if eq .Status "failed"}}<p><del>Download failed: {{.Error}}</del></p>
+{{- else if eq .Status "cancelled"}}<p>Download cancelled.</p>
+{{- else}}
+<div hx-get="/api/hf/download/{{.ID}}/progress" hx-trigger="every 2s" hx-swap="innerHTML">
+  <progress value="{{.Percent}}" max="100" style="margin:0;"></progress>
+  <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files</small>
+</div>
+{{- end}}
+{{- end}}
+
+{{/* Every download still in flight, shown above both the models and browse
+     pages. Completed ones are dropped rather than lingering. */}}
+{{define "active_downloads" -}}
+{{range . -}}
+<article style="margin-bottom:0.5rem;padding:0.75rem 1rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <strong>{{.ModelID}}</strong>
+    <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"
+            hx-delete="/api/hf/download/{{.ID}}" hx-target="closest article" hx-swap="outerHTML">Cancel</button>
+  </div>
+  <progress value="{{.Percent}}" max="100" style="margin:0.25rem 0;"></progress>
+  <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files</small>
+</article>
+{{- end}}
+{{- end}}

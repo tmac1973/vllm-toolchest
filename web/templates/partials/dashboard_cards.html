@@ -1,0 +1,68 @@
+{{define "dashboard_cards" -}}
+<div class="grid">
+    <article>
+        <header>vLLM Service</header>
+        <p>{{template "service_badge" .Service.State}}</p>
+        {{if .Service.ModelID}}<p>Model: <strong>{{.Service.ModelID}}</strong></p>{{end}}
+        <p><a href="/service">Manage &rarr;</a></p>
+    </article>
+    <article>
+        <header>GPU</header>
+        {{if not .GPUs}}<p>No GPU detected</p>{{end}}
+        {{- range .GPUs}}
+        <p><strong>{{.Name}}</strong></p>
+        <p>VRAM: {{printf "%.1f" .UsedGB}} / {{printf "%.1f" .TotalGB}} GB</p>
+        {{if .Versions}}<p>{{.Versions}}</p>{{end}}
+        {{- end}}
+    </article>
+    <article>
+        <header>Models</header>
+        <p><strong>{{.ModelCount}}</strong> models registered</p>
+        <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
+    </article>
+    <article>
+        <header>API Endpoint</header>
+        <pre style="user-select: all; cursor: pointer;">{{.APIURL}}</pre>
+        <p>Tool use: {{if .ToolUseEnabled}}<ins>enabled</ins>{{else}}disabled{{end}}</p>
+        <p><a href="/settings">Settings &rarr;</a></p>
+    </article>
+</div>
+{{- if .Timings}}
+<article style="margin-top:1rem;">
+    <header>Live inference activity <small style="opacity:0.6;">(passive timing from the OpenAI proxy)</small></header>
+    <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
+    {{- range .Timings}}
+        <tr><td><small>{{.ModelID}}</small></td><td>{{printf "%.1f" .AvgGenTPS}} t/s</td><td>{{.Count}}</td><td><small>{{.LastSeen}}</small></td></tr>
+    {{- end}}
+    </tbody></table>
+</article>
+{{- end}}
+{{- end}}
+
+{{/* The vLLM process state as a coloured word. Takes the state string. */}}
+{{define "service_badge"}}
+{{- if eq . "running"}}<ins>Running</ins>
+{{- else if eq . "starting"}}<mark>Starting...</mark>
+{{- else if eq . "stopping"}}<mark>Stopping...</mark>
+{{- else if eq . "error"}}<del>Error</del>
+{{- else}}Stopped
+{{- end}}
+{{- end}}
+
+{{define "service_status" -}}
+<div>
+  <p>Status: {{template "service_badge" .State}}</p>
+  {{- if .ModelID}}
+  <p>Model: <strong>{{.ModelID}}</strong></p>
+  {{- end}}
+  {{- if .Uptime}}
+  <p>Uptime: {{.Uptime}} (PID: {{.PID}})</p>
+  {{- end}}
+  {{- if .Error}}
+  <p><small><del>{{.Error}}</del></small></p>
+  {{- end}}
+</div>
+{{- /* Once the state settles, wipe the start/stop message that was left
+       behind — otherwise "Stopping..." stays on screen next to "Stopped". */ -}}
+{{if .Settled}}<div id="service-action-result" hx-swap-oob="innerHTML"></div>{{end}}
+{{- end}}

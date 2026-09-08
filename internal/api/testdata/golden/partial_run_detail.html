@@ -1,0 +1,21 @@
+<article style="margin:0.5rem 0;">
+  <header><strong>internal-thorough</strong> &middot; <small>2026-09-07 19:31:04</small></header>
+  <small>
+    <strong>config</strong>:
+    max_model_len=32768, tp=2, gpu_mem_util=0.90, dtype=auto, kv_cache=fp8, eager=false, quant=fp8
+  </small>
+  <table><thead><tr>
+    <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
+  </tr></thead><tbody>
+    <tr>
+      <td>1</td><td>256</td><td>128</td><td>928</td><td>2180</td><td>275.8</td><td>102.2</td>
+    </tr>
+    <tr>
+      <td>2</td><td>1024</td><td>128</td><td>1104</td><td>2410</td><td>927.5</td><td>98.1</td>
+    </tr>
+  </tbody></table>
+  <p><strong>summary</strong>: avg gen 100.2 t/s (min 98.1, max 102.2), avg TTFT 1016 ms, avg prompt 601.7 t/s</p>
+  <small><strong>warnings</strong>:<ul>
+    <li>served model name was discovered, not configured</li>
+  </ul></small>
+</article>

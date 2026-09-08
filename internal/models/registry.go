@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -196,7 +197,12 @@ func (r *Registry) save() error {
 	return os.WriteFile(r.filePath, data, 0o644)
 }
 
-// List returns all registered models.
+// List returns every registered model, ordered by ID.
+//
+// The order matters: the registry is a map, so without the sort every caller
+// got Go's randomized iteration order. The models table reshuffled its rows on
+// each htmx refresh, and the benchmark and probe model pickers reordered their
+// options between openings.
 func (r *Registry) List() []*Model {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -204,6 +210,7 @@ func (r *Registry) List() []*Model {
 	for _, m := range r.models {
 		out = append(out, m)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

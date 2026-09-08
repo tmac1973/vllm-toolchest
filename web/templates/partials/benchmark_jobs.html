@@ -1,0 +1,96 @@
+{{define "job_list" -}}
+{{if not . -}}
+<p style="opacity:0.7;">No benchmark jobs yet.</p>
+{{- else -}}
+{{range . -}}
+<article style="margin-bottom:1rem;">
+  <header>
+    <strong>{{.Name}}</strong>
+    <small style="opacity:0.7;">&middot; {{.Kind}} &middot; {{template "job_status" .Status}} &middot; {{.CellSummary}} &middot; {{.CreatedAt}}</small>
+    <span style="float:right;font-size:0.85em;">
+      {{- if .CanCancel}}<a href="#" hx-post="/api/benchmark-jobs/{{.ID}}/cancel" hx-confirm="Cancel this job?">cancel</a>{{end}}
+      {{- if .CanRetry}}<a href="#" hx-post="/api/benchmark-jobs/{{.ID}}/retry-failed" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">retry failed</a>{{end}}
+      {{- if .CanDelete}}{{if or .CanCancel .CanRetry}} &middot; {{end}}<a href="#" hx-delete="/api/benchmark-jobs/{{.ID}}?runs=orphan" hx-confirm="Delete job (orphan runs to ad-hoc)?" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">delete</a>{{end -}}
+    </span>
+  </header>
+  {{- if .Runs}}
+  <table style="margin-top:0.5rem;"><thead><tr>
+    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th></th>
+  </tr></thead><tbody>
+  {{- range .Runs}}
+    <tr>
+      <td><small>{{.ModelName}}</small></td><td>{{.Preset}}</td><td>{{.AvgGen}}</td><td>{{.AvgTTFT}}</td><td>{{template "run_status" .Status}}</td>
+      <td><small>
+        <a href="#" hx-get="/api/benchmarks/{{.ID}}" hx-target="#bench-detail-{{.ID}}" hx-swap="innerHTML">details</a>
+      </small></td>
+    </tr>
+    <tr><td colspan="6"><div id="bench-detail-{{.ID}}"></div></td></tr>
+  {{- end}}
+  </tbody></table>
+  {{- end}}
+</article>
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{define "job_detail" -}}
+<article>
+  <header><strong>{{.Name}}</strong> &middot; {{.Kind}} &middot; {{template "job_status" .Status}}</header>
+  <p><small>{{.Description}}</small></p>
+  <table><thead><tr><th>Model</th><th>Preset</th><th>Status</th><th>Attempt</th><th>Run</th></tr></thead><tbody>
+  {{- range .Cells}}
+    <tr>
+      <td><small>{{.ModelID}}</small></td><td>{{.Preset}}</td>
+      <td>{{template "cell_status" .Status}}{{if .Error}}<br><small><del>{{.Error}}</del></small>{{end}}</td>
+      <td>{{.Attempt}}</td>
+      <td><small>{{if .RunID}}<a href="#" hx-get="/api/benchmarks/{{.RunID}}">view</a>{{else}}&mdash;{{end}}</small></td>
+    </tr>
+  {{- end}}
+  </tbody></table>
+</article>
+{{- end}}
+
+{{define "job_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>completed</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else if eq . "canceled"}}<small>canceled</small>
+{{- else if eq . "pending"}}<small>pending</small>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{define "cell_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>done</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else if eq . "skipped"}}<small>skipped</small>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{define "job_form" -}}
+<article>
+  <header><strong>New batch job</strong></header>
+  <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
+    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" placeholder="optional"></label>
+
+    <label>Models</label>
+    <div>
+      {{- if not .Models}}<small style="opacity:0.7;">No models in the registry. <a href="/models/browse">Browse HuggingFace</a> first.</small>{{end}}
+      {{- range .Models}}<label><input type="checkbox" name="model_ids" value="{{.ID}}"> {{.Name}} <small style="opacity:0.6;">({{.ID}})</small></label>{{end}}
+    </div>
+
+    <label>Presets</label>
+    <div>
+      {{- range .Presets}}<label><input type="checkbox" name="presets" value="{{.Name}}"> <code>{{.Name}}</code> <small style="opacity:0.7;">— {{.Description}}</small></label>{{end}}
+    </div>
+
+    <button type="submit">Submit job</button>
+  </form>
+  <div id="bench-job-result"></div>
+</article>
+{{- end}}
+
+{{define "job_started"}}<p>Started job <code>{{.}}</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>{{end}}

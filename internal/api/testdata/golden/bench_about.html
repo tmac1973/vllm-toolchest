@@ -1,0 +1,55 @@
+<article>
+  <header><strong>About benchmarks</strong></header>
+
+  <h4>Benchmark sources</h4>
+  <ul>
+    <li><strong>internal-*</strong> presets run a Go HTTP loop that streams
+    <code>/v1/chat/completions</code> against the loaded vLLM. TTFT is
+    measured from the first SSE chunk; total time is wall clock. Token
+    counts come from <code>stream_options.include_usage</code>.</li>
+    <li><strong>benchy-*</strong> presets shell out to
+    <a href="https://github.com/eugr/llama-benchy" target="_blank" rel="noopener">llama-benchy</a>
+    via <code>uvx</code>. Engine-agnostic: the same preset can be run against
+    llama.cpp, Ollama, or any OpenAI-compatible server for apples-to-apples
+    comparison.</li>
+  </ul>
+
+  <h4>Internal preset prompt</h4>
+  <p>Each request prepends a repetition prefix to defeat the prefix cache,
+  then repeats the corpus text to fill the target token count
+  (assumes ~4 chars/token).</p>
+  <details>
+    <summary>Prefix template</summary>
+    <pre>This is benchmark repetition number %d. Please analyze the following text carefully and provide a detailed response.
+
+</pre>
+  </details>
+  <details>
+    <summary>Corpus text</summary>
+    <pre style="white-space:pre-wrap;font-size:0.85em;">The history of computing is a story of human ingenuity and the relentless pursuit of automation. From the earliest mechanical calculators of the 17th century to the modern silicon chips that power our world, each generation has built upon the discoveries of the last. Charles Babbage conceived of the Analytical Engine in the 1830s, a mechanical general-purpose computer that, had it been built, would have contained many features of modern computers. Ada Lovelace, working with Babbage, wrote what is often considered the first computer program. The 20th century brought electronic computing into reality. Alan Turing formalized the concept of computation itself, while engineers at the University of Pennsylvania built ENIAC, one of the first electronic general-purpose computers. The invention of the transistor at Bell Labs in 1947 revolutionized electronics, leading to smaller, faster, and more reliable computers. The integrated circuit, developed independently by Jack Kilby and Robert Noyce, made it possible to place thousands and eventually billions of transistors on a single chip. This exponential growth in computing power, described by Moore&#39;s Law, has driven decades of innovation. Personal computers brought computing to the masses in the 1980s, the internet connected them in the 1990s, and smartphones made computing truly ubiquitous in the 2000s. Today, artificial intelligence and machine learning represent the latest frontier, with large language models demonstrating remarkable capabilities in understanding and generating human language. These models, trained on vast amounts of text data, can engage in conversation, write code, analyze documents, and assist with creative tasks. The computational requirements for training and running these models have driven advances in GPU computing, distributed systems, and specialized hardware accelerators. </pre>
+  </details>
+
+  <h4>Presets</h4>
+  <table>
+    <thead><tr><th>Name</th><th>Source</th><th>Description</th></tr></thead>
+    <tbody><tr><td><code>internal-quick</code></td><td>internal</td><td><small>Single streaming chat completion at 512-token prompt / 128 gen tokens. Sanity check after model load.</small></td></tr><tr><td><code>internal-standard</code></td><td>internal</td><td><small>Three streaming chat completions at 128 / 512 / 2048-token prompts (128 gen tokens). Captures TTFT and gen-TPS scaling across short contexts.</small></td></tr><tr><td><code>internal-thorough</code></td><td>internal</td><td><small>Five repetitions at 128 / 512 / 2048 / 8192-token prompts with 256 generated tokens. Stresses long-context prefill.</small></td></tr><tr><td><code>internal-long-ctx</code></td><td>internal</td><td><small>Single 32768-token prompt with 512 generated tokens. Stresses KV cache, paged attention, and KV-cache dtype on long contexts.</small></td></tr><tr><td><code>benchy-quick</code></td><td>benchy</td><td><small>Single-shot llama-benchy run. Smoke test for the engine-agnostic comparison path.</small></td></tr><tr><td><code>benchy-standard</code></td><td>benchy</td><td><small>Three-run llama-benchy benchmark at 2048-token prompts. Comparable to llama-toolchest&#39;s benchy-standard.</small></td></tr><tr><td><code>benchy-concurrency</code></td><td>benchy</td><td><small>Stress vLLM&#39;s continuous batching by sweeping concurrency. Highlights where prefill saturates vs. throughput scales.</small></td></tr>
+    </tbody>
+  </table>
+
+  <h4>Benchy commands</h4>
+  <p>These are the exact <code>uvx</code> commands each benchy preset runs.
+  The model identifier (<code>--model</code>) is the served-model-name vLLM
+  reports via <code>/v1/models</code>; the tokenizer is the HuggingFace repo id.</p>
+  <details>
+    <summary><code>benchy-quick</code></summary>
+    <pre style="white-space:pre-wrap;font-size:0.85em;">uvx --with sentencepiece --with tiktoken llama-benchy --base-url http://localhost:8000/v1 --api-key EMPTY --model &lt;served-model-name&gt; --tokenizer &lt;hf-repo-id&gt; --pp 512 --tg 32 --runs 1 --concurrency 1 --format json --save-result &lt;tempfile&gt;</pre>
+  </details>
+  <details>
+    <summary><code>benchy-standard</code></summary>
+    <pre style="white-space:pre-wrap;font-size:0.85em;">uvx --with sentencepiece --with tiktoken llama-benchy --base-url http://localhost:8000/v1 --api-key EMPTY --model &lt;served-model-name&gt; --tokenizer &lt;hf-repo-id&gt; --pp 2048 --tg 128 --runs 3 --concurrency 1 --format json --save-result &lt;tempfile&gt;</pre>
+  </details>
+  <details>
+    <summary><code>benchy-concurrency</code></summary>
+    <pre style="white-space:pre-wrap;font-size:0.85em;">uvx --with sentencepiece --with tiktoken llama-benchy --base-url http://localhost:8000/v1 --api-key EMPTY --model &lt;served-model-name&gt; --tokenizer &lt;hf-repo-id&gt; --pp 1024 --tg 128 --runs 3 --concurrency 1 --concurrency 2 --concurrency 4 --concurrency 8 --format json --save-result &lt;tempfile&gt;</pre>
+  </details>
+</article>
