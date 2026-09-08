@@ -157,12 +157,48 @@ def patch_3_transformers_config(txt: str) -> str:
     return txt
 
 
+# BUILD_ARCH is the single architecture to fall back on when the GPU cannot be
+# asked. GPU_ARCH may name several, semicolon-separated for PyTorch; the first
+# is the one this image is primarily for.
+BUILD_ARCH = GPU_ARCH.split(";")[0].strip()
+
+
 def patch_4_gcn_arch(txt: str) -> str:
-    # Everything vLLM knows about the GPU comes from this one string. Pin it
-    # only where it is true; elsewhere _get_gcn_arch() asks the driver.
-    if not IS_GFX1201:
+    """Make the module-level GCN arch lookup survive a machine with no GPU.
+
+    vLLM resolves _GCN_ARCH at import time, and everything it knows about the
+    card is derived from that one string. The lookup asks amdsmi and then
+    torch.cuda, and on a builder with no /dev/kfd both fail — torch raises
+    "No CUDA GPUs are available" and `import vllm` dies. That matters here
+    because the image verifies its own install by importing vLLM, and it is a
+    real constraint besides: a container build should not need a GPU.
+
+    On gfx1201 the arch is pinned outright, which is how this script has always
+    worked for the R9700 and sidesteps the problem as a side effect.
+
+    Everywhere else the lookup is left to run — detection at runtime is the
+    whole point of not pinning it — with the final fallback changed from a
+    raise to the architecture the image was built for. At runtime, where a GPU
+    is present, this changes nothing: amdsmi answers first and the fallback is
+    never reached.
+    """
+    if IS_GFX1201:
+        return re.sub(r"_GCN_ARCH\s*=\s*_get_gcn_arch\(\)", '_GCN_ARCH = "gfx1201"', txt)
+
+    target = '    return torch.cuda.get_device_properties("cuda").gcnArchName'
+    if target not in txt:
         return txt
-    return re.sub(r"_GCN_ARCH\s*=\s*_get_gcn_arch\(\)", '_GCN_ARCH = "gfx1201"', txt)
+    replacement = (
+        "    try:\n"
+        '        return torch.cuda.get_device_properties("cuda").gcnArchName\n'
+        "    except Exception as e:\n"
+        "        # No GPU visible — a container build, typically. Fall back to\n"
+        "        # the architecture this image was built for rather than making\n"
+        "        # `import vllm` impossible without a card.\n"
+        '        logger.debug("Failed to get GCN arch via torch.cuda: %s", e)\n'
+        f'        return "{BUILD_ARCH}"'
+    )
+    return txt.replace(target, replacement)
 
 
 def patch_5_spinloop(txt: str) -> str:
