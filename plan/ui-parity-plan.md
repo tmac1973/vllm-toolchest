@@ -362,43 +362,48 @@ capability vllm-toolchest has never had.
 
 ---
 
-## Phase 3 — Benchmarks rebuild
+## Phase 3 — Benchmarks rebuild — **done**
 
-Port structure, comparison, visualization and export. Skip evaluation data.
+Structure, sweeps, export, comparison and visualization. Evaluation data
+deliberately skipped: it depends on llama.cpp tooling with no vLLM equivalent.
 
-- **Job list** — `partials/job_list.html`: collapsible `<details>` rows,
-  status pills (`.job-status` + the `status-*` tints), `done/total cells` with a
-  failed count, created/finished timestamps, lazy detail load on first open.
-- **Job detail** — `partials/job_detail.html`: per-cell table (model, quant,
-  preset, sweep values, status, TG t/s, PP t/s, attempt, Detail button),
-  `hx-swap-oob` updates to the collapsed row's status and progress so a running
-  job stays live without re-rendering the list, and `hx-preserve` on expanded
-  detail rows so they survive the 2s poll. Drop llama's Build and Score columns.
-- **Cell selection** — per-row checkboxes plus a header select-all.
-- **Compare selected** — port `internal/benchmark/compare_labels.go`,
-  `partials/benchmark_compare.html` and `/api/benchmarks/compare`. Includes the
-  behaviour from llama's #169: columns every selected run shares are hidden, so
-  the table shows only what actually varies.
-- **Visualize selected** — port `web/templates/visualize.html`,
-  `internal/benchmark/visualize.go`, `/api/benchmarks/visualize` and the
-  `/benchmarks/visualize` page. Vendor `plotly.min.js` into `web/static/`
-  (~3.5MB, embedded in the binary — acceptable, llama does the same). All eight
-  chart types: scatter, leaderboard, heatmap, faceted heatmaps, pareto,
-  parallel coordinates, 3D surface, 3D scatter.
-- **Export** — port `internal/api/bench_export.go`: CSV (cells), CSV (summary),
-  JSON, per job.
-- **Job lifecycle** — Cancel, Retry failed, Edit & Re-run (the job form
-  pre-filled from an existing job), Delete with runs / keep runs, and batch
-  delete of selected runs.
-- **Sweeps** — port `internal/benchmark/sweep.go` and the sweep controls in
-  `partials/job_form.html`, mapped to vLLM parameters
-  (`max_model_len`, `gpu_memory_utilization`, `max_num_seqs`,
-  `tensor_parallel_size`, `kv_cache_dtype`) rather than llama's.
-- **Keep** the context-probe form and the About modal, folded into the same page
-  layout.
-- **JS tests** — port `web/jstest/` (`dom.js`, `viz_test.js`,
-  `params_test.js`) and its make target; the visualize page is the one place
-  with enough client-side logic to warrant them.
+### Outcome
+
+Landed in six commits: job list and detail, sweeps, export, compare,
+visualize, lifecycle. Notable departures from the plan:
+
+- **Sweeps are not a port.** llama's `sweep.go` is mostly speculative-decoding
+  modes and their parameter grammar, which vLLM has no counterpart for. The
+  vLLM axes are the six engine-launch parameters, and because every one of
+  them costs a reload, the runner now groups cells by (model, sweep values)
+  rather than by model — and `ExpandCells` varies presets *inside* a sweep
+  value, so eight cells over four configurations is four loads rather than
+  eight. A test asserts that by counting the configuration changes in the
+  emitted order.
+- **Compare hides shared columns**, which was llama's #169. On the seeded
+  five-run example that is four columns instead of fourteen. An absent value
+  counts as variation, and runs that differ in nothing are called out — that
+  usually means the wrong runs were selected.
+- **Export is vLLM-shaped**, without llama's build, eval and memory columns.
+  Runs now record the sweep values they were measured at; older runs take them
+  from their cell on export.
+- **Visualize** sends a description of the data rather than of a chart. Only
+  varying dimensions become axes. The chart logic lives in
+  `web/static/viz.js` so it can be unit-tested under node; `make test` runs
+  those and skips where node is absent.
+
+### Fixed along the way
+
+`TestSubmitJobRejectsWhenAdHocRunActive` failed perhaps half the time —
+verified on `e5188c3`, before any of this work — and not on its assertion. It
+cancelled the run and returned, and `t.TempDir`'s cleanup then raced the run's
+goroutines still writing the store: "directory not empty". It now waits.
+
+### Not done
+
+Batch delete across jobs (the selection is per-open-job, which is the only
+scope the checkboxes have), and the evaluation datasets, which stay out of
+scope.
 
 ---
 
