@@ -58,7 +58,7 @@ ENV GPU_ARCH=${GPU_ARCH} \
     AMDGPU_TARGETS=${GPU_ARCH}
 
 # ── Build-time parallelism cap ─────────────────────────────────────
-# Applies to flash-attention (AITER submodule), bitsandbytes, and vLLM.
+# Applies to flash-attention (AITER submodule) and vLLM.
 # Each parallel C++/HIP compile can use 2-3 GB RAM; unbounded ninja
 # parallelism thrashes or OOMs typical build boxes.
 ENV MAX_JOBS=4
@@ -151,23 +151,30 @@ RUN cd /tmp/flash-attention && \
     python -u setup.py install 2>&1 && \
     cd / && rm -rf /tmp/flash-attention
 
-# ── Stage 5: bitsandbytes + vLLM ──────────────────────────────────
+# ── Stage 5: vLLM ─────────────────────────────────────────────────
 # Tag with `--target vllm-ready` to checkpoint just before runtime config.
 FROM fa-ready AS vllm-ready
 
-# ── bitsandbytes (ROCm fork) ──────────────────────────────────────
-ENV BNB_ROCM_ARCH=${GPU_ARCH}
-RUN git clone --depth 1 -b rocm_enabled_multi_backend \
-        https://github.com/ROCm/bitsandbytes.git /tmp/bitsandbytes && \
-    cd /tmp/bitsandbytes && \
-    cmake -S . -B build \
-        -DCOMPUTE_BACKEND=hip \
-        -DBNB_ROCM_ARCH="${GPU_ARCH}" \
-        -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
-        -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ && \
-    cmake --build build -j4 && \
-    pip install --no-cache-dir . && \
-    rm -rf /tmp/bitsandbytes
+# ── No bitsandbytes on this image ─────────────────────────────────
+# It used to be built here from ROCm's rocm_enabled_multi_backend fork. That
+# fork's kernels.hip asks hipcub for WarpReduce<float, 64>, i.e. a 64-lane
+# warp reduction. Every RDNA part — gfx1100 through gfx1201, which is every
+# arch this image targets — runs a 32-lane wavefront, so the request was
+# always wrong; ROCm 7.2.1's rocPRIM just let it through silently.
+#
+# 7.2.3's rocPRIM added check_virtual_wave_size, a static assert that the
+# requested virtual wave size cannot exceed the target's actual wavefront, and
+# the build has failed at that assert ever since the version bump:
+#
+#   static assertion failed due to requirement
+#   'predicate(::rocprim::arch::wavefront::size_from_target())'
+#   ... in instantiation of check_virtual_wave_size<64, target::size32>
+#
+# Fixing it means making that kernel wave-size agnostic upstream, not pinning
+# ROCm back. Dropping it costs the BitsAndBytes quantization path, which is a
+# poor fit for RDNA anyway (it quantizes at load, needs eager mode, and is
+# slower than the FP8/AWQ/GPTQ paths these cards accelerate) — and which
+# Dockerfile.radiance has never shipped.
 
 # ── valgrind headers ──────────────────────────────────────────────
 # PyTorch's rocm7.2 wheel baked /usr/include/valgrind into its cmake
