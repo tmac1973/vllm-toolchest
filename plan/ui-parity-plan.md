@@ -150,9 +150,44 @@ reintroduce it.
 
 ---
 
-## Phase 1 — First wave
+## Phase 1 — First wave — **done**
 
 Four independent workstreams that ship together.
+
+### Outcome
+
+All four landed. Deviations from the plan, and what the work turned up:
+
+- **1a** keeps the theme picker as a `<select>` rather than llama's button
+  grid: it is a field of the settings form, which is what persists the choice
+  server-side, and llama's buttons are browser-local only. Found that the
+  stored theme was written on save and then never applied — the layout
+  hardcoded dark and read only `localStorage`, so choosing a theme on one
+  machine did nothing on any other.
+- **1b** is ported but **not yet verified on the R9700 box**. No SSH access
+  from here. After deploying, `/api/monitor` should report indices 0–3 with
+  four distinct VRAM readings; today it reports index 0 four times.
+- **1c** turned up that the settings handler read five checkboxes
+  unconditionally, so the server page's two-field save would have cleared tool
+  use, Marlin, auto-restart, eager mode and prefix caching. The settings form
+  now marks itself and only it drives those.
+- **1d** keeps `?id=` query parameters instead of moving to `/{id}`: vLLM
+  registry IDs are HuggingFace repo ids and contain a slash, which a chi path
+  parameter will not match. llama's IDs are slash-free, which is why it can.
+  The GPU map shows the engine against everything else on each card rather
+  than model-vs-model, since one vLLM engine spreads evenly across its ranks.
+- The downloads panel required fixing the downloader: cancelling or failing
+  called `RemoveAll` on the model directory, so the Range-resume support in
+  `downloadFile` was unreachable and a network blip discarded the whole
+  transfer. Pause/Resume/Discard work on real downloads now (verified against
+  a live HuggingFace transfer: paused at 61.8 MB, resumed from 61.8 MB).
+  `Discard` also had a path guard that never fired — an id that was not
+  `owner/name` resolved to the models root, so `Discard("")` would have
+  deleted every model on the box.
+
+Not carried over from llama's Models page: the Embedding Models section and
+its preset downloader. vLLM can serve embedding models with `--task embed`, so
+it is a plausible follow-up, but it is an addition rather than parity.
 
 ### 1a. Shell: theme, typography, sidebar
 
@@ -295,8 +330,8 @@ Keep vllm's quant-format filter and variant grouping — llama has no equivalent
   exceeds the budget after the safety margin and in-flight downloads.
 - **Already-downloaded state** — `Downloaded` mark plus a `View` link to
   `/models`, instead of offering the download again.
-- **Resume from the file list** for partial downloads, matching the Phase 1d
-  downloads panel.
+- **Resume from the file list** for partial downloads. The panel already
+  offers it (Phase 1d); this is the same action from the file table.
 - **Deferred VRAM estimates.** llama renders the file table immediately and
   fills VRAM/fit cells later via `hx-swap-oob` (`hf_file_estimates`). Measure
   first: vllm computes estimates from `config.json` rather than by reading GGUF
