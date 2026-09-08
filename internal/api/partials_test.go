@@ -18,7 +18,7 @@ type presetChoice struct{ Name, Label string }
 // which is both deterministic (no uptime clock, no network) and a lot less
 // setup than getting a Server into the matching state.
 func TestGoldenPartials(t *testing.T) {
-	s := newGoldenServer(t, "")
+	s := newGoldenServer(t, goldenEnvGeneric)
 
 	cases := []struct {
 		name    string

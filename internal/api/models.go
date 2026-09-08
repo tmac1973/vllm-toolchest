@@ -252,8 +252,23 @@ type quantOption struct {
 	label string
 }
 
-// compatibleQuantOptions returns quantization methods compatible with the model's format.
-func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOption {
+// compatibleQuantOptions returns the quantization methods that both suit the
+// model's format and exist in this image.
+//
+// hasBNB gates BitsAndBytes: not every image ships it, and vLLM only discovers
+// that at load time, so offering it where it is absent turns a two-second
+// choice into a launch that dies on an import several minutes later.
+func compatibleQuantOptions(detectedMethod string, sym bool, bits int, hasBNB bool) []quantOption {
+	// A model already stored in a format the image cannot load is not a
+	// choice to hide — it is the reason the launch will fail, and saying so
+	// here is the only place the operator will see it before trying.
+	unavailable := func(label string) string {
+		if hasBNB {
+			return label
+		}
+		return label + " — not installed in this image"
+	}
+
 	switch detectedMethod {
 	case "awq":
 		opts := []quantOption{
@@ -285,8 +300,8 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOp
 
 	case "bitsandbytes":
 		return []quantOption{
-			{"", "auto-detect (BitsAndBytes)"},
-			{"bitsandbytes", "BitsAndBytes"},
+			{"", unavailable("auto-detect (BitsAndBytes)")},
+			{"bitsandbytes", unavailable("BitsAndBytes")},
 		}
 
 	case "compressed_tensors":
@@ -308,12 +323,14 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int) []quantOp
 		}
 
 	default:
-		// FP16/BF16 unquantized model -- can do dynamic quantization
-		return []quantOption{
-			{"", "None (full precision)"},
-			{"bitsandbytes", "BitsAndBytes (dynamic 4/8-bit at load)"},
-			{"fp8", "FP8 (dynamic 8-bit, needs GPU support)"},
+		// FP16/BF16 unquantized model -- can do dynamic quantization. Here
+		// BitsAndBytes is one option among several rather than the model's
+		// own format, so an image without it simply does not offer it.
+		opts := []quantOption{{"", "None (full precision)"}}
+		if hasBNB {
+			opts = append(opts, quantOption{"bitsandbytes", "BitsAndBytes (dynamic 4/8-bit at load)"})
 		}
+		return append(opts, quantOption{"fp8", "FP8 (dynamic 8-bit, needs GPU support)"})
 	}
 }
 

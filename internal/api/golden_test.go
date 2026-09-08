@@ -160,19 +160,31 @@ func goldenFixtureModels() []*models.Model {
 	}
 }
 
+// goldenEnvGeneric is the default image the recordings render against: a
+// generic install that does carry bitsandbytes, as the CUDA one does.
+var goldenEnvGeneric = vllmenv.Env{
+	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv", HasBitsAndBytes: true,
+}
+
+// goldenEnvRadiance is the RDNA4 image, which has never shipped bitsandbytes.
+var goldenEnvRadiance = vllmenv.Env{
+	Variant: vllmenv.VariantRadiance, RadianceVersion: "0.9.3", VenvRoot: "/opt/vllm",
+}
+
+// goldenEnvNoBNB is an image whose venv lacks bitsandbytes — the ROCm one,
+// since its only ROCm fork stopped compiling for wave32.
+var goldenEnvNoBNB = vllmenv.Env{
+	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv",
+}
+
 // newGoldenServer builds a Server whose every dependency is local and
 // deterministic: no network, no vLLM process, no GPU probe.
-func newGoldenServer(t *testing.T, variant string) *Server {
+func newGoldenServer(t *testing.T, env vllmenv.Env) *Server {
 	t.Helper()
 	dir := t.TempDir()
 
-	env := vllmenv.Env{Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv"}
-	if variant == vllmenv.VariantRadiance {
-		env = vllmenv.Env{
-			Variant:         vllmenv.VariantRadiance,
-			RadianceVersion: "0.9.3",
-			VenvRoot:        "/opt/vllm",
-		}
+	if env.Variant == "" {
+		env = goldenEnvGeneric
 	}
 
 	s := &Server{
@@ -301,7 +313,7 @@ func collapseRuns(s string) string {
 
 type goldenCase struct {
 	name    string
-	variant string
+	env     vllmenv.Env
 	method  string
 	target  string
 	handler func(*Server, http.ResponseWriter, *http.Request)
@@ -340,14 +352,23 @@ func TestGoldenFragments(t *testing.T) {
 	// and the all-reduce token-ceiling advice.
 	cases = append(cases, goldenCase{
 		name:    "config_panel_radiance",
-		variant: vllmenv.VariantRadiance,
+		env:     goldenEnvRadiance,
 		target:  "/api/models/config-panel?id=" + url.QueryEscape("unsloth/Qwen3.8-27B-FP8"),
+		handler: (*Server).handleModelConfigPanel,
+	})
+	// The unquantized model is the one whose picker offers BitsAndBytes, so
+	// record it against an image that does not have it: the option should be
+	// gone rather than offering a launch that dies on an import.
+	cases = append(cases, goldenCase{
+		name:    "config_panel_no_bitsandbytes",
+		env:     goldenEnvNoBNB,
+		target:  "/api/models/config-panel?id=" + url.QueryEscape(`evil/model "x><script>`),
 		handler: (*Server).handleModelConfigPanel,
 	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newGoldenServer(t, tc.variant)
+			s := newGoldenServer(t, tc.env)
 			method := tc.method
 			if method == "" {
 				method = "GET"

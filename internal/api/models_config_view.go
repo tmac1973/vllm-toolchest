@@ -168,7 +168,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		c.TensorParallelSize, c.MaxNumBatchedTokens,
 	)
 
-	for _, opt := range compatibleQuantOptions(m.Quantization.Method, m.Quantization.Sym, m.Quantization.Bits) {
+	for _, opt := range compatibleQuantOptions(m.Quantization.Method, m.Quantization.Sym, m.Quantization.Bits, s.vllmEnv.HasBitsAndBytes) {
 		v.QuantOptions = append(v.QuantOptions, selectOption{opt.val, opt.label, c.Quantization == opt.val})
 	}
 	for _, opt := range []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"} {
