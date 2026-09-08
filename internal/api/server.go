@@ -279,6 +279,9 @@ func (s *Server) buildRouter() chi.Router {
 			r.Put("/", s.handleUpdateSettings)
 			r.Post("/test-connection", s.handleTestConnection)
 		})
+		r.Get("/backup", s.handleBackupExport)
+		r.Post("/restore", s.handleRestore)
+		r.Post("/pending-configs/discard", s.handleDiscardPending)
 		r.Route("/monitor", func(r chi.Router) {
 			r.Get("/", s.handleMonitorStatus)
 			r.Get("/stream", s.handleMonitorStream)
@@ -322,9 +325,13 @@ func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) 
 	s.render(w, "models_browse.html", struct {
 		pageData
 		QuantFilters []huggingface.QuantFilterOption
+		// Query prefills the search box from ?q=, so a link can point at a
+		// particular model — the restore report's "Find" button does.
+		Query string
 	}{
 		pageData:     pageData{Title: "Search HuggingFace", Nav: "browse"},
 		QuantFilters: huggingface.QuantFilterOptions(),
+		Query:        r.URL.Query().Get("q"),
 	})
 }
 

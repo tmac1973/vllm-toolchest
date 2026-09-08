@@ -407,7 +407,7 @@ scope.
 
 ---
 
-## Phase 4 — Settings parity
+## Phase 4 — Settings parity — **done**
 
 Keep the Radiance section and the read-only Environment card as they are.
 
@@ -431,6 +431,65 @@ Keep the Radiance section and the read-only Environment card as they are.
 - **Auto-start on container startup.**
 - **Storage** — read-only data directory plus an editable models-directory
   override with the "restart the service after changing this" warning.
+
+### Outcome
+
+All four parts landed, in two commits: settings/env/storage/auto-start, then
+backup & restore.
+
+**Runtime environment.** The curated set was built by reading the vLLM and
+PyTorch installed in the image, not from documentation, and that changed the
+list this plan called for:
+
+- `VLLM_ATTENTION_BACKEND` and `VLLM_USE_V1` **do not exist** in this vLLM.
+  The attention backend is a launch flag (`--attention-backend`, already set
+  per model in the model config panel) and V0 is gone. Both would have been
+  controls that do nothing.
+- `VLLM_ROCM_USE_AITER` took their place. It defaults to off, so the AITER
+  kernels the image spends most of its build time compiling are unused until
+  someone turns them on — arguably the single highest-value knob on the page.
+- `VLLM_DISABLE_COMPILE_CACHE` likewise: the image ships it at `1`, so every
+  start recompiles from scratch.
+
+**Precedence runs the opposite way to llama-toolchest.** vLLM is launched with
+`append(os.Environ(), env...)` and os/exec resolves a duplicate name to its
+last occurrence, so a value set in Settings *replaces* the image's rather than
+being overridden by it. The effective-environment preview says "replaces X=Y"
+accordingly. Porting llama's wording unchanged would have told operators their
+change had no effect when it is the only thing taking effect.
+
+**The Radiance overlap** was resolved by delimiting rather than subsuming.
+Radiance keeps its section and is applied *after* the runtime environment, so
+the visible tri-state control wins over a free-text box; a `RADIANCE_*` name
+typed into the extra-environment box saves with a warning saying so. All four
+launch paths (start, restart, benchmark jobs, context probe) now go through one
+`launchEnv`, so a model benchmarked under one environment cannot be served
+under another.
+
+**Storage** needed real plumbing, not just a form field: `ModelDir` existed in
+the config and was read by nothing, with `dataDir/models` hardcoded in five
+places across two packages. A real `modelsDir` now threads through the registry
+and the downloader, and the path is validated (absolute, exists, is a
+directory) before it is stored.
+
+**Backup & restore** is simpler than llama's: vLLM serves a repository rather
+than a file within one, so a model config's identity is the HuggingFace repo ID
+and nothing else — no quant, no filename, and no path relativization, since a
+vLLM config holds no machine-local paths. What llama's GPU-assignment
+normalization does, tensor parallel size does here: a config asking for four
+GPUs on a two-GPU box does not fail at restore, it fails minutes into a model
+load, so it is clamped with a warning and clamped *before* being held pending.
+
+### Deviations
+
+- No backend/platform dropdown over the environment table. llama has one
+  because it has four build backends; here every variable is either universal
+  or ROCm, so the platform is shown as a tag and there is nothing to filter.
+- `VLLM_USE_TRITON_AWQ` is deliberately not curated — the image already exports
+  it as `1` for every model. It stays reachable through the extra box.
+- The restore report offers "Find" (deep-linking to the Download page,
+  which now accepts `?q=`) rather than llama's direct download button: vLLM
+  downloads a whole repository, so there is no single filename to fetch.
 
 ---
 

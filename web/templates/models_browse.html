@@ -12,6 +12,7 @@
     <input type="search"
            name="q"
            id="hf-search-input"
+           value="{{.Query}}"
            placeholder="Search models (e.g., llama 3.1 8b, qwen2.5, mistral nemo...)"
            hx-get="/api/hf/search"
            hx-trigger="input changed delay:400ms, search"
@@ -27,6 +28,17 @@
     </select>
     <span id="search-spinner" class="htmx-indicator" aria-busy="true">Searching...</span>
 </div>
+{{if .Query}}
+{{/* Arriving with ?q= should show results, not a filled box waiting for a
+     keystroke. htmx's "input changed" trigger will not fire for a value that
+     was there when the page loaded, so nudge it once. */}}
+<script>
+(function () {
+    var input = document.getElementById('hf-search-input');
+    if (input && input.value) htmx.trigger(input, 'search');
+})();
+</script>
+{{end}}
 
 <div id="search-results"></div>
 {{end}}
