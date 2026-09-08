@@ -69,11 +69,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		req.ModelIDs = r.Form["model_ids"]
 		req.Presets = r.Form["presets"]
 
-		// One field per sweepable parameter, named sweep_<field>, holding a
-		// comma-separated value list. Empty means "not swept".
+		// One field per sweepable parameter, named sweep_<field>. The form
+		// submits it once per ticked checkbox, so the value arrives as a
+		// repeated field; a single comma-separated string is still accepted,
+		// which is what a hand-rolled request or an older client sends.
+		// ParseSweepValues handles both and drops duplicates, so the two
+		// shapes cannot disagree.
 		for _, f := range benchmark.SweepFields() {
-			raw := strings.TrimSpace(r.FormValue("sweep_" + f.Name))
-			if raw == "" {
+			raw := strings.Join(r.Form["sweep_"+f.Name], ",")
+			if strings.TrimSpace(raw) == "" {
 				continue
 			}
 			values, err := benchmark.ParseSweepValues(f, raw)
@@ -244,13 +248,46 @@ type jobFormChoice struct {
 }
 
 // jobFormSweep is one sweep input, pre-filled when re-running a job.
+// jobFormSweep is one parameter's row in the job form: the curated choices,
+// each marked with whether this job has it ticked.
 type jobFormSweep struct {
 	Name    string
 	Label   string
 	Help    string
 	Example string
-	Choices []string
+	Options []sweepOption
+	// Selected counts the ticked options and Summary is the text the closed
+	// menu shows. Both are rendered server-side so a form re-opened from an
+	// existing job is already correct: the browser syncs these on load too,
+	// but only after a swap, and a summary that says "use the saved value"
+	// over three ticked boxes is wrong for as long as it is on screen.
+	Selected int
+	Summary  string
+}
+
+// sweepOption is one value a parameter can take.
+type sweepOption struct {
 	Value   string
+	Checked bool
+	// Custom marks a value that is not in the curated list — one a previous
+	// job set by hand. It is rendered as a ticked checkbox like any other, so
+	// re-running a job cannot silently drop a value the list does not cover.
+	Custom bool
+}
+
+// sweepSummary is the one-line description of a parameter's selection shown on
+// its closed menu. It has to agree exactly with what the browser writes when
+// the selection changes — see syncParamRow in benchmarks.html — or re-opening
+// a job would show one thing until the first click and another after it.
+func sweepSummary(values []string) string {
+	switch len(values) {
+	case 0:
+		return "Use model's saved value"
+	case 1:
+		return values[0]
+	default:
+		return strings.Join(values, ", ") + " \u2014 sweep"
+	}
 }
 
 // handleJobForm renders the batch-job form. With ?from=<id> it comes back
@@ -266,7 +303,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 
 	chosenModels := map[string]bool{}
 	chosenPresets := map[string]bool{}
-	sweepValues := map[string]string{}
+	sweepValues := map[string][]string{}
 	name, description, fromName := "", "", ""
 	if from != nil {
 		fromName = from.Name
@@ -281,7 +318,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 			chosenPresets[p] = true
 		}
 		for _, axis := range from.Sweeps {
-			sweepValues[axis.Field] = strings.Join(axis.Values, ", ")
+			sweepValues[axis.Field] = axis.Values
 		}
 	}
 
@@ -304,11 +341,33 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 
 	var sweeps []jobFormSweep
 	for _, f := range benchmark.SweepFields() {
-		sweeps = append(sweeps, jobFormSweep{
-			Name: f.Name, Label: f.Label, Help: f.Help,
-			Example: f.Example, Choices: f.Choices,
-			Value: sweepValues[f.Name],
-		})
+		chosen := map[string]bool{}
+		for _, v := range sweepValues[f.Name] {
+			chosen[v] = true
+		}
+		row := jobFormSweep{Name: f.Name, Label: f.Label, Help: f.Help, Example: f.Example}
+		for _, c := range f.Choices {
+			row.Options = append(row.Options, sweepOption{Value: c, Checked: chosen[c]})
+			delete(chosen, c)
+		}
+		// Whatever is left was set by hand on the job being re-run. Appending
+		// it keeps the value visible and ticked; dropping it would silently
+		// change what the re-run measures.
+		for _, v := range sweepValues[f.Name] {
+			if chosen[v] {
+				row.Options = append(row.Options, sweepOption{Value: v, Checked: true, Custom: true})
+				delete(chosen, v)
+			}
+		}
+		var picked []string
+		for _, o := range row.Options {
+			if o.Checked {
+				row.Selected++
+				picked = append(picked, o.Value)
+			}
+		}
+		row.Summary = sweepSummary(picked)
+		sweeps = append(sweeps, row)
 	}
 
 	respondHTML(w)
@@ -320,6 +379,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 		Presets     []jobFormChoice
 		SweepFields []jobFormSweep
 		HasSweeps   bool
+		MaxCells    int
 	}{
 		FromJob:     fromName,
 		Name:        name,
@@ -328,6 +388,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 		Presets:     presets,
 		SweepFields: sweeps,
 		HasSweeps:   len(sweepValues) > 0,
+		MaxCells:    benchmark.MaxSweepCombinations,
 	})
 }
 

@@ -252,5 +252,175 @@ function openJobEditForm(id) {
   var d = document.getElementById('bench-job-form').closest('details');
   if (d) { d.open = true; d.scrollIntoView({behavior: 'smooth', block: 'start'}); }
 }
+
+/* ── Batch-job parameter menus ──────────────────────────────────────
+   Each sweepable parameter is a dropdown of checkboxes: tick one value to
+   fix it for the whole job, tick several to sweep it. The checkboxes carry
+   the form field name directly, so htmx serializes a repeated
+   sweep_<field> without any of this JS running — everything below is
+   about keeping the closed summary and the cell count honest. */
+
+function paramRows() {
+  var form = document.getElementById('new-job-form');
+  return form ? Array.from(form.querySelectorAll('.param-row')) : [];
+}
+
+/* The values a row contributes. "Use model's saved value" wins when it is
+   ticked, so a row can never ask for the default and an override at once. */
+function paramValues(row) {
+  var inherit = row.querySelector('.param-inherit');
+  if (inherit && inherit.checked) return [];
+  return Array.from(row.querySelectorAll('.param-value:checked')).map(function (c) { return c.value; });
+}
+
+/* Inheriting and choosing are mutually exclusive in both directions. */
+function onParamInheritToggle(cb) {
+  var row = cb.closest('.param-row');
+  if (cb.checked) {
+    row.querySelectorAll('.param-value').forEach(function (c) { c.checked = false; });
+  }
+  syncParamRow(row);
+}
+
+function onParamValueToggle(cb) {
+  var row = cb.closest('.param-row');
+  var inherit = row.querySelector('.param-inherit');
+  if (cb.checked && inherit) inherit.checked = false;
+  syncParamRow(row);
+}
+
+/* Numeric equality that requires the whole string to be a number, so
+   adding "8192" twice does not create a second checkbox, while "0.9" and
+   "0.90" are recognised as the same point. parseFloat would accept a
+   prefix and match "8192" against "81". */
+function sameParamValue(a, b) {
+  if (a === b) return true;
+  if (a === '' || b === '') return false;
+  var na = Number(a), nb = Number(b);
+  return !isNaN(na) && !isNaN(nb) && na === nb;
+}
+
+/* Adds a value the curated list does not offer. The server validates it —
+   an out-of-range or malformed one is rejected at submit with a message
+   naming the parameter — so this deliberately does not second-guess it. */
+function addParamCustom(el) {
+  var row = el.closest('.param-row');
+  var input = row.querySelector('.param-custom-input');
+  var raw = (input.value || '').trim();
+  if (!raw) return;
+
+  var existing = Array.from(row.querySelectorAll('.param-value')).find(function (c) {
+    return sameParamValue(c.value, raw);
+  });
+  if (existing) {
+    existing.checked = true;
+  } else {
+    var name = row.querySelector('.param-value')
+      ? row.querySelector('.param-value').getAttribute('name')
+      : 'sweep_' + row.getAttribute('data-param');
+    var label = document.createElement('label');
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'param-value';
+    box.name = name;
+    box.value = raw;
+    box.checked = true;
+    box.addEventListener('change', function () { onParamValueToggle(box); });
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' ' + raw + ' '));
+    var tag = document.createElement('small');
+    tag.style.opacity = '0.6';
+    tag.textContent = '(custom)';
+    label.appendChild(tag);
+    row.querySelector('.param-custom').insertAdjacentElement('beforebegin', label);
+  }
+
+  var inherit = row.querySelector('.param-inherit');
+  if (inherit) inherit.checked = false;
+  input.value = '';
+  syncParamRow(row);
+}
+
+/* Keeps the closed summary current: a set parameter should be readable
+   without opening its menu, and a swept one should look different from a
+   fixed one at a glance. */
+function syncParamRow(row) {
+  var summary = row.querySelector('.param-summary');
+  if (summary) {
+    var values = paramValues(row);
+    if (!values.length) {
+      summary.textContent = "Use model's saved value";
+      summary.removeAttribute('data-active');
+    } else if (values.length === 1) {
+      summary.textContent = values[0];
+      summary.setAttribute('data-active', 'fixed');
+    } else {
+      summary.textContent = values.join(', ') + ' \u2014 sweep';
+      summary.setAttribute('data-active', 'sweep');
+    }
+  }
+  updateMatrixCount();
+}
+
+/* The cell count, live. Worth showing while the job is being built rather
+   than at submit: every combination is a separate engine load, so the
+   difference between a job that takes minutes and one that takes a day is
+   a couple of extra ticks. */
+function updateMatrixCount() {
+  var form = document.getElementById('new-job-form');
+  if (!form) return;
+  var preview = document.getElementById('job-matrix-preview');
+  var btn = document.getElementById('job-submit-btn');
+  if (!preview || !btn) return;
+
+  var models = form.querySelectorAll('input[name=model_ids]:checked').length;
+  var presets = form.querySelectorAll('input[name=presets]:checked').length;
+  if (!models || !presets) {
+    preview.textContent = 'Select models and presets to compute the matrix size.';
+    preview.removeAttribute('data-over');
+    btn.disabled = true;
+    return;
+  }
+
+  var combos = 1, desc = '';
+  paramRows().forEach(function (row) {
+    var n = paramValues(row).length;
+    if (n < 2) return;              // one value fixes the parameter; it adds no cells
+    combos *= n;
+    desc += ' \u00d7 ' + n + ' ' + row.getAttribute('data-param');
+  });
+
+  var cells = models * presets * combos;
+  var text = models + ' model' + (models === 1 ? '' : 's') +
+             ' \u00d7 ' + presets + ' preset' + (presets === 1 ? '' : 's') +
+             desc + ' = ' + cells + ' cell' + (cells === 1 ? '' : 's');
+
+  /* Loads, not cells, are what make a job slow: presets of the same model
+     and configuration share one load. This matches how the runner groups
+     its work, so the estimate cannot flatter the job. */
+  var loads = models * combos;
+  text += ' \u00b7 ~' + loads + ' engine load' + (loads === 1 ? '' : 's');
+
+  var max = parseInt(form.getAttribute('data-max-cells'), 10);
+  if (max && combos > max) {
+    preview.textContent = text + ' \u2014 over the ' + max + '-combination limit';
+    preview.setAttribute('data-over', '1');
+    btn.disabled = true;
+    return;
+  }
+  preview.textContent = text;
+  preview.removeAttribute('data-over');
+  btn.disabled = false;
+}
+
+/* The form arrives by htmx, including pre-ticked values when re-running a
+   job, so the summaries and the count have to be built after each swap
+   rather than once on page load. */
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.target && e.target.querySelector && e.target.querySelector('#new-job-form')) {
+    paramRows().forEach(syncParamRow);
+    updateMatrixCount();
+  }
+});
 </script>
 {{end}}

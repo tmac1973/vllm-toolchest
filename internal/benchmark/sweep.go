@@ -215,6 +215,14 @@ func ParseSweepValues(field SweepField, raw string) ([]string, error) {
 	return out, nil
 }
 
+// MaxSweepCombinations caps the matrix. Every combination is a separate engine
+// load, so one that would take days is worth refusing rather than starting.
+//
+// Exported because the form shows the count as it is built and disables submit
+// past the limit: finding out at submission that a job is too big is worse
+// than watching the number climb towards the cap.
+const MaxSweepCombinations = 64
+
 // ValidateSweeps checks a set of axes before a job is persisted, so a bad
 // value is reported at submission rather than discovered several loads in.
 func ValidateSweeps(axes []SweepAxis) error {
@@ -239,12 +247,9 @@ func ValidateSweeps(axes []SweepAxis) error {
 		}
 		total *= len(a.Values)
 	}
-	// Every combination is a separate engine load, so a matrix that would take
-	// days is worth refusing rather than starting.
-	const maxCombinations = 64
-	if total > maxCombinations {
+	if total > MaxSweepCombinations {
 		return fmt.Errorf("that is %d combinations of sweep values; %d is the limit, since each one reloads the engine",
-			total, maxCombinations)
+			total, MaxSweepCombinations)
 	}
 	return nil
 }
