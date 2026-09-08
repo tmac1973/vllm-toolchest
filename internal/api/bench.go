@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -111,6 +112,35 @@ func (s *Server) handleListBenchmarks(w http.ResponseWriter, r *http.Request) {
 
 	respondHTML(w)
 	s.renderRunList(w, runs)
+}
+
+// handleCompareBenchmarks renders a comparison of the selected runs.
+func (s *Server) handleCompareBenchmarks(w http.ResponseWriter, r *http.Request) {
+	ids := strings.Split(r.URL.Query().Get("ids"), ",")
+	var runs []benchmark.BenchmarkRun
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		run, err := s.bench.Get(id)
+		if err != nil {
+			http.Error(w, "run not found: "+id, http.StatusNotFound)
+			return
+		}
+		runs = append(runs, *run)
+	}
+	if len(runs) < 2 {
+		http.Error(w, "select at least two runs to compare", http.StatusBadRequest)
+		return
+	}
+
+	if !isHTMX(r) {
+		respondJSON(w, benchmark.BuildCompare(runs))
+		return
+	}
+	respondHTML(w)
+	s.renderPartial(w, "benchmark_compare", benchmark.BuildCompare(runs))
 }
 
 // handleGetBenchmark returns a single run by ID. Dual-mode.

@@ -1,0 +1,74 @@
+{{define "benchmark_compare" -}}
+<article id="comparison" style="margin-bottom:1rem;">
+  <header style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+    <span><strong>Comparing {{len .Rows}} runs</strong></span>
+    <button type="button" class="outline secondary" style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;width:auto;"
+            onclick="document.getElementById('comparison-view').innerHTML='';">Close</button>
+  </header>
+
+  {{- if .Identical}}
+  <p><mark>These runs differ in nothing recorded — same model, configuration and preset. Any gap between them is run-to-run variance.</mark></p>
+  {{- end}}
+
+  {{- if .Common}}
+  {{/* Stated once rather than repeated down every row: these are the
+       conditions the comparison holds constant, and the point of the table is
+       what does not. */}}
+  <p style="font-size:0.85rem;color:var(--pico-muted-color);margin-bottom:0.75rem;">
+    <strong>All runs share:</strong>
+    {{- range $i, $c := .Common}}{{if $i}} &middot;{{end}} {{$c.Label}} <code>{{$c.Value}}</code>{{end}}
+  </p>
+  {{- end}}
+
+  <div class="bench-compare-bars">
+    {{- range .Rows}}
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="{{.Label}}">{{.Label}}</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:{{printf "%.1f" .GenBarPct}}%;background:{{if .Best}}var(--pico-ins-color){{else}}var(--pico-primary){{end}};"></span>
+      </span>
+      <span class="bench-compare-value">{{if .Failed}}&mdash;{{else}}{{printf "%.1f" .GenTPS}}{{end}}</span>
+      <span class="bench-compare-rank">
+        {{- if .Failed}}<small>failed</small>
+        {{- else if .Best}}<mark>best</mark>
+        {{- else}}{{printf "%.1f" .DeltaPct}}%
+        {{- end}}
+      </span>
+    </div>
+    {{- end}}
+  </div>
+
+  <div class="bench-compare-scroll">
+    <table role="grid" style="font-size:0.85rem;">
+      <thead>
+        <tr>
+          <th>#</th>
+          {{- range .Varying}}<th>{{.Label}}</th>{{end}}
+          <th title="Token generation tokens/sec">TG t/s</th>
+          <th title="Prompt processing tokens/sec">PP t/s</th>
+          <th title="Time to first token">TTFT</th>
+          <th title="Generation rate against the fastest run">vs best</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{- range .Rows}}
+        <tr>
+          <td>{{if .Failed}}&mdash;{{else}}{{.Rank}}{{end}}</td>
+          {{- range .Cells}}<td>{{if .}}{{.}}{{else}}&mdash;{{end}}</td>{{end}}
+          <td>{{if .Failed}}&mdash;{{else}}<strong>{{printf "%.1f" .GenTPS}}</strong>{{end}}</td>
+          <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .PromptTPS}}{{end}}</td>
+          <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .TTFTMs}} ms{{end}}</td>
+          <td>
+            {{- if .Failed}}<small>failed</small>
+            {{- else if .Best}}<ins>best</ins>
+            {{- else}}{{printf "%.1f" .DeltaPct}}%
+            {{- end}}
+          </td>
+        </tr>
+      {{- end}}
+      </tbody>
+    </table>
+  </div>
+</article>
+{{- end}}

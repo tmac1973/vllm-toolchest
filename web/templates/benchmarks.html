@@ -56,6 +56,53 @@
    run-on sentence. */
 .job-desc { display: block; }
 
+/* ── Comparison ── */
+.bench-compare-bars { display: block; margin-bottom: 0.75rem; }
+.bench-compare-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+}
+.bench-compare-label {
+    width: 380px;
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: help;
+}
+.bench-compare-bartrack {
+    flex: 1;
+    background: var(--pico-muted-border-color);
+    border-radius: 4px;
+    height: 1.2rem;
+}
+.bench-compare-barfill { display: block; border-radius: 4px; height: 100%; min-width: 2px; }
+.bench-compare-value { width: 60px; font-size: 0.85rem; }
+.bench-compare-rank  { width: 60px; font-size: 0.75rem; text-align: right; color: var(--pico-muted-color); }
+.bench-compare-rank mark { padding: 0 0.3rem; font-size: 0.7rem; }
+
+/* The table is wider than the page whenever a comparison varies on much.
+   Overlay scrollbars draw nothing until the pointer moves, so the table looks
+   truncated rather than scrollable — ask for a bar that stays. */
+.bench-compare-scroll {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--pico-muted-border-color) transparent;
+}
+.bench-compare-scroll::-webkit-scrollbar { height: 10px; }
+.bench-compare-scroll::-webkit-scrollbar-track {
+    background: var(--pico-background-color);
+    border-radius: 5px;
+}
+.bench-compare-scroll::-webkit-scrollbar-thumb {
+    background: var(--pico-muted-border-color);
+    border-radius: 5px;
+}
+.bench-compare-scroll::-webkit-scrollbar-thumb:hover { background: var(--pico-muted-color); }
+
 /* The row of actions under a job's cells. */
 .job-action {
     margin: 0;

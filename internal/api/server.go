@@ -247,6 +247,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/", s.handleStartBenchmark)
 			r.Get("/form", s.handleBenchmarkForm)
 			r.Get("/about", s.handleBenchmarksAbout)
+			r.Get("/compare", s.handleCompareBenchmarks)
 			r.Get("/timings", s.handleTimingsList)
 			r.Get("/timings/*", s.handleTimingsForModel)
 			r.Get("/probe-context/form", s.handleProbeForm)
