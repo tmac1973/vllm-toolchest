@@ -243,6 +243,7 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 		GPUs:        GPUSnapshotsFromMetrics(s.env.CurrentMetrics()),
 
 		Preset:       preset.Name,
+		SweepValues:  cell.SweepValues,
 		PromptTokens: preset.PromptTokens,
 		GenTokens:    preset.GenTokens,
 	}
