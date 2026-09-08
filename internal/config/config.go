@@ -50,6 +50,10 @@ type Config struct {
 	StartupTimeoutS  int  `yaml:"startup_timeout_s"`
 	ShutdownTimeoutS int  `yaml:"shutdown_timeout_s"`
 
+	// ActiveModel is the registry ID the Start button launches, and what a
+	// restart brings back. Empty means nothing has been chosen yet.
+	ActiveModel string `yaml:"active_model"`
+
 	// Theme
 	Theme string `yaml:"theme"`
 

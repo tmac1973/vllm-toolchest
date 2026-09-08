@@ -159,10 +159,9 @@ func (s *Server) initTemplates() {
 
 	pages := map[string]*template.Template{}
 	pageFiles := []string{
-		"index.html",
 		"models.html",
 		"models_browse.html",
-		"service.html",
+		"server.html",
 		"benchmarks.html",
 		"tuning.html",
 		"settings.html",
@@ -202,7 +201,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/", s.handleIndex)
 	r.Get("/models", s.handleModelsPage)
 	r.Get("/models/browse", s.handleModelsBrowsePage)
-	r.Get("/server", s.handleServicePage)
+	r.Get("/server", s.handleServerPage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
 	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
@@ -299,8 +298,11 @@ type pageData struct {
 	Nav   string
 }
 
+// handleIndex redirects to the server page, which is where the dashboard now
+// lives — status, controls and logs on one screen rather than a read-only
+// summary linking to a separate Service tab.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "index.html", pageData{Nav: "home"})
+	http.Redirect(w, r, "/server", http.StatusFound)
 }
 
 func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
@@ -311,8 +313,33 @@ func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) 
 	s.render(w, "models_browse.html", pageData{Title: "Search HuggingFace", Nav: "browse"})
 }
 
-func (s *Server) handleServicePage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "service.html", pageData{Title: "Service", Nav: "service"})
+// modelChoice is one entry of the server page's model picker.
+type modelChoice struct {
+	ID     string
+	Name   string
+	Active bool
+}
+
+func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
+	var choices []modelChoice
+	for _, m := range s.registry.List() {
+		if m.Orphaned {
+			continue
+		}
+		choices = append(choices, modelChoice{
+			ID:     m.ID,
+			Name:   displayNameOf(m),
+			Active: m.ID == s.cfg.ActiveModel,
+		})
+	}
+
+	s.render(w, "server.html", struct {
+		pageData
+		Models []modelChoice
+	}{
+		pageData: pageData{Title: "Server", Nav: "server"},
+		Models:   choices,
+	})
 }
 
 func (s *Server) handleBenchmarksPage(w http.ResponseWriter, r *http.Request) {
@@ -424,31 +451,26 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	timings := []dashboardTiming{}
-	for _, a := range s.bench.RunningAverages() {
-		timings = append(timings, dashboardTiming{
-			ModelID:   a.ModelID,
-			AvgGenTPS: a.AvgGenTPS,
-			Count:     a.Count,
-			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
-		})
+	// The name clients pass in the "model" field, which is only meaningful
+	// while something is actually being served.
+	served := ""
+	if st := s.process.GetStatus(); st.State == process.StateRunning {
+		served = st.ModelID
 	}
 
 	respondHTML(w)
 	s.renderPartial(w, "dashboard_cards", struct {
-		Service        process.Status
 		GPUs           []dashboardGPU
 		ModelCount     int
 		APIURL         string
+		ServedModel    string
 		ToolUseEnabled bool
-		Timings        []dashboardTiming
 	}{
-		Service:        s.process.GetStatus(),
 		GPUs:           gpus,
 		ModelCount:     len(s.registry.List()),
 		APIURL:         strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1",
+		ServedModel:    served,
 		ToolUseEnabled: s.cfg.ToolUseEnabled,
-		Timings:        timings,
 	})
 }
 

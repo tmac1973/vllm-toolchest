@@ -42,8 +42,13 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 		req.ModelID = r.FormValue("model_id")
 	}
 
+	// The Server page posts its picker's value; anything else (a script, the
+	// auto-start path) gets the model the picker last saved.
 	if req.ModelID == "" {
-		http.Error(w, "missing model_id", http.StatusBadRequest)
+		req.ModelID = s.cfg.ActiveModel
+	}
+	if req.ModelID == "" {
+		http.Error(w, "no model selected — pick one on the Server page", http.StatusBadRequest)
 		return
 	}
 

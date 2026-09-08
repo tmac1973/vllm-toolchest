@@ -2,6 +2,10 @@
 <h1>Settings</h1>
 
 <form hx-put="/api/settings" hx-trigger="change" hx-target="#settings-save-status" hx-swap="innerHTML" hx-include="closest form">
+{{/* Marks this as the form that owns every toggle below. Without it a form
+     carrying only some of these fields would clear the rest, because an
+     unchecked checkbox submits nothing at all. */}}
+<input type="hidden" name="settings_form" value="1">
 
 <div id="settings-save-status" style="position:fixed;top:1rem;right:1rem;z-index:100;"></div>
 

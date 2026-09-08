@@ -1,0 +1,283 @@
+{{define "content"}}
+<style>
+    /* The page is a column: cards on top, logs taking whatever is left, so
+       the log pane grows with the window instead of pushing it. */
+    .server-page {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 3rem);
+        overflow-y: auto;
+    }
+    .server-top { flex-shrink: 0; }
+    .server-page .log-section {
+        flex: 1;
+        min-height: 300px;
+        overflow: hidden;
+    }
+    .server-page .log-section .log-panel {
+        margin: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    .server-page .log-section .log-panel pre {
+        flex: 1;
+        max-height: none;
+        overflow-y: auto;
+        font-size: 0.85rem;
+        margin: 0;
+    }
+    .server-action-error {
+        color: var(--pico-del-color);
+        font-size: 0.8rem;
+        margin: 0.25rem 0;
+        padding: 0.3rem 0.5rem;
+        background: rgba(220, 53, 69, 0.08);
+        border-left: 3px solid var(--pico-del-color);
+        display: none;
+        white-space: pre-wrap;
+    }
+
+    /* Compact controls inside the Server card */
+    .server-card header { margin-bottom: 0.4rem; }
+    .server-card label { font-size: 0.75rem; margin-bottom: 0.5rem; }
+    .server-card select,
+    .server-card input[type="number"] {
+        padding: 0.25rem 0.4rem;
+        font-size: 0.8rem;
+        height: auto;
+        margin-top: 0.15rem;
+        --pico-form-element-spacing-vertical: 0.25rem;
+        --pico-form-element-spacing-horizontal: 0.4rem;
+    }
+    .server-card [role="group"] button {
+        padding: 0.25rem 0.6rem;
+        font-size: 0.8rem;
+        margin: 0;
+    }
+    .server-card select {
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    #server-status-badge { font-size: 0.85rem; margin-bottom: 0.5rem; }
+    #model-save-status { font-size: 0.75rem; color: var(--pico-muted-color); min-height: 1rem; }
+    #model-save-status p { margin: 0; }
+    .live-perf header { margin-bottom: 0.3rem; font-size: 0.9rem; }
+    .live-perf { margin-bottom: 0.5rem; padding-top: 0.75rem; padding-bottom: 0.75rem; }
+    .live-perf table { margin: 0; }
+</style>
+
+<div class="server-page">
+    <div class="server-top">
+        <div class="grid">
+            <article class="server-card">
+                <header>Server</header>
+                <div id="server-status-badge"
+                     hx-get="/api/service/status"
+                     hx-trigger="load, every 5s"
+                     hx-swap="innerHTML"></div>
+                <form id="server-settings-form"
+                      hx-put="/api/settings"
+                      hx-target="#model-save-status"
+                      hx-swap="innerHTML"
+                      hx-trigger="change delay:500ms">
+                    <label>
+                        Model
+                        <select name="active_model">
+                            <option value="">(none selected)</option>
+                            {{range .Models}}
+                            <option value="{{.ID}}"{{if .Active}} selected{{end}}>{{.Name}}</option>
+                            {{end}}
+                        </select>
+                    </label>
+                </form>
+                <div id="model-save-status"></div>
+                <div id="server-action-error" class="server-action-error"></div>
+                <div role="group">
+                    <button type="button"
+                            hx-post="/api/service/start"
+                            hx-include="#server-settings-form"
+                            hx-swap="none"
+                            hx-on::after-request="onServerAction(event)">
+                        Start
+                    </button>
+                    <button type="button" class="secondary"
+                            hx-post="/api/service/stop"
+                            hx-swap="none"
+                            hx-on::after-request="onServerAction(event)">
+                        Stop
+                    </button>
+                    <button type="button" class="outline" onclick="restartServer(this)">
+                        Restart
+                    </button>
+                </div>
+            </article>
+            <div id="dashboard-cards" style="display:contents;"
+                 hx-get="/api/dashboard"
+                 hx-trigger="load, every 5s"
+                 hx-swap="innerHTML">
+                <article><header>GPU</header><p aria-busy="true">Loading...</p></article>
+                <article><header>Models</header><p>—</p></article>
+                <article><header>API Endpoint</header><p>—</p></article>
+            </div>
+        </div>
+
+        <article class="live-perf">
+            <header>Live Performance</header>
+            <div id="timings-summary"
+                 hx-get="/api/benchmarks/timings"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+            </div>
+        </article>
+    </div>
+
+    <div class="log-section">
+        <article class="log-panel" data-clear-url="/api/service/logs">
+            <header>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>Server Logs</span>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <label style="margin: 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
+                            Live tail
+                            <input type="checkbox" class="log-tail-toggle" role="switch" checked
+                                   style="margin: 0;">
+                        </label>
+                        <button type="button" class="log-copy-btn outline secondary"
+                                style="margin: 0; padding: 0.25rem 0.75rem; font-size: 0.8rem;">
+                            Copy
+                        </button>
+                        <button type="button" class="log-clear-btn outline secondary"
+                                style="margin: 0; padding: 0.25rem 0.75rem; font-size: 0.8rem;">
+                            Clear
+                        </button>
+                    </div>
+                </div>
+            </header>
+            <pre id="service-logs"></pre>
+        </article>
+    </div>
+</div>
+
+<script>
+// --- Copy a button's data-copy to the clipboard, flashing a check ---
+// Falls back to a hidden textarea when the async clipboard API is unavailable,
+// which it is on plain HTTP to a LAN address — the usual way this is reached.
+var CHECK_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8l3 3 7-7"/></svg>';
+function copyFromButton(btn) {
+    var text = btn.dataset.copy || '';
+    // The button's own markup is the icon to restore, so the icon lives in
+    // exactly one place — the template that drew it.
+    var originalIcon = btn.innerHTML;
+    var flashCheck = function() {
+        btn.innerHTML = CHECK_SVG;
+        setTimeout(function(){ btn.innerHTML = originalIcon; }, 900);
+    };
+    var fallback = function() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+        flashCheck();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(flashCheck).catch(fallback);
+    } else {
+        fallback();
+    }
+}
+
+// --- Clear the "saved" confirmation after a moment ---
+document.body.addEventListener('htmx:afterSwap', function(e) {
+    var t = e.detail && e.detail.target;
+    if (t && t.id === 'model-save-status') {
+        setTimeout(function(){ t.innerHTML = ''; }, 1500);
+    }
+});
+
+// --- Start/Stop feedback. A failed start used to be silent. ---
+function onServerAction(e) {
+    var box = document.getElementById('server-action-error');
+    if (e.detail && e.detail.successful) {
+        if (box) { box.style.display = 'none'; box.textContent = ''; }
+        htmx.trigger('#dashboard-cards', 'load');
+        htmx.trigger('#server-status-badge', 'load');
+    } else if (box) {
+        var msg = (e.detail && e.detail.xhr && e.detail.xhr.responseText) || 'Request failed';
+        box.textContent = msg.trim();
+        box.style.display = 'block';
+    }
+}
+
+// --- Restart: save the pending model choice first, then restart ---
+async function restartServer(btn) {
+    var box = document.getElementById('server-action-error');
+    var showErr = function(msg) {
+        if (box) { box.textContent = (msg || '').trim() || 'Request failed'; box.style.display = 'block'; }
+    };
+    if (box) { box.style.display = 'none'; box.textContent = ''; }
+    if (btn) btn.disabled = true;
+    try {
+        var form = document.getElementById('server-settings-form');
+        var saveResp = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'HX-Request': 'true',
+            },
+            body: new URLSearchParams(new FormData(form)).toString(),
+        });
+        if (!saveResp.ok) { showErr(await saveResp.text()); return; }
+
+        var restartResp = await fetch('/api/service/restart', {
+            method: 'POST',
+            headers: { 'HX-Request': 'true' },
+        });
+        if (!restartResp.ok) { showErr(await restartResp.text()); return; }
+
+        htmx.trigger('#dashboard-cards', 'load');
+        htmx.trigger('#server-status-badge', 'load');
+    } catch (e) {
+        showErr(String((e && e.message) || e));
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+(function() {
+    // --- Server log stream ---
+    // Replaces a 2s poll that re-fetched the whole buffer and reassigned it.
+    var logSSE = new EventSource('/api/service/log-stream');
+    logSSE.onmessage = function(e) {
+        var pre = document.getElementById('service-logs');
+        pre.textContent += e.data + '\n';
+        var toggle = document.querySelector('.log-tail-toggle');
+        if (toggle && toggle.checked) {
+            pre.scrollTop = pre.scrollHeight;
+        }
+    };
+    logSSE.addEventListener('done', function() {
+        logSSE.close();
+    });
+
+    // Seed the pane with what is already in the buffer, so opening the page
+    // mid-run shows the run rather than starting blank.
+    fetch('/api/service/logs', {headers: {'HX-Request': 'true'}})
+        .then(function(r) { return r.text(); })
+        .then(function(text) {
+            var pre = document.getElementById('service-logs');
+            if (text && !pre.textContent) {
+                pre.textContent = text;
+                pre.scrollTop = pre.scrollHeight;
+            }
+        })
+        .catch(function() {});
+})();
+</script>
+{{end}}
