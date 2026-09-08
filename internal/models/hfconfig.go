@@ -59,6 +59,11 @@ func ParseHFConfig(modelDir string) HFConfig {
 		}
 	}
 
+	// Hybrid models list a type per layer. Only the full-attention ones carry
+	// a KV cache; linear-attention / mamba / GDN layers keep a fixed-size
+	// recurrent state instead, which does not scale with context.
+	cfg.AttentionLayers = countAttentionLayers(src, cfg.NumHiddenLayers)
+
 	// Intermediate size
 	if !jsonFieldFrom(src, &cfg.IntermediateSize, "intermediate_size") {
 		jsonFieldFrom(src, &cfg.IntermediateSize, "ffn_dim")
@@ -559,4 +564,50 @@ func jsonFieldFrom[T any](raw map[string]json.RawMessage, dst *T, key string) bo
 		return false
 	}
 	return json.Unmarshal(v, dst) == nil
+}
+
+// countAttentionLayers works out how many layers hold a KV cache.
+//
+// Three shapes appear in the wild, in decreasing order of reliability:
+//
+//	layer_types: ["full_attention", "linear_attention", ...]   one entry per layer
+//	full_attention_interval: 4                                 every Nth layer
+//	(neither)                                                  assume dense
+//
+// Returns 0 when the layer count itself is unknown, so callers can tell
+// "no information" from "genuinely zero".
+func countAttentionLayers(src map[string]json.RawMessage, totalLayers int) int {
+	if totalLayers <= 0 {
+		return 0
+	}
+
+	var types []string
+	if jsonFieldFrom(src, &types, "layer_types") && len(types) > 0 {
+		n := 0
+		for _, t := range types {
+			// Match on the absence of a linear/recurrent marker rather than a
+			// fixed list of attention spellings: new hybrids keep inventing
+			// names for their recurrent layers, and mistaking one for
+			// attention overstates memory, while the reverse understates it.
+			switch {
+			case strings.Contains(t, "linear"),
+				strings.Contains(t, "mamba"),
+				strings.Contains(t, "recurrent"),
+				strings.Contains(t, "gdn"),
+				strings.Contains(t, "conv"):
+				// recurrent layer: no KV cache
+			default:
+				n++
+			}
+		}
+		return n
+	}
+
+	// Some configs give only the stride between full-attention layers.
+	var interval int
+	if jsonFieldFrom(src, &interval, "full_attention_interval") && interval > 1 {
+		return totalLayers / interval
+	}
+
+	return totalLayers
 }

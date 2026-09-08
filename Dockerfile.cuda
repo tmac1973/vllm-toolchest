@@ -1,5 +1,5 @@
 # ── Stage 1: Go builder ─────────────────────────────────────────────
-FROM golang:1.26-bookworm AS go-builder
+FROM docker.io/library/golang:1.26-bookworm AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 
 # ── Stage 2: vLLM runtime (NVIDIA CUDA) ────────────────────────────
-FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+FROM docker.io/nvidia/cuda:12.8.1-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 

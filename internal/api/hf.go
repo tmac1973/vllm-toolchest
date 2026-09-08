@@ -11,11 +11,14 @@ import (
 )
 
 func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs, authors and tags below come
+	// straight from the HuggingFace API.
+	hp := htmlPrinter(w)
 	query := r.URL.Query().Get("q")
 	if query == "" {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprint(w, `<p>Enter a search query above.</p>`)
+			hp(`<p>Enter a search query above.</p>`)
 			return
 		}
 		respondJSON(w, []any{})
@@ -26,7 +29,7 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><mark>Search error: %s</mark></p>`, err)
+			hp(`<p><mark>Search error: %s</mark></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -59,9 +62,9 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 
 	if len(groups) == 0 {
 		if quantFilter != "" {
-			fmt.Fprintf(w, `<p>No %s models found. Try a different format or broaden your search.</p>`, quantFilter)
+			hp(`<p>No %s models found. Try a different format or broaden your search.</p>`, quantFilter)
 		} else {
-			fmt.Fprint(w, `<p>No models found.</p>`)
+			hp(`<p>No models found.</p>`)
 		}
 		return
 	}
@@ -70,12 +73,12 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		primary := g.Variants[0]
 		sid := safeID(primary.ID)
 
-		gatedBadge := ""
+		gatedBadge := safeHTML("")
 		if primary.Gated.IsGated() {
 			gatedBadge = ` <small style="color:var(--pico-del-color);">[gated]</small>`
 		}
 
-		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;">
+		hp(`<article style="margin-bottom:0.5rem;">
   <header style="padding:0.5rem 1rem;">
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
@@ -109,11 +112,11 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 
 		for _, b := range badges {
 			color := quantBadgeColor(b.format)
-			fmt.Fprintf(w, `<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#detail-%s" hx-swap="innerHTML" title="%s" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;text-decoration:none;cursor:pointer;">%s</a>`,
+			hp(`<a href="#" hx-get="/api/hf/model?id=%s" hx-target="#detail-%s" hx-swap="innerHTML" title="%s" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:%s;color:#fff;text-decoration:none;cursor:pointer;">%s</a>`,
 				b.id, sid, b.id, color, b.format)
 		}
 
-		fmt.Fprintf(w, `</div>
+		hp(`</div>
     </div>
   </header>
   <div id="detail-%s" style="padding:0 1rem;"></div>
@@ -126,6 +129,9 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs, authors and tags below come
+	// straight from the HuggingFace API.
+	hp := htmlPrinter(w)
 	modelID := r.URL.Query().Get("id")
 	if modelID == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
@@ -136,7 +142,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><mark>Error loading model details: %s</mark></p>`, err)
+			hp(`<p><mark>Error loading model details: %s</mark></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -176,7 +182,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fmt.Fprintf(w, `%s%s
+	hp(`%s%s
 <div class="grid" style="margin-bottom:0.5rem;">
   <div><small>Architecture</small><br><strong>%s</strong></div>
   <div><small>Quantization</small><br><strong>%s</strong></div>
@@ -197,7 +203,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fmt.Fprintf(w, `<details style="margin-bottom:0.5rem;">
+	hp(`<details style="margin-bottom:0.5rem;">
   <summary>%d files to download</summary>
   <table style="font-size:0.85rem;">
     <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
@@ -207,10 +213,10 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 		if f.Category == "skip" {
 			continue
 		}
-		fmt.Fprintf(w, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
+		hp(`<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
 			f.Filename, huggingface.FormatBytes(f.Size), f.Category)
 	}
-	fmt.Fprint(w, `</tbody></table></details>`)
+	hp(`</tbody></table></details>`)
 
 	// Download button
 	sid := safeID(detail.ID)
@@ -218,7 +224,7 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 	if detail.Gated.IsGated() && s.cfg.HFToken == "" {
 		disabled = ` disabled`
 	}
-	fmt.Fprintf(w, `<div id="dl-%s">
+	hp(`<div id="dl-%s">
   <button hx-post="/api/hf/download?model_id=%s"
           hx-target="#dl-%s"
           hx-swap="innerHTML"
@@ -230,6 +236,9 @@ func (s *Server) handleHFModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs, authors and tags below come
+	// straight from the HuggingFace API.
+	hp := htmlPrinter(w)
 	// Accept model_id from query param, form body, or JSON body
 	modelID := r.URL.Query().Get("model_id")
 	if modelID == "" {
@@ -247,7 +256,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if modelID == "" {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprint(w, `<p><mark>Missing model_id</mark></p>`)
+			hp(`<p><mark>Missing model_id</mark></p>`)
 			return
 		}
 		http.Error(w, "missing model_id", http.StatusBadRequest)
@@ -258,7 +267,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><mark>Error: %s</mark></p>`, err)
+			hp(`<p><mark>Error: %s</mark></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -292,7 +301,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if len(filesToDownload) == 0 {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprint(w, `<p><mark>No downloadable weight files found.</mark></p>`)
+			hp(`<p><mark>No downloadable weight files found.</mark></p>`)
 			return
 		}
 		http.Error(w, "no downloadable files", http.StatusBadRequest)
@@ -303,7 +312,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><mark>Error: %s</mark></p>`, err)
+			hp(`<p><mark>Error: %s</mark></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -314,7 +323,7 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		respondHTML(w)
 		// Show inline progress polling + trigger the active-downloads section to refresh
 		w.Header().Set("HX-Trigger", "download-started")
-		fmt.Fprintf(w, `<div hx-get="/api/hf/download/%s/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
+		hp(`<div hx-get="/api/hf/download/%s/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
   <progress value="0" max="100" style="margin:0;"></progress>
   <small>Starting download...</small>
 </div>`, downloadID)
@@ -325,13 +334,16 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs, authors and tags below come
+	// straight from the HuggingFace API.
+	hp := htmlPrinter(w)
 	id := chi.URLParam(r, "id")
 
 	d := s.downloader.GetProgress(id)
 	if d == nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprint(w, `<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
+			hp(`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
 			return
 		}
 		http.Error(w, "download not found", http.StatusNotFound)
@@ -351,17 +363,17 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 
 	switch d.Status {
 	case "complete":
-		fmt.Fprint(w, `<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
+		hp(`<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>`)
 	case "failed":
-		fmt.Fprintf(w, `<p><del>Download failed: %s</del></p>`, d.Error)
+		hp(`<p><del>Download failed: %s</del></p>`, d.Error)
 	case "cancelled":
-		fmt.Fprint(w, `<p>Download cancelled.</p>`)
+		hp(`<p>Download cancelled.</p>`)
 	default:
 		speed := huggingface.FormatBytes(d.SpeedBPS) + "/s"
 		total := huggingface.FormatBytes(d.TotalBytes)
 		downloaded := huggingface.FormatBytes(d.BytesDownloaded)
 		// Keep polling
-		fmt.Fprintf(w, `<div hx-get="/api/hf/download/%s/progress" hx-trigger="every 2s" hx-swap="innerHTML">
+		hp(`<div hx-get="/api/hf/download/%s/progress" hx-trigger="every 2s" hx-swap="innerHTML">
   <progress value="%d" max="100" style="margin:0;"></progress>
   <small>%s / %s (%s) &mdash; %d%% &mdash; %d/%d files</small>
 </div>`, id, pct, downloaded, total, speed, pct, d.CompletedFiles, d.TotalFiles)
@@ -370,6 +382,9 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 
 // handleHFActiveDownloads returns progress for all active downloads (used by both browse and models pages).
 func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs, authors and tags below come
+	// straight from the HuggingFace API.
+	hp := htmlPrinter(w)
 	downloads := s.downloader.ActiveDownloads()
 
 	if !isHTMX(r) {
@@ -389,7 +404,7 @@ func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request)
 			pct = int(dl.BytesDownloaded * 100 / dl.TotalBytes)
 		}
 		speed := huggingface.FormatBytes(dl.SpeedBPS) + "/s"
-		fmt.Fprintf(w, `<article style="margin-bottom:0.5rem;padding:0.75rem 1rem;">
+		hp(`<article style="margin-bottom:0.5rem;padding:0.75rem 1rem;">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <strong>%s</strong>
     <button class="secondary outline" style="padding:0.15rem 0.5rem;font-size:0.75rem;"

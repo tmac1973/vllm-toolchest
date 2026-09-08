@@ -61,8 +61,103 @@ type Config struct {
 	// Defaults to the GPU_ARCH env var the Dockerfile sets at build time.
 	GPUArch string `yaml:"gpu_arch"`
 
+	// VLLMDeviceName is the exact string vLLM interpolates into tuned-kernel
+	// filenames. Left empty it is probed from the running vLLM at boot and
+	// cached here; the GPUArch-derived value is only a last-resort fallback.
+	//
+	// This must not be guessed: the generic image patches get_device_name to
+	// return "AMD-gfx1201", while the radiance image leaves it reporting the
+	// marketing name ("AMD_Radeon_R9700"). Tuning against the wrong one
+	// produces correctly-formatted files vLLM never reads.
+	VLLMDeviceName string `yaml:"vllm_device_name"`
+
+	// Radiance holds the RDNA4 image's feature switches. Only meaningful on
+	// the radiance image variant; empty values leave the image default alone.
+	Radiance RadianceConfig `yaml:"radiance"`
+
 	// Internal: path this config was loaded from (not serialized)
 	configPath string `yaml:"-"`
+}
+
+// RadianceConfig mirrors the RADIANCE_* environment knobs the vllm-radiance
+// image reads. Every field is a string with "" meaning "don't set it, use the
+// image's baked-in default" — the image is the source of truth for defaults,
+// and hardcoding them here would silently drift as radiance is updated.
+//
+// See the vllm-radiance DOCKERHUB.md for the full reference.
+type RadianceConfig struct {
+	// UseR4D is the master switch for the hand-written gfx1201 kernel
+	// library (attention, gated delta net, vision attention, all-reduce,
+	// skinny GEMM). "0" reverts every one of them to the stock path.
+	UseR4D string `yaml:"use_r4d"`
+
+	// UseR4DAllReduce toggles the TP=2 P2P one-shot all-reduce; "0" keeps
+	// RCCL. Bit-identical to RCCL either way.
+	UseR4DAllReduce string `yaml:"use_r4d_ar"`
+
+	// AllReduceQuant compresses large (prefill) all-reduce payloads. Not
+	// bit-identical to RCCL; "0" gives the exact bf16 all-reduce.
+	AllReduceQuant string `yaml:"use_r4d_ar_quant"`
+
+	// Preshuffle enables the preshuffled block-FP8 GEMM weight layout.
+	Preshuffle string `yaml:"preshuffle"`
+
+	// FuseRMSQuant enables the fused RMSNorm + group-FP8-quant path.
+	FuseRMSQuant string `yaml:"fuse_rms_quant"`
+
+	// SkinnyGEMM routes small-M bf16 projections to the R4D split-K kernel.
+	// "all" adds shapes that differ from rocBLAS at a bf16 ULP.
+	SkinnyGEMM string `yaml:"skinny_gemm"`
+
+	// DynamicDraft varies MTP draft depth per request by confidence. "0" is
+	// byte-identical stock MTP.
+	DynamicDraft string `yaml:"dynamic_draft"`
+
+	// DraftSchedule caps serial MTP forwards by batch size, e.g.
+	// "1:8,2:7,4:6,8:5,16:4".
+	DraftSchedule string `yaml:"draft_schedule"`
+
+	// DraftTau is the per-request confidence gate. Keep in sync with
+	// FastDraft: radiance tunes 0.28 for the 2-bit head and 0.35 for the
+	// stock bf16 one.
+	DraftTau string `yaml:"draft_tau"`
+
+	// FastDraft enables the 2-bit draft head with exact rerank, plus 4-bit
+	// dflash drafter weights.
+	FastDraft string `yaml:"fast_draft"`
+
+	// RunBWTest runs the startup topology + bandwidth sweep. Backgrounded,
+	// about a second; "0" skips it.
+	RunBWTest string `yaml:"run_bwtest"`
+
+	// NumaBind pins the vLLM fleet to the GPU-local NUMA node(s):
+	// "auto", explicit nodes ("0" / "0,1"), or "" for off.
+	NumaBind string `yaml:"numa_bind"`
+}
+
+// Env renders the non-empty knobs as KEY=VALUE strings for the vLLM process.
+func (r RadianceConfig) Env() []string {
+	pairs := []struct{ key, val string }{
+		{"RADIANCE_USE_R4D", r.UseR4D},
+		{"RADIANCE_USE_R4D_AR", r.UseR4DAllReduce},
+		{"RADIANCE_USE_R4D_AR_QUANT", r.AllReduceQuant},
+		{"RADIANCE_PRESHUFFLE", r.Preshuffle},
+		{"RADIANCE_FUSE_RMS_QUANT", r.FuseRMSQuant},
+		{"RADIANCE_SKINNY_GEMM", r.SkinnyGEMM},
+		{"RADIANCE_DYNAMIC_DRAFT", r.DynamicDraft},
+		{"RADIANCE_DRAFT_SCHEDULE", r.DraftSchedule},
+		{"RADIANCE_DRAFT_TAU", r.DraftTau},
+		{"RADIANCE_FAST_DRAFT", r.FastDraft},
+		{"RADIANCE_RUN_BWTEST", r.RunBWTest},
+		{"RADIANCE_NUMA_BIND", r.NumaBind},
+	}
+	var env []string
+	for _, p := range pairs {
+		if p.val != "" {
+			env = append(env, p.key+"="+p.val)
+		}
+	}
+	return env
 }
 
 func Load(path string) (*Config, error) {
@@ -98,7 +193,9 @@ func defaults() *Config {
 		TensorParallelSize: 1,
 		MaxNumSeqs:         16,
 		DefaultDtype:       "auto",
-		AttentionBackend:   "TRITON_FLASH_ATTN",
+		// Empty = let vLLM pick. Only emitted as --attention-backend when
+		// explicitly set, so the default install keeps vLLM's own choice.
+		AttentionBackend:   "",
 		ToolUseEnabled:     true,
 		DefaultToolParser:  "hermes",
 		PreferMarlin:       true,
@@ -146,12 +243,36 @@ func applyEnvOverrides(cfg *Config) {
 	// default so the operator doesn't have to duplicate it in vllmctl.yaml.
 	envStr(&cfg.GPUArch, "VLLMCTL_GPU_ARCH")
 	envStr(&cfg.GPUArch, "GPU_ARCH")
+	envStr(&cfg.VLLMDeviceName, "VLLMCTL_VLLM_DEVICE_NAME")
+
+	// Radiance knobs. The image already exports sane RADIANCE_* defaults, so
+	// these exist to let an operator override them from .env / compose
+	// without editing vllmctl.yaml.
+	envStr(&cfg.Radiance.UseR4D, "RADIANCE_USE_R4D")
+	envStr(&cfg.Radiance.UseR4DAllReduce, "RADIANCE_USE_R4D_AR")
+	envStr(&cfg.Radiance.AllReduceQuant, "RADIANCE_USE_R4D_AR_QUANT")
+	envStr(&cfg.Radiance.Preshuffle, "RADIANCE_PRESHUFFLE")
+	envStr(&cfg.Radiance.FuseRMSQuant, "RADIANCE_FUSE_RMS_QUANT")
+	envStr(&cfg.Radiance.SkinnyGEMM, "RADIANCE_SKINNY_GEMM")
+	envStr(&cfg.Radiance.DynamicDraft, "RADIANCE_DYNAMIC_DRAFT")
+	envStr(&cfg.Radiance.DraftSchedule, "RADIANCE_DRAFT_SCHEDULE")
+	envStr(&cfg.Radiance.DraftTau, "RADIANCE_DRAFT_TAU")
+	envStr(&cfg.Radiance.FastDraft, "RADIANCE_FAST_DRAFT")
+	envStr(&cfg.Radiance.RunBWTest, "RADIANCE_RUN_BWTEST")
+	envStr(&cfg.Radiance.NumaBind, "RADIANCE_NUMA_BIND")
 }
 
 // DeviceNameSuffix is the value vLLM expects in tuned kernel config
-// filenames (e.g. "AMD-gfx1201"). It matches what kyuz0's RDNA4 patches
-// make rocm.py's get_device_name return.
+// filenames (e.g. "AMD-gfx1201" on the generic image, "AMD_Radeon_R9700" on
+// radiance).
+//
+// A name probed from the running vLLM always wins. The GPUArch-derived value
+// is the fallback, and is only correct on images carrying kyuz0's RDNA4 patch
+// that makes rocm.py's get_device_name return the gfx target.
 func (c *Config) DeviceNameSuffix() string {
+	if c.VLLMDeviceName != "" {
+		return c.VLLMDeviceName
+	}
 	if c.GPUArch == "" {
 		return ""
 	}

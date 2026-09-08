@@ -49,11 +49,10 @@
         <label title="Default max concurrent requests. Lower values use less memory and give more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences
             <input type="number" name="max_num_seqs" value="{{.MaxNumSeqs}}" min="1" max="256">
         </label>
-        <label title="Which attention implementation to use. Triton Flash Attention is the default and works on most GPUs. Change only if you have compatibility issues.">Attention backend
+        <label title="Default attention implementation for newly downloaded models. Leave on auto unless you have a specific reason -- vLLM's own selection is usually right, and naming a backend it did not choose tends to abort at startup rather than run faster.">Attention backend
             <select name="attention_backend">
-                <option value="TRITON_FLASH_ATTN"{{if eq .AttentionBackend "TRITON_FLASH_ATTN"}} selected{{end}}>Triton Flash Attention</option>
-                <option value="FLASH_ATTN"{{if eq .AttentionBackend "FLASH_ATTN"}} selected{{end}}>Flash Attention</option>
-                <option value="XFORMERS"{{if eq .AttentionBackend "XFORMERS"}} selected{{end}}>xFormers</option>
+                {{range .AttentionBackends}}<option value="{{.Val}}"{{if eq $.AttentionBackend .Val}} selected{{end}}>{{.Label}}</option>
+                {{end}}
             </select>
         </label>
     </div>
@@ -164,6 +163,127 @@
         <input type="checkbox" name="auto_restart" role="switch"{{if .AutoRestart}} checked{{end}}>
         Auto-restart vLLM on crash
     </label>
+</article>
+
+{{if .IsRadiance}}
+<article>
+    <header>Radiance (RDNA4 / gfx1201)</header>
+    <p><small>
+        This container is built on <a href="https://codeberg.org/StillDeadcode/vllm-radiance" target="_blank" rel="noopener">vllm-radiance</a>{{if .RadianceVersion}} {{.RadianceVersion}}{{end}},
+        a vLLM stack tuned for the AMD Radeon AI PRO R9700. Every switch below defaults to
+        <em>image default</em> — leave it there unless you are debugging, so the values track
+        upstream instead of being pinned here. Changes apply the next time vLLM starts.
+    </small></p>
+
+    <div class="grid">
+        <label title="Master switch for the hand-written gfx1201 kernel library (libr4d): paged attention, the gated-delta-net scan, vision attention, the P2P all-reduce and the skinny GEMM. Off reverts every one of them to the stock path.">R4D kernel library
+            <select name="radiance_use_r4d">
+                <option value=""{{if eq .Radiance.UseR4D ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.UseR4D "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.UseR4D "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+        <label title="The TP=2 peer-to-peer one-shot all-reduce. Bit-identical to RCCL either way; off keeps RCCL.">P2P all-reduce
+            <select name="radiance_use_r4d_ar">
+                <option value=""{{if eq .Radiance.UseR4DAllReduce ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.UseR4DAllReduce "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.UseR4DAllReduce "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="grid">
+        <label title="Compresses large (prefill) all-reduce payloads. This one is NOT bit-identical to RCCL -- turn it off if you need the exact bf16 all-reduce.">All-reduce quantization
+            <select name="radiance_use_r4d_ar_quant">
+                <option value=""{{if eq .Radiance.AllReduceQuant ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.AllReduceQuant "1"}} selected{{end}}>on (not bit-identical)</option>
+                <option value="0"{{if eq .Radiance.AllReduceQuant "0"}} selected{{end}}>off (exact bf16)</option>
+            </select>
+        </label>
+        <label title="Preshuffled weight layout for the block-FP8 GEMM.">Preshuffled FP8 GEMM
+            <select name="radiance_preshuffle">
+                <option value=""{{if eq .Radiance.Preshuffle ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.Preshuffle "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.Preshuffle "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="grid">
+        <label title="Fused RMSNorm + group-FP8-quant path.">Fused RMSNorm + quant
+            <select name="radiance_fuse_rms_quant">
+                <option value=""{{if eq .Radiance.FuseRMSQuant ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.FuseRMSQuant "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.FuseRMSQuant "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+        <label title="Routes small-M bf16 projections to the R4D split-K kernel. 'all' adds shapes that differ from rocBLAS at a bf16 ULP -- notably the gated-delta-net in_proj_ba.">Skinny bf16 GEMM
+            <select name="radiance_skinny_gemm">
+                <option value=""{{if eq .Radiance.SkinnyGEMM ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.SkinnyGEMM "1"}} selected{{end}}>on (default shapes)</option>
+                <option value="all"{{if eq .Radiance.SkinnyGEMM "all"}} selected{{end}}>all shapes</option>
+                <option value="0"{{if eq .Radiance.SkinnyGEMM "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+    </div>
+
+    <hr>
+    <p><small><strong>Speculative drafting.</strong> Only applies to models started with a speculative config.
+        Lossless either way: the target model verifies every drafted token with its own weights.</small></p>
+
+    <div class="grid">
+        <label title="Per-request MTP draft depth chosen by a confidence gate, plus verbatim n-gram tails. Off is byte-identical stock MTP.">Dynamic draft depth
+            <select name="radiance_dynamic_draft">
+                <option value=""{{if eq .Radiance.DynamicDraft ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.DynamicDraft "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.DynamicDraft "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+        <label title="The 2-bit draft head with exact rerank, plus 4-bit dflash drafter weights. Keep in sync with the confidence gate below: radiance tunes 0.28 for the 2-bit head and 0.35 for the stock bf16 one.">Fast draft head
+            <select name="radiance_fast_draft">
+                <option value=""{{if eq .Radiance.FastDraft ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.FastDraft "1"}} selected{{end}}>on (2-bit head)</option>
+                <option value="0"{{if eq .Radiance.FastDraft "0"}} selected{{end}}>off (stock bf16 head)</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="grid">
+        <label title="Confidence gate for the draft depth. 0.28 is tuned for the 2-bit head, 0.35 for the stock bf16 one -- leaving them crossed drafts deeper than the head pays for. Blank uses the image default.">Draft confidence (tau)
+            <input type="text" name="radiance_draft_tau" value="{{.Radiance.DraftTau}}" placeholder="image default">
+        </label>
+        <label title="Caps serial MTP forwards by batch size, as batch:depth pairs. Blank uses the image default.">Draft schedule
+            <input type="text" name="radiance_draft_schedule" value="{{.Radiance.DraftSchedule}}" placeholder="1:8,2:7,4:6,8:5,16:4">
+        </label>
+    </div>
+
+    <hr>
+    <div class="grid">
+        <label title="Topology, P2P access matrix, NUMA distances and peak copy bandwidth per agent pair at startup. Backgrounded and about a second, so it never delays the serve.">Startup bandwidth sweep
+            <select name="radiance_run_bwtest">
+                <option value=""{{if eq .Radiance.RunBWTest ""}} selected{{end}}>image default</option>
+                <option value="1"{{if eq .Radiance.RunBWTest "1"}} selected{{end}}>on</option>
+                <option value="0"{{if eq .Radiance.RunBWTest "0"}} selected{{end}}>off</option>
+            </select>
+        </label>
+        <label title="Pin the vLLM fleet to the GPU-local NUMA node(s). No-op on single-node hosts. 'auto' detects; explicit nodes also work (e.g. 0 or 0,1). Needs the SYS_NICE capability.">NUMA binding
+            <input type="text" name="radiance_numa_bind" value="{{.Radiance.NumaBind}}" placeholder="off — try: auto">
+        </label>
+    </div>
+</article>
+{{end}}
+
+<article>
+    <header>Environment</header>
+    <div class="grid">
+        <label title="Which container image this is. 'radiance' is the RDNA4-tuned build; 'generic' is the portable ROCm/CUDA build.">Image variant
+            <input type="text" value="{{.Variant}}{{if .RadianceVersion}} {{.RadianceVersion}}{{end}}" readonly>
+        </label>
+        <label title="The name vLLM reports for this GPU. Tuned kernel configs are keyed by it, so it is probed from the running vLLM rather than guessed. Blank means the probe has not finished yet.">vLLM device name
+            <input type="text" value="{{.VLLMDeviceName}}" readonly>
+            <small>Tuned kernel configs are keyed by this</small>
+        </label>
+    </div>
 </article>
 
 <article>

@@ -13,10 +13,16 @@ readonly QUADLET_USER_DIR="${HOME}/.config/containers/systemd"
 readonly QUADLET_SYSTEM_DIR="/etc/containers/systemd"
 readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 
+# Base image for the radiance variant. KEEP IN SYNC with the defaults in
+# Dockerfile.radiance and docker-compose.radiance.yml.
+readonly RADIANCE_DEFAULT_IMAGE="docker.io/stilldeadcode/vllm-radiance:0.9.3"
+
 # ─── Global state (populated by detect_* functions) ──────────────────────────
 
 GPU_VENDOR=""           # cuda, rocm
 GPU_INFO=""             # human-readable GPU description
+BUILD_VARIANT=""        # generic, radiance — which image to build (rocm only)
+GPU_DEVICES=""          # HIP_VISIBLE_DEVICES value; empty = use every GPU
 AMD_GFX_TARGET=""       # detected gfx target (e.g. gfx1201) — passed as GPU_ARCH build arg
 AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
 HOST_VIDEO_GID=""       # host video group GID
@@ -57,6 +63,18 @@ fatal() { err "$@"; exit 1; }
 
 need_cmd() {
     command -v "$1" &>/dev/null
+}
+
+# Portable existence checks. `image exists` / `container exists` are podman
+# subcommands that Docker does not have -- on Docker they fail as "unknown
+# command", which reads as "not present" and silently sends the caller down
+# the wrong branch. `inspect` exists on both.
+image_exists() {
+    $CONTAINER_CMD image inspect "$1" >/dev/null 2>&1
+}
+
+container_exists() {
+    $CONTAINER_CMD container inspect "$1" >/dev/null 2>&1
 }
 
 run_sudo() {
@@ -171,6 +189,41 @@ detect_gpu() {
     GPU_INFO="No GPU detected (defaulting to CUDA)"
 }
 
+# vllm-radiance is compiled for a single GPU architecture and its prune step
+# asserts it, so the variant is only offered on RDNA4.
+radiance_supported() {
+    [[ "$GPU_VENDOR" == "rocm" ]] && [[ "$AMD_GFX_TARGET" == "gfx1201" ]]
+}
+
+# Choose the image variant. Explicit VARIANT= always wins; otherwise default to
+# the portable build and let install offer the RDNA4 one interactively.
+detect_variant() {
+    # VLLMCTL_VARIANT is the documented override, matching the key stored in
+    # .env. Bare VARIANT is accepted as a convenience, but only when it names a
+    # real variant: VARIANT is also an /etc/os-release field, so a value we do
+    # not recognise belongs to somebody else and must not be a fatal error.
+    local want="${VLLMCTL_VARIANT:-}"
+    if [[ -z "$want" && "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+        want="$VARIANT"
+    fi
+
+    if [[ -n "$want" ]]; then
+        case "$want" in
+            generic|radiance) BUILD_VARIANT="$want" ;;
+            *) fatal "Unknown VLLMCTL_VARIANT=$want (expected: generic or radiance)" ;;
+        esac
+        if [[ "$BUILD_VARIANT" == "radiance" && "$GPU_VENDOR" != "rocm" ]]; then
+            fatal "The radiance variant needs an AMD ROCm GPU (detected backend: $GPU_VENDOR)"
+        fi
+        return
+    fi
+
+    # Already chosen in a previous run — .env is the record of that decision.
+    [[ -n "$BUILD_VARIANT" ]] && return
+
+    BUILD_VARIANT="generic"
+}
+
 # ─── Detection: Container runtime ────────────────────────────────────────────
 
 detect_container_runtime() {
@@ -240,12 +293,22 @@ detect_distro() {
         fatal "Cannot detect distribution: /etc/os-release not found"
     fi
 
-    # shellcheck disable=SC1091
-    source /etc/os-release
+    # Read os-release in a SUBSHELL and hand back only the three fields we
+    # want. It is a shell fragment, so sourcing it directly dumps every field
+    # it defines into this script's namespace -- and Ubuntu Server defines
+    # VARIANT="Server Edition", which clobbered our own VARIANT override and
+    # made `./setup.sh install` fail on exactly that distro. printf %q keeps
+    # values with spaces intact through the eval.
+    local id pretty id_like
+    eval "$(
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        printf 'id=%q\npretty=%q\nid_like=%q\n' \
+            "${ID:-unknown}" "${PRETTY_NAME:-}" "${ID_LIKE:-}"
+    )"
 
-    DISTRO_ID="${ID:-unknown}"
-    DISTRO_NAME="${PRETTY_NAME:-$DISTRO_ID}"
-    local id_like="${ID_LIKE:-}"
+    DISTRO_ID="$id"
+    DISTRO_NAME="${pretty:-$DISTRO_ID}"
 
     case "$DISTRO_ID" in
         debian|ubuntu|pop|linuxmint|elementary|zorin|kali)
@@ -320,6 +383,17 @@ check_prerequisites() {
     if [[ "$GPU_VENDOR" == "rocm" ]] && selinux_enforcing && ! selinux_device_bool_set; then
         PREREQS+=("selinux_device_bool")
         ACTIONS+=("Enable SELinux container_use_devices boolean")
+    fi
+
+    # The radiance image is compiled for gfx1201 only; on anything else it
+    # will not run, so fail here rather than after a long pull.
+    if [[ "$BUILD_VARIANT" == "radiance" ]] && ! radiance_supported; then
+        if [[ -z "$AMD_GFX_TARGET" ]]; then
+            warn "Could not detect a gfx target (rocminfo missing?); the radiance"
+            warn "image only runs on gfx1201. Use VARIANT=generic if this is not RDNA4."
+        else
+            fatal "VARIANT=radiance requires gfx1201 (RDNA4); detected ${AMD_GFX_TARGET}. Use VARIANT=generic."
+        fi
     fi
 
     ACTIONS+=("Build container image ($(dockerfile))")
@@ -526,6 +600,126 @@ prompt_models_dir() {
     echo "  → Models will be stored at: $path"
 }
 
+prompt_variant() {
+    # Forced on the command line -- nothing to ask. Mirrors detect_variant's
+    # handling, including ignoring an unrelated os-release VARIANT.
+    if [[ -n "${VLLMCTL_VARIANT:-}" ]] || [[ "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+        return
+    fi
+    if ! radiance_supported; then
+        return  # not RDNA4 — only the generic image is buildable here
+    fi
+
+    echo ""
+    echo -e "${BOLD}RDNA4 detected (${AMD_GFX_TARGET})${NC}"
+    echo ""
+    echo    "  There is a second image for this card: vllm-radiance, a from-source"
+    echo    "  vLLM stack hand-tuned for gfx1201 — custom attention, GEMM and"
+    echo    "  all-reduce kernels, tuned FP8 and MoE configs, and MTP drafting."
+    echo    "  It installs much faster too, since it pulls a prebuilt base instead"
+    echo    "  of compiling ROCm and vLLM from source."
+    echo ""
+    echo    "  The trade-off: it pins vLLM and transformers, so support for models"
+    echo    "  newer than that release is frozen. The generic image tracks vLLM main."
+    echo ""
+    echo    "  Third-party project, credited in README.md:"
+    echo    "  https://codeberg.org/StillDeadcode/vllm-radiance"
+    echo ""
+
+    if prompt_confirm "  Build the radiance variant?"; then
+        BUILD_VARIANT="radiance"
+    else
+        BUILD_VARIANT="generic"
+    fi
+    echo "  → Building the ${BUILD_VARIANT} image"
+}
+
+# List AMD GPUs in HIP enumeration order, one per line as:
+#   <hip-index>\t<pci-address>\t<vram-GiB>
+#
+# HIP enumerates by PCI bus order, so sorting the render nodes by their resolved
+# PCI address is what makes the index we print here the same index
+# HIP_VISIBLE_DEVICES expects. Reading sysfs rather than rocminfo keeps this
+# working on hosts with no ROCm userspace installed.
+detect_amd_gpus() {
+    local i=0 d pci vram
+    while IFS= read -r d; do
+        pci="$(basename "$(readlink -f "$d/device")")"
+        vram="$(cat "$d/device/mem_info_vram_total" 2>/dev/null || echo 0)"
+        printf '%d\t%s\t%d\n' "$i" "$pci" "$(( vram / 1073741824 ))"
+        i=$(( i + 1 ))
+    done < <(
+        for d in /sys/class/drm/renderD*; do
+            [[ -e "$d/device/vendor" ]] || continue
+            [[ "$(cat "$d/device/vendor" 2>/dev/null)" == "0x1002" ]] || continue
+            printf '%s\t%s\n' "$(basename "$(readlink -f "$d/device")")" "$d"
+        done | sort | cut -f2-
+    )
+}
+
+prompt_gpus() {
+    [[ "$GPU_VENDOR" == "rocm" ]] || return 0
+
+    local gpus
+    gpus="$(detect_amd_gpus)"
+    [[ -n "$gpus" ]] || return 0
+
+    local count
+    count="$(printf '%s\n' "$gpus" | wc -l)"
+    # One GPU and nothing to choose between.
+    [[ "$count" -gt 1 ]] || return 0
+
+    echo ""
+    echo -e "${BOLD}GPU selection${NC}"
+    echo ""
+    echo "  Found ${count} AMD GPUs:"
+    echo ""
+    local idx pci vram note
+    while IFS=$'\t' read -r idx pci vram; do
+        note=""
+        # An integrated GPU shows up here too and must not be handed to vLLM;
+        # its tiny VRAM is the giveaway.
+        [[ "$vram" -lt 4 ]] && note="  ← integrated? exclude this one"
+        printf "    [%s] %-14s %3s GiB%s\n" "$idx" "$pci" "$vram" "$note"
+    done <<< "$gpus"
+    echo ""
+    echo "  Enter the indices to use, comma-separated (e.g. 0,1), or 'all'."
+    echo "  Tensor-parallel size is set per model later, in the web UI."
+    echo ""
+
+    local answer
+    read -rp "$(echo -e "  ${BOLD}GPUs${NC} [${GPU_DEVICES:-all}]: ")" answer
+    answer="${answer:-${GPU_DEVICES:-all}}"
+
+    case "$answer" in
+        all|ALL|"")
+            GPU_DEVICES=""
+            echo "  → Using all ${count} GPUs"
+            return 0
+            ;;
+    esac
+
+    if [[ ! "$answer" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        warn "Not a valid index list: '$answer' — using all GPUs"
+        GPU_DEVICES=""
+        return 0
+    fi
+
+    # Reject an out-of-range index rather than letting HIP silently see fewer
+    # GPUs than the user asked for.
+    local n
+    for n in ${answer//,/ }; do
+        if [[ "$n" -ge "$count" ]]; then
+            warn "No GPU with index ${n} (found ${count}) — using all GPUs"
+            GPU_DEVICES=""
+            return 0
+        fi
+    done
+
+    GPU_DEVICES="$answer"
+    echo "  → Using GPU(s): ${GPU_DEVICES}"
+}
+
 load_env_ports() {
     local env_file="${SCRIPT_DIR}/.env"
     if [[ -f "$env_file" ]]; then
@@ -536,17 +730,162 @@ load_env_ports() {
         [[ -n "$val" ]] && VLLMCTL_INFERENCE_PORT="$val" || true
         val="$(grep '^VLLMCTL_MODELS_DIR=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
         [[ -n "$val" ]] && VLLMCTL_MODELS_DIR="$val" || true
+        # The variant decides which compose/Dockerfile every later command
+        # uses, so up/down/logs/rebuild must read it back, not re-ask.
+        val="$(grep '^VLLMCTL_VARIANT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && BUILD_VARIANT="$val" || true
+        val="$(grep '^HIP_VISIBLE_DEVICES=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
+        [[ -n "$val" ]] && GPU_DEVICES="$val" || true
     fi
+}
+
+# ─── Radiance base image ─────────────────────────────────────────────────────
+#
+# vllm-radiance is published as an OCI manifest whose layers carry *Docker*
+# media types. Docker/BuildKit tolerates the mix; containers/image -- the
+# library behind podman, buildah AND skopeo alike -- refuses to rewrite such a
+# manifest, so `FROM <that image>` dies before the first instruction:
+#
+#   unsupported MIME type for compression:
+#   "application/vnd.docker.image.rootfs.diff.tar.gzip"
+#
+# Every manifest-level repair hits the same wall (`push --format v2s2`, `save
+# --format docker-archive`, skopeo). But podman can RUN the image perfectly
+# well, so the way through is to flatten it: export the container filesystem
+# and re-import it as a fresh single-layer image, carrying the env and
+# entrypoint across by hand.
+#
+# This is an upstream packaging bug, so it is behind a cheap probe: the day a
+# conformant image is published, the probe passes and none of this runs.
+
+radiance_base_ref() {
+    if [[ -n "${RADIANCE_IMAGE:-}" ]]; then
+        echo "$RADIANCE_IMAGE"; return
+    fi
+    local val
+    val="$(grep '^RADIANCE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    echo "${val:-$RADIANCE_DEFAULT_IMAGE}"
+}
+
+# Can the build actually use this image as a base? A LABEL-only build is enough
+# to find out: it fails while creating the build container, before running
+# anything, so the probe costs nothing on a good image.
+base_is_buildable() {
+    local img="$1" tmpdir rc=1
+    tmpdir="$(mktemp -d)"
+    printf 'FROM %s\nLABEL vllmctl.probe=1\n' "$img" > "$tmpdir/Dockerfile"
+    if $CONTAINER_CMD build -t localhost/vllmctl-baseprobe:tmp "$tmpdir" >/dev/null 2>&1; then
+        rc=0
+    fi
+    $CONTAINER_CMD rmi -f localhost/vllmctl-baseprobe:tmp >/dev/null 2>&1 || true
+    rm -rf "$tmpdir"
+    return $rc
+}
+
+# export | import, reconstructing the metadata import would otherwise drop.
+flatten_image() {
+    local src="$1" dst="$2"
+    local cid rc e ep cm wd
+    local -a args=()
+
+    while IFS= read -r e; do
+        [[ -n "$e" ]] && args+=(--change "ENV $e")
+    done < <($CONTAINER_CMD image inspect "$src" --format '{{range .Config.Env}}{{println .}}{{end}}')
+
+    ep="$($CONTAINER_CMD image inspect "$src" --format '{{json .Config.Entrypoint}}' 2>/dev/null)"
+    [[ -n "$ep" && "$ep" != "null" ]] && args+=(--change "ENTRYPOINT $ep")
+    cm="$($CONTAINER_CMD image inspect "$src" --format '{{json .Config.Cmd}}' 2>/dev/null)"
+    [[ -n "$cm" && "$cm" != "null" ]] && args+=(--change "CMD $cm")
+    wd="$($CONTAINER_CMD image inspect "$src" --format '{{.Config.WorkingDir}}' 2>/dev/null)"
+    [[ -n "$wd" ]] && args+=(--change "WORKDIR $wd")
+
+    [[ "${#args[@]}" -gt 0 ]] || { err "could not read image config from $src"; return 1; }
+
+    cid="$($CONTAINER_CMD create "$src")" || return 1
+    $CONTAINER_CMD export "$cid" | $CONTAINER_CMD import "${args[@]}" - "$dst"
+    rc=$?
+    $CONTAINER_CMD rm -f "$cid" >/dev/null 2>&1 || true
+    return $rc
+}
+
+# Make sure the radiance base is present and usable, flattening it if the
+# runtime cannot build on top of it. Exports RADIANCE_IMAGE for the build.
+ensure_radiance_base() {
+    [[ "$BUILD_VARIANT" == "radiance" ]] || return 0
+
+    local src flat tag
+    src="$(radiance_base_ref)"
+
+    if ! image_exists "$src"; then
+        log "Pulling ${src} (about 4 GB)..."
+        $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+    fi
+
+    if base_is_buildable "$src"; then
+        export RADIANCE_IMAGE="$src"
+        return 0
+    fi
+
+    tag="${src##*:}"
+    [[ "$tag" == "$src" ]] && tag="latest"
+    flat="localhost/vllm-radiance-flat:${tag}"
+
+    if image_exists "$flat"; then
+        log "Using previously normalized base image ${flat}"
+        export RADIANCE_IMAGE="$flat"
+        return 0
+    fi
+
+    warn "${src} cannot be used as a build base by ${CONTAINER_CMD}:"
+    warn "it is an OCI manifest carrying Docker-typed layers, which"
+    warn "containers/image refuses to rewrite. Normalizing it locally."
+    echo ""
+    echo "  This flattens the image into a single layer, once per radiance"
+    echo "  version. It needs roughly 10 GB of free space and a few minutes."
+    echo ""
+
+    local avail
+    avail="$(df -BG --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')" || avail=""
+    if [[ -n "$avail" && "$avail" -lt 15 ]]; then
+        warn "Only ${avail} GB free — normalization may run out of space."
+    fi
+
+    log "Normalizing ${src} -> ${flat} ..."
+    if ! flatten_image "$src" "$flat"; then
+        $CONTAINER_CMD rmi -f "$flat" >/dev/null 2>&1 || true
+        fatal "Could not normalize ${src}. Building the radiance variant needs
+       either a container runtime that accepts this image (Docker does) or
+       a conformant image published upstream."
+    fi
+
+    if ! base_is_buildable "$flat"; then
+        fatal "Normalized image ${flat} is still not usable as a build base."
+    fi
+
+    ok "Normalized base image ready: ${flat}"
+    export RADIANCE_IMAGE="$flat"
 }
 
 # ─── Container operations ────────────────────────────────────────────────────
 
+# The radiance variant has its own image; every other combination is keyed by
+# GPU vendor. Keeping GPU_VENDOR as the hardware family (rather than folding
+# radiance into it) is what lets the ROCm prerequisite checks, GID detection
+# and SELinux handling apply unchanged to both ROCm images.
+image_key() {
+    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+        echo "radiance"
+    else
+        echo "$GPU_VENDOR"
+    fi
+}
+
 compose_file() {
-    echo "docker-compose.${GPU_VENDOR}.yml"
+    echo "docker-compose.$(image_key).yml"
 }
 
 dockerfile() {
-    echo "Dockerfile.${GPU_VENDOR}"
+    echo "Dockerfile.$(image_key)"
 }
 
 # compose_cmd builds the full compose command with all required -f flags.
@@ -566,28 +905,44 @@ has_quadlet() {
 # Write .env file for docker-compose variable substitution
 write_env_file() {
     local env_file="${SCRIPT_DIR}/.env"
-    : > "$env_file"
 
-    echo "VLLMCTL_PORT=${VLLMCTL_PORT}" >> "$env_file"
-    echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}" >> "$env_file"
+    # Keys this script owns. Everything else in .env belongs to the user --
+    # HF_TOKEN, VLLMCTL_API_KEY, the RADIANCE_* switches -- and truncating the
+    # file would silently discard it on every install/rebuild.
+    local managed=(
+        VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
+        HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
+        HIP_VISIBLE_DEVICES
+    )
 
-    if [[ -n "$VLLMCTL_MODELS_DIR" ]]; then
-        echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}" >> "$env_file"
-        export VLLMCTL_MODELS_DIR
+    local preserved=""
+    if [[ -f "$env_file" ]]; then
+        local pattern
+        pattern="^($(IFS='|'; echo "${managed[*]}"))="
+        preserved="$(grep -Ev "$pattern" "$env_file" 2>/dev/null || true)"
     fi
 
-    if [[ -n "$AMD_GFX_VERSION" ]]; then
-        echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}" >> "$env_file"
-    fi
-    if [[ -n "$AMD_GFX_TARGET" ]]; then
-        echo "GPU_ARCH=${AMD_GFX_TARGET}" >> "$env_file"
-    fi
-    if [[ -n "$HOST_VIDEO_GID" ]]; then
-        echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}" >> "$env_file"
-    fi
-    if [[ -n "$HOST_RENDER_GID" ]]; then
-        echo "HOST_RENDER_GID=${HOST_RENDER_GID}" >> "$env_file"
-    fi
+    {
+        echo "VLLMCTL_PORT=${VLLMCTL_PORT}"
+        echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}"
+        echo "VLLMCTL_VARIANT=${BUILD_VARIANT}"
+
+        [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
+        [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
+        [[ -n "$AMD_GFX_TARGET" ]]     && echo "GPU_ARCH=${AMD_GFX_TARGET}"
+        [[ -n "$HOST_VIDEO_GID" ]]     && echo "HOST_VIDEO_GID=${HOST_VIDEO_GID}"
+        [[ -n "$HOST_RENDER_GID" ]]    && echo "HOST_RENDER_GID=${HOST_RENDER_GID}"
+        # Only written when a subset was chosen. An empty HIP_VISIBLE_DEVICES
+        # is not "all GPUs" -- HIP reads it as "no GPUs" -- so the variable
+        # must be absent rather than blank.
+        [[ -n "$GPU_DEVICES" ]]        && echo "HIP_VISIBLE_DEVICES=${GPU_DEVICES}"
+
+        # User-owned lines last, so they are visibly theirs to edit.
+        [[ -n "$preserved" ]] && printf '%s\n' "$preserved"
+    } > "$env_file"
+
+    [[ -n "$VLLMCTL_MODELS_DIR" ]] && export VLLMCTL_MODELS_DIR
+    return 0
 }
 
 container_up() {
@@ -609,11 +964,34 @@ container_down() {
 }
 
 container_install() {
+    ensure_radiance_base
     write_env_file
+
+    # Remove any existing container before bringing one up. `up -d` alone does
+    # NOT apply a changed environment under podman-compose -- it sees the
+    # container already exists and simply starts it -- so re-running install
+    # after changing the GPU selection, the ports or the models directory
+    # silently kept the old values, and the only clue was the running service
+    # still reporting the previous configuration.
+    local quadlet_active=false
+    has_quadlet && quadlet_active=true
+    if container_exists vllm-toolchest; then
+        log "Removing the existing container so the new configuration applies..."
+        container_down
+        $CONTAINER_CMD rm -f vllm-toolchest 2>/dev/null || true
+    fi
+
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
+
+    if [[ "$quadlet_active" == true ]]; then
+        log "Restarting via systemd (Quadlet)..."
+        $(compose_cmd) down >/dev/null 2>&1 || true
+        systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+    fi
 }
 
 container_rebuild() {
+    ensure_radiance_base
     local quadlet_active=false
     has_quadlet && quadlet_active=true
 
@@ -632,6 +1010,7 @@ container_rebuild() {
 
 # Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
 container_quick_rebuild() {
+    ensure_radiance_base
     container_down
     write_env_file
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
@@ -701,18 +1080,28 @@ generate_quadlet() {
         if [[ -n "$AMD_GFX_VERSION" ]]; then
             hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
         fi
+        local extra_caps=""
+        if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+            # py-spy profiling and the optional RADIANCE_NUMA_BIND mempolicy
+            # syscalls; both no-ops unless used.
+            extra_caps="AddCapability=SYS_PTRACE
+AddCapability=SYS_NICE"
+        fi
         gpu_args="AddDevice=/dev/kfd
 AddDevice=/dev/dri
 SecurityLabelDisable=true
 PodmanArgs=--ipc=host
+ShmSize=${VLLMCTL_SHM_SIZE:-8gb}
 GroupAdd=${HOST_VIDEO_GID:-video}
 GroupAdd=${HOST_RENDER_GID:-render}
+${extra_caps}
 ${hsa_env}"
     fi
 
     cat <<EOF
 # Auto-generated by vllm-toolchest setup.sh
 # GPU backend: ${GPU_VENDOR}
+# Image variant: ${BUILD_VARIANT}
 # Runtime: ${CONTAINER_CMD}
 
 [Unit]
@@ -837,19 +1226,28 @@ container_uninstall() {
     local has_autostart=false
     local has_container=false
     local has_image=false
-    local image_name="localhost/vllm-toolchest:latest"
+
+    # Compose tags the build "vllm-toolchest:latest"; podman stores that under
+    # an implicit localhost/ prefix, Docker does not. Check both.
+    local image_name="" candidate
+    for candidate in "localhost/vllm-toolchest:latest" "vllm-toolchest:latest"; do
+        if image_exists "$candidate"; then
+            image_name="$candidate"
+            break
+        fi
+    done
 
     if is_autostart_enabled; then
         has_autostart=true
         actions+=("Disable auto-start on boot")
     fi
 
-    if $CONTAINER_CMD container exists vllm-toolchest 2>/dev/null; then
+    if container_exists vllm-toolchest; then
         has_container=true
         actions+=("Stop and remove container 'vllm-toolchest'")
     fi
 
-    if $CONTAINER_CMD image exists "$image_name" 2>/dev/null; then
+    if [[ -n "$image_name" ]]; then
         has_image=true
         actions+=("Remove image '${image_name}'")
     fi
@@ -917,6 +1315,11 @@ print_summary() {
     echo ""
     echo -e "  ${CYAN}GPU${NC}           ${GPU_INFO}"
     echo -e "  ${CYAN}Backend${NC}       ${GPU_VENDOR}"
+    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
+        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT} (vllm-radiance, gfx1201-tuned)"
+    else
+        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT}"
+    fi
     echo -e "  ${CYAN}Runtime${NC}       ${CONTAINER_VERSION}"
     echo -e "  ${CYAN}Compose${NC}       ${COMPOSE_VERSION}"
     echo -e "  ${CYAN}Distro${NC}        ${DISTRO_NAME}"
@@ -929,6 +1332,15 @@ print_summary() {
     fi
     if [[ -n "$AMD_GFX_TARGET" ]]; then
         echo -e "  ${CYAN}GPU arch${NC}      ${AMD_GFX_TARGET}"
+    fi
+    if [[ "$GPU_VENDOR" == "rocm" ]]; then
+        local gpu_count
+        gpu_count="$(detect_amd_gpus | wc -l)"
+        if [[ -n "$GPU_DEVICES" ]]; then
+            echo -e "  ${CYAN}GPUs in use${NC}   ${GPU_DEVICES} (of ${gpu_count} detected)"
+        elif [[ "$gpu_count" -gt 0 ]]; then
+            echo -e "  ${CYAN}GPUs in use${NC}   all ${gpu_count}"
+        fi
     fi
     if [[ -n "$AMD_GFX_VERSION" ]]; then
         echo -e "  ${CYAN}HSA Override${NC}  ${AMD_GFX_VERSION}"
@@ -981,7 +1393,10 @@ Lifecycle:
   rebuild     Full rebuild with no cache, then start
 
 Runtime:
-  up          Start a stopped container
+  up          Start a stopped container. Does NOT re-read .env -- a container
+              keeps the environment it was created with, so after changing GPU
+              selection or ports run `install` (or `down` then `up`) to have
+              the container recreated
   down        Stop the container
   logs        Follow container logs (Ctrl-C to stop)
 
@@ -998,12 +1413,31 @@ Auto-start:
 
 Info:
   status      Show detected environment and planned actions, then exit
-  detect      Print detected GPU backend (cuda/rocm) and exit
+  detect      Print detected GPU backend (cuda/rocm) and image variant, exit
   help        Show this help message
 
+Image variants (AMD only):
+  generic     Builds ROCm + vLLM from source, tracking vLLM main. Portable
+              across GPU generations, newest model support, long build.
+  radiance    Layers this UI on the third-party vllm-radiance image, a stack
+              hand-tuned for RDNA4 / gfx1201 (custom attention, GEMM and
+              all-reduce kernels, tuned FP8 + MoE configs, MTP drafting).
+              Fast to install, but vLLM and transformers are pinned, so model
+              support is frozen at that release.
+              https://codeberg.org/StillDeadcode/vllm-radiance
+
+  `install` offers the choice on an RDNA4 card; the answer is stored in .env
+  and reused by every later command. Force it with VLLMCTL_VARIANT= any time.
+
 Environment variables:
-  GPU=cuda|rocm            Override GPU auto-detection
-  RUNTIME=docker|podman    Override container runtime auto-detection
+  GPU=cuda|rocm                        Override GPU auto-detection
+  VLLMCTL_VARIANT=generic|radiance     Override image variant (skips the prompt)
+  RUNTIME=docker|podman                Override container runtime auto-detection
+  RADIANCE_IMAGE=<ref>                 Base image for the radiance variant
+
+  VARIANT= is accepted as a short form, but VLLMCTL_VARIANT is preferred:
+  VARIANT is also an /etc/os-release field (Ubuntu Server sets it to
+  "Server Edition"), so the short form can collide on some distros.
 
 Port configuration is stored in .env (see .env.example for details).
 You can edit .env directly instead of using the interactive setup.
@@ -1017,6 +1451,8 @@ Examples:
   ./setup.sh quick                # fast rebuild (code changes only)
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
+  VLLMCTL_VARIANT=radiance ./setup.sh install   # build the RDNA4-tuned image
+  VLLMCTL_VARIANT=generic ./setup.sh rebuild    # switch back to the portable image
 USAGE
 }
 
@@ -1038,18 +1474,30 @@ main() {
     if [[ -n "${GPU:-}" ]]; then
         GPU_VENDOR="$GPU"
         GPU_INFO="(manually set: $GPU)"
+        # Forcing the vendor should skip vendor *detection*, not the AMD probes
+        # that feed the build: without these, GPU_ARCH, the HSA override and the
+        # video/render GIDs are all silently empty.
+        if [[ "$GPU_VENDOR" == "rocm" ]]; then
+            detect_amd_gfx_version
+            detect_host_gpu_gids
+        fi
     else
         detect_gpu
     fi
 
     if [[ "$command" == "detect" ]]; then
-        echo "$GPU_VENDOR"
+        load_env_ports
+        detect_variant
+        echo "$GPU_VENDOR $BUILD_VARIANT"
         exit 0
     fi
 
     detect_container_runtime
     detect_distro
+    # load_env_ports also restores BUILD_VARIANT from a previous install, so it
+    # has to run before detect_variant picks a default.
     load_env_ports
+    detect_variant
 
     case "$command" in
         up)        container_up;   ok "vllm-toolchest started"; exit 0 ;;
@@ -1070,6 +1518,14 @@ main() {
     esac
 
     # install, rebuild, status
+    # Ask which image to build first: the variant decides which Dockerfile the
+    # summary reports and which prerequisites are checked, so choosing after
+    # printing the summary would show the user the wrong plan. `status` is a
+    # dry run and never prompts.
+    if [[ "$command" != "status" ]]; then
+        prompt_variant
+    fi
+
     check_prerequisites
     print_summary
 
@@ -1077,6 +1533,7 @@ main() {
         exit 0
     fi
 
+    prompt_gpus
     prompt_ports
     prompt_models_dir
 

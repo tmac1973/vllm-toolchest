@@ -13,7 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 )
 
 type State string
@@ -35,18 +38,31 @@ type Status struct {
 	Error     string    `json:"error,omitempty"`
 }
 
+// Launcher is the argv prefix used to start a server. The generic image runs
+// `vllm serve <model> …`; the radiance image runs its entrypoint script, which
+// takes the same arguments, prints the arch/P2P/version banner, optionally
+// applies NUMA binding, and then execs `vllm serve` itself.
+type Launcher struct {
+	Bin  string   // executable
+	Args []string // argv prefix inserted before the model path
+}
+
+// DefaultLauncher is plain `vllm serve`.
+var DefaultLauncher = Launcher{Bin: "vllm", Args: []string{"serve"}}
+
 // Manager manages a single vLLM process.
 type Manager struct {
-	mu          sync.RWMutex
-	cmd         *exec.Cmd
-	state       State
-	modelID     string
-	pid         int
-	startedAt   time.Time
-	lastError   string
-	cancelFunc  context.CancelFunc
-	vllmHost    string
-	vllmPort    int
+	mu         sync.RWMutex
+	cmd        *exec.Cmd
+	state      State
+	modelID    string
+	pid        int
+	startedAt  time.Time
+	lastError  string
+	cancelFunc context.CancelFunc
+	vllmHost   string
+	vllmPort   int
+	launcher   Launcher
 
 	// Log ring buffer
 	logMu  sync.Mutex
@@ -63,10 +79,22 @@ func NewManager(vllmHost string, vllmPort int) *Manager {
 		state:    StateStopped,
 		vllmHost: vllmHost,
 		vllmPort: vllmPort,
+		launcher: DefaultLauncher,
 		logBuf:   make([]string, 0, 5000),
 		logMax:   5000,
 		subs:     make(map[chan string]struct{}),
 	}
+}
+
+// SetLauncher overrides how the server process is spawned. Called once at boot
+// from the detected image environment.
+func (m *Manager) SetLauncher(l Launcher) {
+	if l.Bin == "" {
+		return
+	}
+	m.mu.Lock()
+	m.launcher = l
+	m.mu.Unlock()
 }
 
 func (m *Manager) GetStatus() Status {
@@ -111,19 +139,49 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.cancelFunc = cancel
 	m.mu.Unlock()
 
-	cmdArgs := append([]string{"serve", modelPath,
+	m.mu.RLock()
+	launcher := m.launcher
+	m.mu.RUnlock()
+	if launcher.Bin == "" {
+		launcher = DefaultLauncher
+	}
+
+	cmdArgs := append(append([]string{}, launcher.Args...), modelPath,
 		"--host", "0.0.0.0",
 		"--port", strconv.Itoa(m.vllmPort),
-	}, args...)
+	)
+	cmdArgs = append(cmdArgs, args...)
 
-	cmd := exec.CommandContext(ctx, "vllm", cmdArgs...)
+	cmd := exec.CommandContext(ctx, launcher.Bin, cmdArgs...)
 	cmd.Env = append(os.Environ(), env...)
+
+	// Put the server in its own process group so the whole tree can be
+	// signalled at once.
+	//
+	// vLLM is not one process: it forks an EngineCore and one Worker per
+	// tensor-parallel rank, and those are our grandchildren. Signalling only
+	// the direct child leaves them running, still holding their HIP contexts
+	// -- which is to say still holding the GPU memory. The symptom is a later
+	// start failing with "Free memory on device cuda:0 (2.82/31.86 GiB) on
+	// startup is less than desired", on exactly the GPUs the previous serve
+	// used, while the UI reports nothing is running.
+	//
+	// A new group is what makes this safe: the workers inherit it, so
+	// kill(-pgid) reaches every one of them without also signalling vllmctl,
+	// which shares its own group with them otherwise.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// Bound how long Wait blocks on the output pipes: a surviving grandchild
+	// holds them open, and without this the reaper never returns.
+	cmd.WaitDelay = 10 * time.Second
 
 	// Capture stdout and stderr
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 
-	slog.Info("starting vLLM", "model", modelID, "args", cmdArgs)
+	slog.Info("starting vLLM", "model", modelID, "bin", launcher.Bin, "args", cmdArgs)
 
 	if err := cmd.Start(); err != nil {
 		m.mu.Lock()
@@ -152,7 +210,12 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	return nil
 }
 
-// Stop gracefully stops vLLM.
+// Stop gracefully stops vLLM and everything it spawned.
+//
+// SIGTERM to the process group first: vLLM shuts down cleanly on it, releasing
+// GPU memory and tearing down NCCL. Only if that does not finish in time does
+// this escalate to SIGKILL. Either way the whole group is signalled, not just
+// the process we launched -- see the comment in Start.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	if m.state != StateRunning && m.state != StateStarting {
@@ -161,13 +224,31 @@ func (m *Manager) Stop() error {
 	}
 	m.state = StateStopping
 	cancel := m.cancelFunc
+	pgid := m.pid
 	m.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	if pgid > 0 {
+		if err := killProcessGroup(pgid, syscall.SIGTERM); err != nil {
+			slog.Warn("signalling vLLM process group", "pgid", pgid, "error", err)
+		}
 	}
 
-	// Wait for process to exit (up to 30s)
+	// finish sweeps up anything in the group that outlived the leader, then
+	// releases the context.
+	finish := func() {
+		if pgid > 0 {
+			// Only sweep while the group still exists, so a group id recycled
+			// after everything exited cannot be signalled by mistake.
+			if killProcessGroup(pgid, 0) == nil {
+				slog.Info("reaping vLLM workers that outlived the server", "pgid", pgid)
+				killProcessGroup(pgid, syscall.SIGKILL)
+			}
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}
+
 	deadline := time.After(30 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -175,10 +256,9 @@ func (m *Manager) Stop() error {
 	for {
 		select {
 		case <-deadline:
+			slog.Warn("vLLM did not exit on SIGTERM; killing the process group", "pgid", pgid)
+			finish()
 			m.mu.Lock()
-			if m.cmd != nil && m.cmd.Process != nil {
-				m.cmd.Process.Kill()
-			}
 			m.state = StateStopped
 			m.mu.Unlock()
 			return nil
@@ -187,10 +267,20 @@ func (m *Manager) Stop() error {
 			state := m.state
 			m.mu.RUnlock()
 			if state == StateStopped || state == StateError {
+				finish()
 				return nil
 			}
 		}
 	}
+}
+
+// killProcessGroup signals every process in the group led by pid. Signal 0
+// tests for the group's existence without delivering anything.
+func killProcessGroup(pid int, sig syscall.Signal) error {
+	if pid <= 0 {
+		return nil
+	}
+	return syscall.Kill(-pid, sig)
 }
 
 // Restart stops and starts vLLM with the same model.
@@ -246,7 +336,10 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 256*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
+		// Strip before anything else looks at the line: vLLM and the radiance
+		// banner colour their output, and an embedded escape would both
+		// corrupt the display and break the readiness match below.
+		line := ansi.Strip(scanner.Text())
 		m.appendLog(line)
 
 		// Detect ready signal
@@ -388,26 +481,115 @@ func BuildArgs(cfg VLLMStartConfig) []string {
 	if cfg.EnableAutoToolChoice && cfg.ToolCallParser != "" {
 		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser", cfg.ToolCallParser)
 	}
+	if cfg.ReasoningParser != "" {
+		args = append(args, "--reasoning-parser", cfg.ReasoningParser)
+	}
+	if cfg.AttentionBackend != "" {
+		args = append(args, "--attention-backend", cfg.AttentionBackend)
+	}
+	// Hybrid (gated-delta-net / mamba) models leave automatic prefix caching
+	// off unless the cache mode is set too; "align" makes the linear-attention
+	// layers prefix-cacheable by snapshotting their state at block boundaries.
+	if cfg.MambaCacheMode != "" {
+		args = append(args, "--mamba-cache-mode", cfg.MambaCacheMode)
+	}
+	if cfg.SpeculativeConfig != "" {
+		args = append(args, "--speculative-config="+cfg.SpeculativeConfig)
+	}
+	if cfg.CompilationConfig != "" {
+		args = append(args, "--compilation-config="+cfg.CompilationConfig)
+	}
+	// vLLM's memory profiler measures headroom through torch, which
+	// under-reports free VRAM; an explicitly sized pool recovers it. Pins the
+	// KV cache, so it must be cleared before measuring anything memory-related.
+	if cfg.KVCacheMemory > 0 {
+		args = append(args, "--kv-cache-memory", strconv.FormatInt(cfg.KVCacheMemory, 10))
+	}
+	// disable_padded_drafter_batch (common in speculative configs) is
+	// incompatible with async scheduling; vLLM would otherwise auto-enable it
+	// and then disable it again with a runtime warning.
+	if cfg.DisableAsyncScheduling {
+		args = append(args, "--no-async-scheduling")
+	}
+	if cfg.LanguageModelOnly {
+		args = append(args, "--language-model-only")
+	}
 	if cfg.Tokenizer != "" {
 		args = append(args, "--tokenizer", cfg.Tokenizer)
 	}
 	if cfg.ChatTemplate != "" {
 		args = append(args, "--chat-template", cfg.ChatTemplate)
 	}
-	if cfg.ExtraFlags != "" {
-		for _, f := range strings.Fields(cfg.ExtraFlags) {
-			args = append(args, f)
+	args = append(args, SplitFlags(cfg.ExtraFlags)...)
+
+	return args
+}
+
+// SplitFlags splits a raw extra-flags string into argv entries.
+//
+// Whitespace separates, but quotes group — vLLM's structured flags carry JSON,
+// and plain field splitting tears a spaced JSON object into broken fragments:
+//
+//	--speculative-config='{"method": "mtp", "num_speculative_tokens": 8}'
+//
+// Quoting follows shell rules closely enough not to surprise anyone pasting a
+// command line: single quotes are literal, double quotes let a backslash escape
+// a quote or another backslash, and outside quotes a backslash escapes whatever
+// follows. An unterminated quote or a trailing backslash runs to end of input
+// rather than erroring, so a half-typed flag degrades instead of vanishing.
+func SplitFlags(s string) []string {
+	var (
+		out  []string
+		cur  strings.Builder
+		open bool // a quote was seen in this token, so "" yields an empty arg
+	)
+	flush := func() {
+		if open || cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+			open = false
 		}
 	}
 
-	return args
+	r := []rune(s)
+	for i := 0; i < len(r); i++ {
+		switch c := r[i]; c {
+		case '\'':
+			open = true
+			for i++; i < len(r) && r[i] != '\''; i++ {
+				cur.WriteRune(r[i]) // single quotes: everything is literal
+			}
+		case '"':
+			open = true
+			for i++; i < len(r) && r[i] != '"'; i++ {
+				if r[i] == '\\' && i+1 < len(r) && (r[i+1] == '"' || r[i+1] == '\\') {
+					i++
+				}
+				cur.WriteRune(r[i])
+			}
+		case '\\':
+			if i+1 < len(r) {
+				i++
+				cur.WriteRune(r[i])
+			}
+		case ' ', '\t', '\n', '\r':
+			flush()
+		default:
+			cur.WriteRune(c)
+		}
+	}
+	flush()
+	return out
 }
 
 // BuildEnv constructs environment variables for the vLLM process.
 // ROCm-specific vars (VLLM_TARGET_DEVICE, TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL,
 // FLASH_ATTENTION_TRITON_AMD_ENABLE) are set in the container's Dockerfile and
 // inherited via os.Environ(), so they are not duplicated here.
-func BuildEnv(quantMethod string) []string {
+//
+// extra carries image-variant overrides (the RADIANCE_* switches). They are
+// appended last so they win over anything inherited from the image.
+func BuildEnv(quantMethod string, extra ...string) []string {
 	env := []string{
 		// Force vLLM to use spawn start method so child process logs are captured
 		"VLLM_WORKER_MULTIPROC_METHOD=spawn",
@@ -417,7 +599,7 @@ func BuildEnv(quantMethod string) []string {
 	if quantMethod == "awq" {
 		env = append(env, "VLLM_USE_TRITON_AWQ=1")
 	}
-	return env
+	return append(env, extra...)
 }
 
 // ResolveModelPath determines the model path for vLLM.
@@ -432,22 +614,30 @@ func ResolveModelPath(localPath string) string {
 
 // VLLMStartConfig mirrors the config fields needed to build the command.
 type VLLMStartConfig struct {
-	Dtype                string
-	MaxModelLen          int
-	TensorParallelSize   int
-	GPUMemoryUtilization float64
-	EnforceEager         bool
-	TrustRemoteCode      bool
-	MaxNumSeqs           int
-	Quantization         string
-	LoadFormat           string
-	EnablePrefixCaching  bool
-	KVCacheDtype         string
-	EnableChunkedPrefill bool
-	MaxNumBatchedTokens  int
-	EnableAutoToolChoice bool
-	ToolCallParser       string
-	Tokenizer            string
-	ChatTemplate         string
-	ExtraFlags           string
+	Dtype                  string
+	MaxModelLen            int
+	TensorParallelSize     int
+	GPUMemoryUtilization   float64
+	EnforceEager           bool
+	TrustRemoteCode        bool
+	MaxNumSeqs             int
+	Quantization           string
+	LoadFormat             string
+	EnablePrefixCaching    bool
+	KVCacheDtype           string
+	EnableChunkedPrefill   bool
+	MaxNumBatchedTokens    int
+	EnableAutoToolChoice   bool
+	ToolCallParser         string
+	ReasoningParser        string
+	AttentionBackend       string
+	MambaCacheMode         string
+	SpeculativeConfig      string
+	CompilationConfig      string
+	KVCacheMemory          int64
+	DisableAsyncScheduling bool
+	LanguageModelOnly      bool
+	Tokenizer              string
+	ChatTemplate           string
+	ExtraFlags             string
 }

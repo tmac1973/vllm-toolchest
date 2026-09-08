@@ -36,13 +36,13 @@ func (s *Server) handleBenchmarksAbout(w http.ResponseWriter, r *http.Request) {
   <details>
     <summary>Prefix template</summary>
     <pre>`)
-	fmt.Fprint(w, htmlEscape(benchmark.BenchPromptPrefixTemplate))
+	fmt.Fprint(w, esc(benchmark.BenchPromptPrefixTemplate))
 	fmt.Fprint(w, `</pre>
   </details>
   <details>
     <summary>Corpus text</summary>
     <pre style="white-space:pre-wrap;font-size:0.85em;">`)
-	fmt.Fprint(w, htmlEscape(benchmark.BenchPromptText))
+	fmt.Fprint(w, esc(benchmark.BenchPromptText))
 	fmt.Fprint(w, `</pre>
   </details>
 
@@ -52,7 +52,7 @@ func (s *Server) handleBenchmarksAbout(w http.ResponseWriter, r *http.Request) {
     <tbody>`)
 	for _, p := range benchmark.Presets() {
 		fmt.Fprintf(w, `<tr><td><code>%s</code></td><td>%s</td><td><small>%s</small></td></tr>`,
-			htmlEscape(p.Name), htmlEscape(p.EffectiveSource()), htmlEscape(p.Description))
+			esc(p.Name), esc(p.EffectiveSource()), esc(p.Description))
 	}
 	fmt.Fprint(w, `</tbody>
   </table>
@@ -85,7 +85,7 @@ func (s *Server) handleBenchmarksAbout(w http.ResponseWriter, r *http.Request) {
   <summary><code>%s</code></summary>
   <pre style="white-space:pre-wrap;font-size:0.85em;">%s</pre>
 </details>`,
-			htmlEscape(p.Name), htmlEscape(cmd))
+			esc(p.Name), esc(cmd))
 	}
 
 	fmt.Fprint(w, `</article>`)

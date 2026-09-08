@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/tmac1973/vllm-toolchest/internal/config"
 )
 
 // settingsResponse is the public-facing settings (sensitive fields masked).
@@ -31,6 +33,13 @@ type settingsResponse struct {
 	DefaultKVCacheDtype string `json:"default_kv_cache_dtype"`
 	AutoRestart        bool    `json:"auto_restart"`
 	Theme              string  `json:"theme"`
+
+	// Image variant + radiance knobs.
+	Variant         string                `json:"variant"`
+	RadianceVersion string                `json:"radiance_version,omitempty"`
+	IsRadiance      bool                  `json:"is_radiance"`
+	VLLMDeviceName  string                `json:"vllm_device_name,omitempty"`
+	Radiance        config.RadianceConfig `json:"radiance"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -58,12 +67,21 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
 		AutoRestart:        c.AutoRestart,
 		Theme:              c.Theme,
+
+		Variant:         s.vllmEnv.Variant,
+		RadianceVersion: s.vllmEnv.RadianceVersion,
+		IsRadiance:      s.vllmEnv.IsRadiance(),
+		VLLMDeviceName:  s.deviceName(),
+		Radiance:        c.Radiance,
 	}
 
 	respondJSON(w, resp)
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	c := s.cfg
 	contentType := r.Header.Get("Content-Type")
 
@@ -99,8 +117,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if v := r.FormValue("default_dtype"); v != "" {
 			c.DefaultDtype = v
 		}
-		if v := r.FormValue("attention_backend"); v != "" {
-			c.AttentionBackend = v
+		// "" is a real value here (let vLLM choose), so presence, not
+		// non-emptiness, decides whether the field was submitted.
+		if r.Form.Has("attention_backend") {
+			c.AttentionBackend = r.FormValue("attention_backend")
 		}
 		c.ToolUseEnabled = r.FormValue("tool_use_enabled") == "on"
 		if v := r.FormValue("default_tool_parser"); v != "" {
@@ -116,12 +136,52 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if v := r.FormValue("theme"); v != "" {
 			c.Theme = v
 		}
+
+		// Radiance switches. These are tri-state in the UI: "" leaves the
+		// image's own default in place rather than pinning a value that would
+		// then drift as radiance is updated.
+		if r.Form.Has("radiance_use_r4d") {
+			c.Radiance.UseR4D = r.FormValue("radiance_use_r4d")
+		}
+		if r.Form.Has("radiance_use_r4d_ar") {
+			c.Radiance.UseR4DAllReduce = r.FormValue("radiance_use_r4d_ar")
+		}
+		if r.Form.Has("radiance_use_r4d_ar_quant") {
+			c.Radiance.AllReduceQuant = r.FormValue("radiance_use_r4d_ar_quant")
+		}
+		if r.Form.Has("radiance_preshuffle") {
+			c.Radiance.Preshuffle = r.FormValue("radiance_preshuffle")
+		}
+		if r.Form.Has("radiance_fuse_rms_quant") {
+			c.Radiance.FuseRMSQuant = r.FormValue("radiance_fuse_rms_quant")
+		}
+		if r.Form.Has("radiance_skinny_gemm") {
+			c.Radiance.SkinnyGEMM = r.FormValue("radiance_skinny_gemm")
+		}
+		if r.Form.Has("radiance_dynamic_draft") {
+			c.Radiance.DynamicDraft = r.FormValue("radiance_dynamic_draft")
+		}
+		if r.Form.Has("radiance_fast_draft") {
+			c.Radiance.FastDraft = r.FormValue("radiance_fast_draft")
+		}
+		if r.Form.Has("radiance_draft_tau") {
+			c.Radiance.DraftTau = strings.TrimSpace(r.FormValue("radiance_draft_tau"))
+		}
+		if r.Form.Has("radiance_draft_schedule") {
+			c.Radiance.DraftSchedule = strings.TrimSpace(r.FormValue("radiance_draft_schedule"))
+		}
+		if r.Form.Has("radiance_run_bwtest") {
+			c.Radiance.RunBWTest = r.FormValue("radiance_run_bwtest")
+		}
+		if r.Form.Has("radiance_numa_bind") {
+			c.Radiance.NumaBind = strings.TrimSpace(r.FormValue("radiance_numa_bind"))
+		}
 	}
 
 	if err := c.Save(""); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
-			fmt.Fprintf(w, `<p><del>Failed to save: %s</del></p>`, err)
+			hp(`<p><del>Failed to save: %s</del></p>`, err)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -137,6 +197,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
+	// Escapes string arguments: model IDs come from HuggingFace and
+	// error text quotes whatever input produced it.
+	hp := htmlPrinter(w)
 	status := s.process.GetStatus()
 	health := map[string]interface{}{
 		"vllm_running": status.State == "running",
@@ -160,7 +223,7 @@ func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		if status.State == "running" {
 			fmt.Fprint(w, `<p><ins>vLLM is running and healthy.</ins></p>`)
 		} else {
-			fmt.Fprintf(w, `<p>vLLM is %s.</p>`, status.State)
+			hp(`<p>vLLM is %s.</p>`, status.State)
 		}
 		return
 	}

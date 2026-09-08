@@ -36,7 +36,7 @@ func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
   <td>%d</td>
   <td><small>%s</small></td>
 </tr>`,
-			htmlEscape(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
+			esc(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
 	}
 	fmt.Fprint(w, `</tbody></table>`)
 }
@@ -87,9 +87,9 @@ func (s *Server) handleBenchmarkForm(w http.ResponseWriter, r *http.Request) {
     <input type="hidden" name="model_id" value="%s">
     <label>Preset
       <select name="preset" required>`,
-		htmlEscape(loadedName), htmlEscape(loadedID))
+		esc(loadedName), esc(loadedID))
 	for _, p := range benchmark.Presets() {
-		fmt.Fprintf(w, `<option value="%s">%s</option>`, htmlEscape(p.Name), htmlEscape(p.Label))
+		fmt.Fprintf(w, `<option value="%s">%s</option>`, esc(p.Name), esc(p.Label))
 	}
 	fmt.Fprint(w, `      </select>
     </label>
@@ -288,7 +288,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	}
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started run <code>%s</code>. <a href="#" hx-get="/api/benchmarks/" hx-target="#bench-runs">Refresh list</a></p>`, htmlEscape(run.ID))
+	fmt.Fprintf(w, `<p>Started run <code>%s</code>. <a href="#" hx-get="/api/benchmarks/" hx-target="#bench-runs">Refresh list</a></p>`, esc(run.ID))
 }
 
 // handleCancelBenchmark cancels the in-flight run with the given id.
@@ -417,7 +417,7 @@ func renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
       <td><small>%s</small></td>
     </tr>
     <tr><td colspan="7"><div id="bench-detail-%s"></div></td></tr>`,
-			htmlEscape(run.ModelName), htmlEscape(run.ModelID),
+			esc(run.ModelName), esc(run.ModelID),
 			run.Preset, avgGen, avgTTFT,
 			statusBadge(run.Status),
 			when,
@@ -432,14 +432,14 @@ func renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
 func renderRunDetail(w http.ResponseWriter, run *benchmark.BenchmarkRun) {
 	fmt.Fprintf(w, `<article style="margin:0.5rem 0;">
   <header><strong>%s</strong> &middot; <small>%s</small></header>`,
-		htmlEscape(run.Preset), htmlEscape(run.CreatedAt.Format("2006-01-02 15:04:05")))
+		esc(run.Preset), esc(run.CreatedAt.Format("2006-01-02 15:04:05")))
 
 	if run.Error != "" {
-		fmt.Fprintf(w, `<p><del>error:</del> %s</p>`, htmlEscape(run.Error))
+		fmt.Fprintf(w, `<p><del>error:</del> %s</p>`, esc(run.Error))
 	}
 
 	if run.ProgressDetail != "" && run.Status == benchmark.StatusRunning {
-		fmt.Fprintf(w, `<p><em>%s</em></p>`, htmlEscape(run.ProgressDetail))
+		fmt.Fprintf(w, `<p><em>%s</em></p>`, esc(run.ProgressDetail))
 	}
 
 	// Config snapshot
@@ -475,7 +475,7 @@ func renderRunDetail(w http.ResponseWriter, run *benchmark.BenchmarkRun) {
 	if len(run.Warnings) > 0 {
 		fmt.Fprint(w, `<small><strong>warnings</strong>:<ul>`)
 		for _, w2 := range run.Warnings {
-			fmt.Fprintf(w, `<li>%s</li>`, htmlEscape(w2))
+			fmt.Fprintf(w, `<li>%s</li>`, esc(w2))
 		}
 		fmt.Fprint(w, `</ul></small>`)
 	}
@@ -564,21 +564,3 @@ func statusBadge(s string) string {
 	}
 }
 
-func htmlEscape(s string) string {
-	r := []byte{}
-	for _, c := range []byte(s) {
-		switch c {
-		case '<':
-			r = append(r, []byte("&lt;")...)
-		case '>':
-			r = append(r, []byte("&gt;")...)
-		case '&':
-			r = append(r, []byte("&amp;")...)
-		case '"':
-			r = append(r, []byte("&quot;")...)
-		default:
-			r = append(r, c)
-		}
-	}
-	return string(r)
-}

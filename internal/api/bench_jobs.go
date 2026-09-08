@@ -134,7 +134,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started job <code>%s</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>`, htmlEscape(job.ID))
+	fmt.Fprintf(w, `<p>Started job <code>%s</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>`, esc(job.ID))
 }
 
 // handleCancelJob cancels the in-flight job with the given id.
@@ -232,7 +232,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fmt.Fprintf(w, `<label><input type="checkbox" name="model_ids" value="%s"> %s <small style="opacity:0.6;">(%s)</small></label>`,
-			htmlEscape(m.ID), htmlEscape(displayNameOf(m)), htmlEscape(m.ID))
+			esc(m.ID), esc(displayNameOf(m)), esc(m.ID))
 	}
 
 	fmt.Fprint(w, `</div>
@@ -241,7 +241,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
     <div>`)
 	for _, p := range benchmark.Presets() {
 		fmt.Fprintf(w, `<label><input type="checkbox" name="presets" value="%s"> <code>%s</code> <small style="opacity:0.7;">— %s</small></label>`,
-			htmlEscape(p.Name), htmlEscape(p.Name), htmlEscape(p.Description))
+			esc(p.Name), esc(p.Name), esc(p.Description))
 	}
 	fmt.Fprint(w, `</div>
 
@@ -299,7 +299,7 @@ func renderJobList(w http.ResponseWriter, s *Server, jobs []benchmark.BenchmarkJ
     <small style="opacity:0.7;">&middot; %s &middot; %s &middot; %s &middot; %s</small>
     <span style="float:right;font-size:0.85em;">%s</span>
   </header>`,
-			htmlEscape(job.Name),
+			esc(job.Name),
 			job.Kind,
 			statusBadgeJob(job.Status),
 			cellSummary,
@@ -327,7 +327,7 @@ func renderJobList(w http.ResponseWriter, s *Server, jobs []benchmark.BenchmarkJ
   </small></td>
 </tr>
 <tr><td colspan="6"><div id="bench-detail-%s"></div></td></tr>`,
-					htmlEscape(run.ModelName), run.Preset, avgGen, avgTTFT, statusBadge(run.Status),
+					esc(run.ModelName), run.Preset, avgGen, avgTTFT, statusBadge(run.Status),
 					run.ID, run.ID, run.ID)
 			}
 			fmt.Fprint(w, `</tbody></table>`)
@@ -342,7 +342,7 @@ func renderJobDetail(w http.ResponseWriter, s *Server, job *benchmark.BenchmarkJ
   <header><strong>%s</strong> &middot; %s &middot; %s</header>
   <p><small>%s</small></p>
   <table><thead><tr><th>Model</th><th>Preset</th><th>Status</th><th>Attempt</th><th>Run</th></tr></thead><tbody>`,
-		htmlEscape(job.Name), htmlEscape(job.Kind), statusBadgeJob(job.Status), htmlEscape(job.Description))
+		esc(job.Name), esc(job.Kind), statusBadgeJob(job.Status), esc(job.Description))
 	for _, c := range job.Cells {
 		runLink := "—"
 		if c.BenchmarkRunID != "" {
@@ -350,12 +350,12 @@ func renderJobDetail(w http.ResponseWriter, s *Server, job *benchmark.BenchmarkJ
 		}
 		errText := ""
 		if c.Error != "" {
-			errText = fmt.Sprintf(`<br><small><del>%s</del></small>`, htmlEscape(c.Error))
+			errText = fmt.Sprintf(`<br><small><del>%s</del></small>`, esc(c.Error))
 		}
 		fmt.Fprintf(w, `<tr>
   <td><small>%s</small></td><td>%s</td><td>%s%s</td><td>%d</td><td><small>%s</small></td>
 </tr>`,
-			htmlEscape(c.ModelID), c.Preset, statusBadgeCell(c.Status), errText, c.Attempt, runLink)
+			esc(c.ModelID), c.Preset, statusBadgeCell(c.Status), errText, c.Attempt, runLink)
 	}
 	fmt.Fprint(w, `</tbody></table></article>`)
 }

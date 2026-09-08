@@ -166,7 +166,7 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprintf(w, `<p>Started probe <code>%s</code> for <code>%s</code>. <a href="#" hx-get="/api/benchmarks/probe-context/%s/progress" hx-target="#probe-progress" hx-swap="innerHTML" hx-trigger="every 3s">Refresh progress</a></p>`,
-		htmlEscape(probeID), htmlEscape(req.ModelID), htmlEscape(probeID))
+		esc(probeID), esc(req.ModelID), esc(probeID))
 }
 
 // handleContextProbeProgress streams SSE progress events for an in-flight
@@ -309,7 +309,7 @@ func renderProbeResult(w http.ResponseWriter, modelID string, result *benchmark.
        hx-post="/api/benchmarks/probe-context/apply"
        hx-vals='{"model_id":"%s","max_model_len":%d,"gpu_memory_utilization":%.2f}'
        hx-ext="json-enc">apply</button></td>
-</tr>`, util, maxCtx, htmlEscape(modelID), maxCtx, utilF)
+</tr>`, util, maxCtx, esc(modelID), maxCtx, utilF)
 	}
 	fmt.Fprint(w, `</tbody></table>`)
 
@@ -323,7 +323,7 @@ func renderProbeResult(w http.ResponseWriter, modelID string, result *benchmark.
        hx-post="/api/benchmarks/probe-context/apply"
        hx-vals='{"model_id":"%s","max_model_len":%d,"max_num_seqs":%d}'
        hx-ext="json-enc">apply</button></td>
-</tr>`, conc, maxCtx, htmlEscape(modelID), maxCtx, conc)
+</tr>`, conc, maxCtx, esc(modelID), maxCtx, conc)
 	}
 	fmt.Fprint(w, `</tbody></table></article>`)
 }
@@ -347,7 +347,7 @@ func (s *Server) handleProbeForm(w http.ResponseWriter, r *http.Request) {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
-		fmt.Fprintf(w, `<option value="%s">%s</option>`, htmlEscape(m.ID), htmlEscape(displayNameOf(m)))
+		fmt.Fprintf(w, `<option value="%s">%s</option>`, esc(m.ID), esc(displayNameOf(m)))
 	}
 	fmt.Fprint(w, `      </select>
     </label>

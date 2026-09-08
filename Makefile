@@ -1,6 +1,13 @@
-.PHONY: build run dev docker docker-cuda docker-rebuild up down up-cuda down-cuda logs shell clean
+.PHONY: build run dev docker docker-cuda docker-rocm docker-radiance docker-rebuild \
+	up down up-cuda down-cuda up-rocm down-rocm up-radiance down-radiance \
+	logs shell test reload clean
 
-# ─── GPU auto-detection ─────────────────────────────────────────────
+# ─── Variant + GPU auto-detection ───────────────────────────────────
+# setup.sh records the chosen image variant in .env; honour it here so `make
+# up` and `./setup.sh up` cannot disagree about which container they manage.
+# Override on the command line: `make up VARIANT=radiance`.
+VARIANT ?= $(shell sed -n 's/^VLLMCTL_VARIANT=//p' .env 2>/dev/null | head -1)
+
 GPU_TYPE := $(shell \
 	if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then \
 		echo "cuda"; \
@@ -10,10 +17,14 @@ GPU_TYPE := $(shell \
 		echo "cuda"; \
 	fi)
 
-COMPOSE_FILE := docker-compose.yml
-ifeq ($(GPU_TYPE),cuda)
-	COMPOSE_FILE := docker-compose.cuda.yml
+# The image key mirrors setup.sh's image_key(): the radiance variant has its
+# own compose file, everything else is keyed by GPU vendor.
+IMAGE_KEY := $(GPU_TYPE)
+ifeq ($(VARIANT),radiance)
+	IMAGE_KEY := radiance
 endif
+
+COMPOSE_FILE := docker-compose.$(IMAGE_KEY).yml
 
 # ─── Local development ──────────────────────────────────────────────
 build:
@@ -27,11 +38,11 @@ dev:
 
 # ─── Container (auto-detect GPU) ────────────────────────────────────
 docker:
-	@echo "Detected GPU: $(GPU_TYPE) → $(COMPOSE_FILE)"
+	@echo "GPU: $(GPU_TYPE)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
 	docker compose -f $(COMPOSE_FILE) build
 
 up:
-	@echo "Detected GPU: $(GPU_TYPE) → $(COMPOSE_FILE)"
+	@echo "GPU: $(GPU_TYPE)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
 	docker compose -f $(COMPOSE_FILE) up -d
 
 down:
@@ -42,19 +53,28 @@ docker-cuda:
 	docker compose -f docker-compose.cuda.yml build
 
 docker-rocm:
-	docker compose -f docker-compose.yml build
+	docker compose -f docker-compose.rocm.yml build
+
+docker-radiance:
+	docker compose -f docker-compose.radiance.yml build
 
 up-cuda:
 	docker compose -f docker-compose.cuda.yml up -d
 
 up-rocm:
-	docker compose -f docker-compose.yml up -d
+	docker compose -f docker-compose.rocm.yml up -d
+
+up-radiance:
+	docker compose -f docker-compose.radiance.yml up -d
 
 down-cuda:
 	docker compose -f docker-compose.cuda.yml down
 
 down-rocm:
-	docker compose -f docker-compose.yml down
+	docker compose -f docker-compose.rocm.yml down
+
+down-radiance:
+	docker compose -f docker-compose.radiance.yml down
 
 # ─── Common ────────────────────────────────────────────────────────
 docker-rebuild:

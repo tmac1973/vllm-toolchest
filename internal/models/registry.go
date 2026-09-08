@@ -13,21 +13,21 @@ import (
 
 // Model represents a registered model in the inventory.
 type Model struct {
-	ID            string         `json:"id"`
-	DisplayName   string         `json:"display_name"`
-	LocalPath     string         `json:"local_path"`
-	Enabled       bool           `json:"enabled"`
-	DownloadDate  time.Time      `json:"download_date"`
-	TotalSizeBytes int64         `json:"total_size_bytes"`
-	Orphaned      bool           `json:"orphaned,omitempty"`
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	LocalPath      string    `json:"local_path"`
+	Enabled        bool      `json:"enabled"`
+	DownloadDate   time.Time `json:"download_date"`
+	TotalSizeBytes int64     `json:"total_size_bytes"`
+	Orphaned       bool      `json:"orphaned,omitempty"`
 
-	HFConfig      HFConfig       `json:"hf_config"`
-	Quantization  QuantMeta      `json:"quantization"`
-	ToolUse       ToolUseMeta    `json:"tool_use"`
-	Vision        VisionMeta     `json:"vision"`
-	GenDefaults   GenDefaults    `json:"generation_defaults,omitempty"`
-	VRAMEstimate  VRAMEstimate   `json:"vram_estimate"`
-	VLLMConfig    VLLMConfig     `json:"vllm_config"`
+	HFConfig     HFConfig     `json:"hf_config"`
+	Quantization QuantMeta    `json:"quantization"`
+	ToolUse      ToolUseMeta  `json:"tool_use"`
+	Vision       VisionMeta   `json:"vision"`
+	GenDefaults  GenDefaults  `json:"generation_defaults,omitempty"`
+	VRAMEstimate VRAMEstimate `json:"vram_estimate"`
+	VLLMConfig   VLLMConfig   `json:"vllm_config"`
 }
 
 // HFConfig holds key fields from the model's config.json.
@@ -41,19 +41,28 @@ type HFConfig struct {
 	NumKeyValueHeads      int      `json:"num_key_value_heads,omitempty"`
 	HeadDim               int      `json:"head_dim,omitempty"`
 	MaxPositionEmbeddings int      `json:"max_position_embeddings,omitempty"`
-	VocabSize             int      `json:"vocab_size,omitempty"`
-	TorchDtype            string   `json:"torch_dtype,omitempty"`
-	TieWordEmbeddings     bool     `json:"tie_word_embeddings,omitempty"`
+
+	// AttentionLayers is how many of NumHiddenLayers are full-attention and
+	// therefore hold a KV cache. On a dense model this equals NumHiddenLayers;
+	// on a hybrid it does not, and using the total there overstates the KV
+	// cache badly -- Qwen3.8-27B is 16 attention layers out of 64, so counting
+	// all of them inflates the per-token figure fourfold.
+	//
+	// Zero means "unknown", and callers fall back to NumHiddenLayers.
+	AttentionLayers   int    `json:"attention_layers,omitempty"`
+	VocabSize         int    `json:"vocab_size,omitempty"`
+	TorchDtype        string `json:"torch_dtype,omitempty"`
+	TieWordEmbeddings bool   `json:"tie_word_embeddings,omitempty"`
 }
 
 // QuantMeta holds quantization information.
 type QuantMeta struct {
-	Method       string  `json:"method"` // awq, gptq, fp8, gguf, bitsandbytes, marlin, squeezellm, compressed_tensors, none
-	Bits         int     `json:"bits,omitempty"`
-	GroupSize    int     `json:"group_size,omitempty"`
-	DescAct      bool    `json:"desc_act,omitempty"`
-	Sym          bool    `json:"sym,omitempty"`
-	GGUFQuantType string `json:"gguf_quant_type,omitempty"`
+	Method        string  `json:"method"` // awq, gptq, fp8, gguf, bitsandbytes, marlin, squeezellm, compressed_tensors, none
+	Bits          int     `json:"bits,omitempty"`
+	GroupSize     int     `json:"group_size,omitempty"`
+	DescAct       bool    `json:"desc_act,omitempty"`
+	Sym           bool    `json:"sym,omitempty"`
+	GGUFQuantType string  `json:"gguf_quant_type,omitempty"`
 	BytesPerParam float64 `json:"bytes_per_param"`
 }
 
@@ -95,9 +104,37 @@ type VLLMConfig struct {
 	TrustRemoteCode      bool    `json:"trust_remote_code"`
 	EnableAutoToolChoice bool    `json:"enable_auto_tool_choice"`
 	ToolCallParser       string  `json:"tool_call_parser,omitempty"`
+	ReasoningParser      string  `json:"reasoning_parser,omitempty"`
 	Tokenizer            string  `json:"tokenizer,omitempty"`
 	ChatTemplate         string  `json:"chat_template,omitempty"`
 	ExtraFlags           string  `json:"extra_flags,omitempty"`
+
+	// AttentionBackend overrides vLLM's backend choice, e.g.
+	// ROCM_AITER_UNIFIED_ATTN or R4D on the radiance image. Empty = vLLM picks.
+	AttentionBackend string `json:"attention_backend,omitempty"`
+
+	// MambaCacheMode is required alongside EnablePrefixCaching on hybrid
+	// linear-attention models; "align" makes their recurrent state cacheable.
+	MambaCacheMode string `json:"mamba_cache_mode,omitempty"`
+
+	// SpeculativeConfig is the raw JSON passed to --speculative-config,
+	// e.g. {"method":"mtp","num_speculative_tokens":8}.
+	SpeculativeConfig string `json:"speculative_config,omitempty"`
+
+	// CompilationConfig is the raw JSON passed to --compilation-config,
+	// most usefully to trim the CUDA-graph capture ladder.
+	CompilationConfig string `json:"compilation_config,omitempty"`
+
+	// KVCacheMemory pins the KV cache pool size in bytes (0 = let vLLM size
+	// it). Pinned, so clear it before measuring anything memory-related.
+	KVCacheMemory int64 `json:"kv_cache_memory,omitempty"`
+
+	// DisableAsyncScheduling passes --no-async-scheduling; required with
+	// speculative configs that set disable_padded_drafter_batch.
+	DisableAsyncScheduling bool `json:"disable_async_scheduling,omitempty"`
+
+	// LanguageModelOnly serves a vision-language checkpoint text-only.
+	LanguageModelOnly bool `json:"language_model_only,omitempty"`
 }
 
 type registryFile struct {
@@ -357,7 +394,18 @@ func (r *Registry) backfillMetadata() {
 		if m.Orphaned || m.LocalPath == "" {
 			continue
 		}
-		if m.HFConfig.HiddenSize == 0 && fileExists(filepath.Join(m.LocalPath, "config.json")) {
+		if !fileExists(filepath.Join(m.LocalPath, "config.json")) {
+			continue
+		}
+		// Re-derive when the metadata was never parsed, and also when it
+		// predates a field we have since started reading. AttentionLayers is
+		// only ever zero on a record written before it existed -- a fresh
+		// parse always sets it, falling back to the total layer count on a
+		// dense model -- and leaving it zero would keep showing the old,
+		// fourfold-too-high KV estimate for every hybrid already registered.
+		stale := m.HFConfig.HiddenSize == 0 ||
+			(m.HFConfig.AttentionLayers == 0 && m.HFConfig.NumHiddenLayers > 0)
+		if stale {
 			slog.Info("backfilling metadata", "id", m.ID)
 			m.HFConfig = ParseHFConfig(m.LocalPath)
 			m.Quantization = DetectQuantization(m.LocalPath, m.ID)
@@ -385,12 +433,12 @@ func needsTrustRemoteCode(modelDir string, hfCfg HFConfig) bool {
 			if json.Unmarshal(data, &tc) == nil && tc.TokenizerClass != "" {
 				standardClasses := map[string]bool{
 					"PreTrainedTokenizerFast": true,
-					"GPT2Tokenizer":          true,
-					"GPT2TokenizerFast":      true,
-					"LlamaTokenizer":         true,
-					"LlamaTokenizerFast":     true,
-					"T5Tokenizer":            true,
-					"T5TokenizerFast":        true,
+					"GPT2Tokenizer":           true,
+					"GPT2TokenizerFast":       true,
+					"LlamaTokenizer":          true,
+					"LlamaTokenizerFast":      true,
+					"T5Tokenizer":             true,
+					"T5TokenizerFast":         true,
 				}
 				if !standardClasses[tc.TokenizerClass] {
 					return true
