@@ -493,7 +493,7 @@ load, so it is clamped with a warning and clamped *before* being held pending.
 
 ---
 
-## Phase 5 — Help page
+## Phase 5 — Help page — **done**
 
 Port `web/templates/help.html` — the in-page TOC, section layout and styling —
 and rewrite the prose for vLLM. Sections:
@@ -509,6 +509,29 @@ costs; `gpu_memory_utilization` and why the KV cache is pre-allocated;
 tensor parallelism and the all-reduce token ceiling; served model names and
 aliases; and quantization formats (FP8, AWQ, GPTQ, compressed-tensors) with
 which ones RDNA4 actually accelerates.
+
+### Outcome
+
+Ported the layout, styling and in-page TOC; the prose is written fresh rather
+than adapted, because almost none of llama's concepts survive the engine
+change. Sections as planned, with two deviations:
+
+- **Aliases are not documented, because they do not exist here.** Served names
+  turned out to be worth a section for a different reason: `--served-model-name`
+  is not passed, so `/v1/models` reports the local filesystem path while the
+  engine runs and HuggingFace repo IDs while it is stopped. The help says to
+  query it rather than assume either form.
+- **The radiance-only material is gated on the image variant** (`IsRadiance`),
+  so the generic image does not document an all-reduce ceiling belonging to a
+  kernel library it never shipped.
+
+The quantization section makes the weight-only/w8a8 distinction the point,
+since that is what decides whether a quant buys throughput or only VRAM.
+
+Tests render the page for both variants and check that every TOC anchor
+resolves to a heading, that the radiance sections appear only on radiance, and
+that every internal link is a real page route — the three ways this page rots
+silently.
 
 ---
 

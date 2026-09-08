@@ -166,6 +166,7 @@ func (s *Server) initTemplates() {
 		"visualize.html",
 		"tuning.html",
 		"settings.html",
+		"help.html",
 	}
 	for _, pf := range pageFiles {
 		clone := template.Must(base.Clone())
@@ -207,6 +208,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/benchmarks/visualize", s.handleVisualizePage)
 	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
+	r.Get("/help", s.handleHelpPage)
 
 	// Health check
 	r.Get("/healthz", s.handleHealthCheck)
@@ -319,6 +321,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", pageData{Title: "Models", Nav: "models"})
+}
+
+func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "help.html", struct {
+		pageData
+		// IsRadiance gates the sections that only make sense on the RDNA4
+		// image — the all-reduce ceiling in particular, which is a property of
+		// a kernel library the generic image does not ship.
+		IsRadiance bool
+	}{
+		pageData:   pageData{Title: "Help", Nav: "help"},
+		IsRadiance: s.vllmEnv.IsRadiance(),
+	})
 }
 
 func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) {
