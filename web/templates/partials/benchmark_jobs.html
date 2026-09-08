@@ -159,21 +159,38 @@
 
 {{define "job_form" -}}
 <article>
-  <header><strong>New batch job</strong></header>
+  <header><strong>{{if .FromJob}}Edit &amp; re-run: {{.FromJob}}{{else}}New batch job{{end}}</strong></header>
   <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
-    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
-    <label>Description <input type="text" name="description" placeholder="optional"></label>
+    <label>Name <input type="text" name="name" value="{{.Name}}" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" value="{{.Description}}" placeholder="optional"></label>
 
     <label>Models</label>
     <div>
       {{- if not .Models}}<small style="opacity:0.7;">No models in the registry. <a href="/models/browse">Browse HuggingFace</a> first.</small>{{end}}
-      {{- range .Models}}<label><input type="checkbox" name="model_ids" value="{{.ID}}"> {{.Name}} <small style="opacity:0.6;">({{.ID}})</small></label>{{end}}
+      {{- range .Models}}<label><input type="checkbox" name="model_ids" value="{{.ID}}"{{if .Checked}} checked{{end}}> {{.Name}} <small style="opacity:0.6;">({{.ID}})</small></label>{{end}}
     </div>
 
     <label>Presets</label>
     <div>
-      {{- range .Presets}}<label><input type="checkbox" name="presets" value="{{.Name}}"> <code>{{.Name}}</code> <small style="opacity:0.7;">— {{.Description}}</small></label>{{end}}
+      {{- range .Presets}}<label><input type="checkbox" name="presets" value="{{.Name}}"{{if .Checked}} checked{{end}}> <code>{{.Name}}</code> <small style="opacity:0.7;">— {{.Description}}</small></label>{{end}}
     </div>
+
+    <details{{if .HasSweeps}} open{{end}} style="margin:0.5rem 0;">
+      <summary><strong>Sweep parameters</strong> <small style="opacity:0.7;">— run every combination</small></summary>
+      <p><small style="opacity:0.7;">Comma-separated values. Leave a field blank to use the model's saved setting.
+        Every one of these changes how the engine is launched, so each combination is a separate load — a job of
+        3 context lengths × 2 models is six loads, not six requests.</small></p>
+      {{- range .SweepFields}}
+      <label title="{{.Help}}">
+        {{.Label}} <small style="opacity:0.6;">({{.Name}})</small>
+        <input type="text" name="sweep_{{.Name}}" value="{{.Value}}" placeholder="{{.Example}}"
+               list="sweep-choices-{{.Name}}">
+        <datalist id="sweep-choices-{{.Name}}">
+          {{- range .Choices}}<option value="{{.}}"></option>{{end}}
+        </datalist>
+      </label>
+      {{- end}}
+    </details>
 
     <button type="submit">Submit job</button>
   </form>

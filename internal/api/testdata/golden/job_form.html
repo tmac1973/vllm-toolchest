@@ -1,8 +1,8 @@
 <article>
   <header><strong>New batch job</strong></header>
   <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
-    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
-    <label>Description <input type="text" name="description" placeholder="optional"></label>
+    <label>Name <input type="text" name="name" value="" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" value="" placeholder="optional"></label>
 
     <label>Models</label>
     <div><label><input type="checkbox" name="model_ids" value="TheBloke/Mixtral-8x7B-AWQ"> Mixtral-8x7B-AWQ <small style="opacity:0.6;">(TheBloke/Mixtral-8x7B-AWQ)</small></label><label><input type="checkbox" name="model_ids" value="unsloth/Qwen3.8-27B-FP8"> Qwen3.8-27B-FP8 <small style="opacity:0.6;">(unsloth/Qwen3.8-27B-FP8)</small></label>
@@ -11,6 +11,55 @@
     <label>Presets</label>
     <div><label><input type="checkbox" name="presets" value="internal-quick"> <code>internal-quick</code> <small style="opacity:0.7;">— Single streaming chat completion at 512-token prompt / 128 gen tokens. Sanity check after model load.</small></label><label><input type="checkbox" name="presets" value="internal-standard"> <code>internal-standard</code> <small style="opacity:0.7;">— Three streaming chat completions at 128 / 512 / 2048-token prompts (128 gen tokens). Captures TTFT and gen-TPS scaling across short contexts.</small></label><label><input type="checkbox" name="presets" value="internal-thorough"> <code>internal-thorough</code> <small style="opacity:0.7;">— Five repetitions at 128 / 512 / 2048 / 8192-token prompts with 256 generated tokens. Stresses long-context prefill.</small></label><label><input type="checkbox" name="presets" value="internal-long-ctx"> <code>internal-long-ctx</code> <small style="opacity:0.7;">— Single 32768-token prompt with 512 generated tokens. Stresses KV cache, paged attention, and KV-cache dtype on long contexts.</small></label><label><input type="checkbox" name="presets" value="benchy-quick"> <code>benchy-quick</code> <small style="opacity:0.7;">— Single-shot llama-benchy run. Smoke test for the engine-agnostic comparison path.</small></label><label><input type="checkbox" name="presets" value="benchy-standard"> <code>benchy-standard</code> <small style="opacity:0.7;">— Three-run llama-benchy benchmark at 2048-token prompts. Comparable to llama-toolchest&#39;s benchy-standard.</small></label><label><input type="checkbox" name="presets" value="benchy-concurrency"> <code>benchy-concurrency</code> <small style="opacity:0.7;">— Stress vLLM&#39;s continuous batching by sweeping concurrency. Highlights where prefill saturates vs. throughput scales.</small></label>
     </div>
+
+    <details style="margin:0.5rem 0;">
+      <summary><strong>Sweep parameters</strong> <small style="opacity:0.7;">— run every combination</small></summary>
+      <p><small style="opacity:0.7;">Comma-separated values. Leave a field blank to use the model's saved setting.
+        Every one of these changes how the engine is launched, so each combination is a separate load — a job of
+        3 context lengths × 2 models is six loads, not six requests.</small></p>
+      <label title="Maps to --max-model-len. The KV cache is pre-allocated at this size, so it is usually the parameter that decides whether a model fits.">
+        Context length <small style="opacity:0.6;">(max_model_len)</small>
+        <input type="text" name="sweep_max_model_len" value="" placeholder="8192, 32768, 131072"
+               list="sweep-choices-max_model_len">
+        <datalist id="sweep-choices-max_model_len"><option value="4096"></option><option value="8192"></option><option value="16384"></option><option value="32768"></option><option value="65536"></option><option value="131072"></option>
+        </datalist>
+      </label>
+      <label title="How many GPUs the model is split across. Must divide the model&#39;s attention head count.">
+        Tensor parallel size <small style="opacity:0.6;">(tensor_parallel_size)</small>
+        <input type="text" name="sweep_tensor_parallel_size" value="" placeholder="1, 2, 4"
+               list="sweep-choices-tensor_parallel_size">
+        <datalist id="sweep-choices-tensor_parallel_size"><option value="1"></option><option value="2"></option><option value="4"></option><option value="8"></option>
+        </datalist>
+      </label>
+      <label title="Fraction of each card vLLM may use. Higher leaves more room for KV cache and less for everything else.">
+        GPU memory utilization <small style="opacity:0.6;">(gpu_memory_utilization)</small>
+        <input type="text" name="sweep_gpu_memory_utilization" value="" placeholder="0.85, 0.90, 0.95"
+               list="sweep-choices-gpu_memory_utilization">
+        <datalist id="sweep-choices-gpu_memory_utilization"><option value="0.80"></option><option value="0.85"></option><option value="0.90"></option><option value="0.95"></option>
+        </datalist>
+      </label>
+      <label title="How many requests the engine will batch. Raising it trades latency for throughput.">
+        Max concurrent sequences <small style="opacity:0.6;">(max_num_seqs)</small>
+        <input type="text" name="sweep_max_num_seqs" value="" placeholder="1, 16, 64"
+               list="sweep-choices-max_num_seqs">
+        <datalist id="sweep-choices-max_num_seqs"><option value="1"></option><option value="4"></option><option value="16"></option><option value="32"></option><option value="64"></option><option value="128"></option><option value="256"></option>
+        </datalist>
+      </label>
+      <label title="FP8 halves the KV cache, which buys context length at some cost in quality.">
+        KV cache dtype <small style="opacity:0.6;">(kv_cache_dtype)</small>
+        <input type="text" name="sweep_kv_cache_dtype" value="" placeholder="auto, fp8"
+               list="sweep-choices-kv_cache_dtype">
+        <datalist id="sweep-choices-kv_cache_dtype"><option value="auto"></option><option value="fp8"></option><option value="fp8_e5m2"></option><option value="fp8_e4m3"></option>
+        </datalist>
+      </label>
+      <label title="Skips graph capture. Slower steady-state, faster startup — worth measuring rather than assuming.">
+        Enforce eager mode <small style="opacity:0.6;">(enforce_eager)</small>
+        <input type="text" name="sweep_enforce_eager" value="" placeholder="true, false"
+               list="sweep-choices-enforce_eager">
+        <datalist id="sweep-choices-enforce_eager"><option value="false"></option><option value="true"></option>
+        </datalist>
+      </label>
+    </details>
 
     <button type="submit">Submit job</button>
   </form>

@@ -16,7 +16,7 @@ import (
 )
 
 func TestExpandCellsIsModelGrouped(t *testing.T) {
-	cells := ExpandCells([]string{"m1", "m2", "m3"}, []string{"p1", "p2"})
+	cells := ExpandCells([]string{"m1", "m2", "m3"}, []string{"p1", "p2"}, nil)
 	// Expect: m1/p1, m1/p2, m2/p1, m2/p2, m3/p1, m3/p2
 	want := []struct{ model, preset string }{
 		{"m1", "p1"}, {"m1", "p2"},
@@ -207,7 +207,7 @@ func TestJobLoadsEachModelExactlyOnce(t *testing.T) {
 		CreatedAt: time.Now(),
 		ModelIDs:  []string{"a", "b"},
 		Presets:   []string{"internal-quick", "internal-quick"}, // duplicate preset OK
-		Cells:     ExpandCells([]string{"a", "b"}, []string{"internal-quick", "internal-quick"}),
+		Cells:     ExpandCells([]string{"a", "b"}, []string{"internal-quick", "internal-quick"}, nil),
 	}
 	if err := store.SaveJob(job); err != nil {
 		t.Fatal(err)

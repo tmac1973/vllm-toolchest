@@ -25,11 +25,11 @@ type ProgressUpdate struct {
 // BenchmarkRun. The caller owns the BenchmarkRun and must Save it with
 // StatusRunning before calling Run.
 type RunnerConfig struct {
-	Run        BenchmarkRun
-	Preset     Preset
-	VLLMURL    string // e.g. "http://127.0.0.1:8000"
-	ServedName string // model identifier vLLM responds to ("model" field in /v1/chat/completions)
-	MaxModelLen int   // for skip-rule when prompt_tokens+gen_tokens exceeds the model's context
+	Run         BenchmarkRun
+	Preset      Preset
+	VLLMURL     string // e.g. "http://127.0.0.1:8000"
+	ServedName  string // model identifier vLLM responds to ("model" field in /v1/chat/completions)
+	MaxModelLen int    // for skip-rule when prompt_tokens+gen_tokens exceeds the model's context
 
 	HFRepoID string // forwarded as --tokenizer to llama-benchy in Step 3
 	HFToken  string
@@ -313,11 +313,11 @@ func (r *Runner) sendCompletionStream(ctx context.Context, vllmURL, model string
 	}
 
 	var (
-		ttft         time.Duration
-		firstChunk   = true
-		usagePrompt  int
-		usageGen     int
-		sawAnyChunk  bool
+		ttft        time.Duration
+		firstChunk  = true
+		usagePrompt int
+		usageGen    int
+		sawAnyChunk bool
 	)
 
 	scanner := bufio.NewScanner(resp.Body)

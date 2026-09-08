@@ -47,6 +47,7 @@ type createJobRequest struct {
 	ModelIDs    []string                   `json:"model_ids"`
 	Presets     []string                   `json:"presets"`
 	Overrides   *benchmark.ConfigOverrides `json:"overrides,omitempty"`
+	Sweeps      []benchmark.SweepAxis      `json:"sweeps,omitempty"`
 }
 
 // handleCreateJob persists a new batch job and dispatches it.
@@ -67,6 +68,23 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		req.Description = r.FormValue("description")
 		req.ModelIDs = r.Form["model_ids"]
 		req.Presets = r.Form["presets"]
+
+		// One field per sweepable parameter, named sweep_<field>, holding a
+		// comma-separated value list. Empty means "not swept".
+		for _, f := range benchmark.SweepFields() {
+			raw := strings.TrimSpace(r.FormValue("sweep_" + f.Name))
+			if raw == "" {
+				continue
+			}
+			values, err := benchmark.ParseSweepValues(f, raw)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if len(values) > 0 {
+				req.Sweeps = append(req.Sweeps, benchmark.SweepAxis{Field: f.Name, Values: values})
+			}
+		}
 	}
 
 	if len(req.ModelIDs) == 0 {
@@ -86,6 +104,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "model not registered: "+m, http.StatusBadRequest)
 			return
 		}
+	}
+	if err := benchmark.ValidateSweeps(req.Sweeps); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	presetSet := map[string]bool{}
 	for _, p := range benchmark.Presets() {
@@ -108,7 +130,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		ModelIDs:    req.ModelIDs,
 		Presets:     req.Presets,
 		Overrides:   req.Overrides,
-		Cells:       benchmark.ExpandCells(req.ModelIDs, req.Presets),
+		Sweeps:      req.Sweeps,
+		Cells:       benchmark.ExpandCells(req.ModelIDs, req.Presets, req.Sweeps),
 	}
 
 	if err := s.bench.SaveJob(job); err != nil {
@@ -212,21 +235,100 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleJobForm renders the new-job form partial.
+// jobFormChoice is one checkbox in the job form.
+type jobFormChoice struct {
+	ID          string
+	Name        string
+	Description string
+	Checked     bool
+}
+
+// jobFormSweep is one sweep input, pre-filled when re-running a job.
+type jobFormSweep struct {
+	Name    string
+	Label   string
+	Help    string
+	Example string
+	Choices []string
+	Value   string
+}
+
+// handleJobForm renders the batch-job form. With ?from=<id> it comes back
+// pre-filled from an existing job, which is what Edit & Re-run opens: a job
+// worth repeating is usually worth repeating with one thing changed.
 func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
-	type modelChoice struct{ ID, Name string }
-	var choices []modelChoice
+	var from *benchmark.BenchmarkJob
+	if id := r.URL.Query().Get("from"); id != "" {
+		if job, err := s.bench.GetJob(id); err == nil {
+			from = job
+		}
+	}
+
+	chosenModels := map[string]bool{}
+	chosenPresets := map[string]bool{}
+	sweepValues := map[string]string{}
+	name, description, fromName := "", "", ""
+	if from != nil {
+		fromName = from.Name
+		// A re-run is a new job, so the name gets a marker rather than
+		// silently colliding with the one it came from.
+		name = from.Name + " (re-run)"
+		description = from.Description
+		for _, m := range from.ModelIDs {
+			chosenModels[m] = true
+		}
+		for _, p := range from.Presets {
+			chosenPresets[p] = true
+		}
+		for _, axis := range from.Sweeps {
+			sweepValues[axis.Field] = strings.Join(axis.Values, ", ")
+		}
+	}
+
+	var models []jobFormChoice
 	for _, m := range s.registry.List() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
-		choices = append(choices, modelChoice{ID: m.ID, Name: displayNameOf(m)})
+		models = append(models, jobFormChoice{
+			ID: m.ID, Name: displayNameOf(m), Checked: chosenModels[m.ID],
+		})
+	}
+
+	var presets []jobFormChoice
+	for _, p := range benchmark.Presets() {
+		presets = append(presets, jobFormChoice{
+			Name: p.Name, Description: p.Description, Checked: chosenPresets[p.Name],
+		})
+	}
+
+	var sweeps []jobFormSweep
+	for _, f := range benchmark.SweepFields() {
+		sweeps = append(sweeps, jobFormSweep{
+			Name: f.Name, Label: f.Label, Help: f.Help,
+			Example: f.Example, Choices: f.Choices,
+			Value: sweepValues[f.Name],
+		})
 	}
 
 	respondHTML(w)
 	s.renderPartial(w, "job_form", struct {
-		Models  []modelChoice
-		Presets []benchmark.Preset
-	}{choices, benchmark.Presets()})
+		FromJob     string
+		Name        string
+		Description string
+		Models      []jobFormChoice
+		Presets     []jobFormChoice
+		SweepFields []jobFormSweep
+		HasSweeps   bool
+	}{
+		FromJob:     fromName,
+		Name:        name,
+		Description: description,
+		Models:      models,
+		Presets:     presets,
+		SweepFields: sweeps,
+		HasSweeps:   len(sweepValues) > 0,
+	})
 }
 
 // jobRow is one job's collapsed summary line.

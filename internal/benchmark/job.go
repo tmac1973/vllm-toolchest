@@ -57,6 +57,9 @@ type BenchmarkJob struct {
 	ModelIDs  []string         `json:"model_ids,omitempty"`
 	Presets   []string         `json:"presets,omitempty"`
 	Overrides *ConfigOverrides `json:"overrides,omitempty"`
+	// Sweeps multiply the matrix: every combination of their values is run
+	// for every model and preset. Each combination is a separate engine load.
+	Sweeps []SweepAxis `json:"sweeps,omitempty"`
 
 	Cells []JobCell `json:"cells,omitempty"`
 }
@@ -70,6 +73,7 @@ type ConfigOverrides struct {
 	KVCacheDtype         *string  `json:"kv_cache_dtype,omitempty"`
 	EnforceEager         *bool    `json:"enforce_eager,omitempty"`
 	Dtype                *string  `json:"dtype,omitempty"`
+	MaxNumSeqs           *int     `json:"max_num_seqs,omitempty"`
 }
 
 // JobCell is one (model, preset) point in the matrix. The cell owns at

@@ -49,7 +49,10 @@ func TestRunProbeConvergesToOOMBoundary(t *testing.T) {
 		MaxContext:        65536, // will be clamped to hfMax
 	}
 	progress := make(chan ProbeProgress, 256)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 
 	result, err := RunProbe(context.Background(), env, cfg, progress)
 	if err != nil {
@@ -69,7 +72,7 @@ func TestRunProbeConvergesToOOMBoundary(t *testing.T) {
 
 func TestRunProbeRespectsHFCeiling(t *testing.T) {
 	env := &stubProbeEnv{
-		hfMax:   8192,
+		hfMax: 8192,
 		respond: func(a ProbeAttempt) ProbeAttemptResult {
 			// Always ready — would otherwise grow unbounded.
 			return ProbeAttemptResult{Outcome: ProbeReady}
@@ -84,7 +87,10 @@ func TestRunProbeRespectsHFCeiling(t *testing.T) {
 		MaxContext:        131072,
 	}
 	progress := make(chan ProbeProgress, 256)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 	result, _ := RunProbe(context.Background(), env, cfg, progress)
 
 	got := result.UtilizationResults["0.95"]
@@ -119,7 +125,10 @@ func TestRunProbeUsesVLLMSuggestion(t *testing.T) {
 		MaxContext:        65536,
 	}
 	progress := make(chan ProbeProgress, 256)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 	result, _ := RunProbe(context.Background(), env, cfg, progress)
 
 	// Probe should hit the suggested 4096 boundary within ~5 attempts thanks
@@ -155,7 +164,10 @@ func TestRunProbeMultipleUtilLevels(t *testing.T) {
 		MaxContext:        65536,
 	}
 	progress := make(chan ProbeProgress, 1024)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 	result, _ := RunProbe(context.Background(), env, cfg, progress)
 
 	v98 := result.UtilizationResults["0.98"]
@@ -189,7 +201,10 @@ func TestRunProbeConcurrencyDecreasesMaxContext(t *testing.T) {
 		MaxContext:        65536,
 	}
 	progress := make(chan ProbeProgress, 1024)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 	result, _ := RunProbe(context.Background(), env, cfg, progress)
 
 	c1 := result.ConcurrencyResults[1]
@@ -288,7 +303,10 @@ func TestRunProbeRespectsContextCancellation(t *testing.T) {
 	}
 
 	progress := make(chan ProbeProgress, 1024)
-	go func() { for range progress {} }()
+	go func() {
+		for range progress {
+		}
+	}()
 	result, err := RunProbe(ctx, env, cfg, progress)
 	if err == nil {
 		t.Fatal("expected context.Canceled error")
