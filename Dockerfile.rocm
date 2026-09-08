@@ -87,14 +87,27 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging ninja
 # site-packages (e.g. /usr/lib/python3.14/site-packages/amdsmi). The package
 # bundles its own libamd_smi.so and is Python-version-agnostic, so we can
 # copy it into our 3.12 venv as-is. vLLM's platform detection requires it.
+# The destination is asked of the venv rather than spelled out: this is
+# Fedora, where lib and lib64 both exist, and a hardcoded lib/ path is one
+# symlink away from installing somewhere nothing imports from.
+#
+# A failure here is not fatal. vLLM queries amdsmi for total VRAM to avoid
+# creating a HIP context in the API server (which would push it from fork to
+# spawn for workers) and falls back to torch.cuda when the query fails. So the
+# check below reports rather than exits — but it reports, because a silent
+# miss costs that optimisation with nothing on screen to say so.
 RUN set -e; \
+    site="$(/opt/vllm-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
     src="$(find /usr/lib /usr/lib64 -maxdepth 4 -type d -name amdsmi 2>/dev/null | head -1)"; \
     if [ -n "$src" ]; then \
-        cp -r "$src" /opt/vllm-venv/lib/python3.12/site-packages/amdsmi; \
-        echo "Installed amdsmi from $src"; \
+        cp -r "$src" "$site/amdsmi"; \
+        echo "Installed amdsmi from $src into $site"; \
     else \
-        echo "WARNING: amdsmi Python bindings not found on host; vLLM ROCm platform detection will fail" >&2; \
-    fi
+        echo "WARNING: amdsmi Python bindings not found on host" >&2; \
+    fi; \
+    /opt/vllm-venv/bin/python -c 'import amdsmi' \
+        && echo "amdsmi imports from the venv" \
+        || echo "WARNING: amdsmi does not import; vLLM will fall back to torch.cuda for device memory" >&2
 
 # ── Stage 3: PyTorch installed ─────────────────────────────────────
 # Tag with `--target pytorch-ready` to checkpoint after the ~8 min wheel install.

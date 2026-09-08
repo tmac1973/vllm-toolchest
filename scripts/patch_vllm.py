@@ -69,13 +69,27 @@ def patch_1_init_py(txt: str) -> str:
 
 
 def patch_2_rocm_py_mock(txt: str) -> str:
-    header = (
-        "import sys\n"
-        "from unittest.mock import MagicMock\n"
-        'sys.modules["amdsmi"] = MagicMock()\n'
-    )
-    if 'sys.modules["amdsmi"]' not in txt:
-        txt = header + txt
+    # This used to prepend `sys.modules["amdsmi"] = MagicMock()` here, from
+    # when the image had no amdsmi bindings and vLLM's ROCm platform would not
+    # import without them.
+    #
+    # It has to stay removed. The Dockerfile now copies the real bindings into
+    # the venv, and the mock shadowed them: setting sys.modules ahead of this
+    # module's own `from amdsmi import ...` means every amdsmi call returned a
+    # MagicMock rather than a number. vLLM's get_device_total_memory() queries
+    # amdsmi inside a try/except and falls back to torch.cuda on failure — but
+    # a MagicMock does not fail, so the fallback never ran and the mock escaped
+    # into arithmetic:
+    #
+    #   File "vllm/engine/arg_utils.py", line 2674, in get_batch_defaults
+    #     if device_memory >= 160 * GiB_bytes:
+    #   TypeError: '>=' not supported between instances of 'MagicMock' and 'int'
+    #
+    # Without the mock both paths are correct: with the bindings present vLLM
+    # reads real VRAM, and without them the import raises, vLLM warns, and it
+    # falls back to torch.cuda. Nothing here needs amdsmi anyway — patch_4
+    # hardcodes _GCN_ARCH, and patch_1 already removes the amdsmi dependency
+    # from platform detection.
 
     txt = re.sub(r'device_type\s*:\s*str\s*=\s*"[^"]*"', 'device_type: str = "cuda"', txt)
     txt = re.sub(r'device_name\s*:\s*str\s*=\s*"[^"]*"', 'device_name: str = "gfx1201"', txt)
@@ -232,7 +246,7 @@ def main():
         txt = patch_4_gcn_arch(txt)
         txt = patch_6_on_mi3xx(txt)
         return txt
-    _patch("vllm/platforms/rocm.py", "mock amdsmi + GCN arch + MI3XX gate", patch_rocm_combined)
+    _patch("vllm/platforms/rocm.py", "device name + GCN arch + MI3XX gate", patch_rocm_combined)
 
     _patch(
         "vllm/transformers_utils/config.py",
