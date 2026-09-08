@@ -69,6 +69,8 @@
                 title="Open charts of the selected cells — scatter, heatmap and 3D views of a sweep."
                 onclick="visualizeSelectedCells(this)">Visualize selected</button>
         <button type="button" class="outline secondary job-action"
+                onclick="deleteSelectedRuns(this)">Delete selected runs</button>
+        <button type="button" class="outline secondary job-action"
                 onclick="cancelJob('j3')">Cancel</button>
         <a class="outline secondary job-action" role="button"
            href="/api/benchmark-jobs/j3/export?format=csv&scope=cells" download>CSV (cells)</a>

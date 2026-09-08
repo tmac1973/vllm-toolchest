@@ -111,6 +111,8 @@
         <button type="button" class="outline secondary job-action"
                 title="Open charts of the selected cells — scatter, heatmap and 3D views of a sweep."
                 onclick="visualizeSelectedCells(this)">Visualize selected</button>
+        <button type="button" class="outline secondary job-action"
+                onclick="deleteSelectedRuns(this)">Delete selected runs</button>
         {{- if .Running}}
         <button type="button" class="outline secondary job-action"
                 onclick="cancelJob('{{.ID}}')">Cancel</button>

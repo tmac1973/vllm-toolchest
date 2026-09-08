@@ -114,6 +114,42 @@ func (s *Server) handleListBenchmarks(w http.ResponseWriter, r *http.Request) {
 	s.renderRunList(w, runs)
 }
 
+// handleBatchDeleteBenchmarks removes the selected runs.
+//
+// The cells that produced them keep pointing at ids that no longer resolve,
+// which is deliberate: the cell records that an attempt happened, and rewriting
+// history to hide a deleted result would be worse than a Detail button that
+// says the run is gone.
+func (s *Server) handleBatchDeleteBenchmarks(w http.ResponseWriter, r *http.Request) {
+	var ids []string
+	for _, id := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		http.Error(w, "no runs selected", http.StatusBadRequest)
+		return
+	}
+
+	// A run still being measured would come back on the next save.
+	if active, ok := s.benchSvc.ActiveRunID(); ok {
+		for _, id := range ids {
+			if id == active {
+				http.Error(w, "that run is still going; cancel it first", http.StatusConflict)
+				return
+			}
+		}
+	}
+
+	deleted, notFound, err := s.bench.BatchDelete(ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]int{"deleted": deleted, "not_found": notFound})
+}
+
 // handleCompareBenchmarks renders a comparison of the selected runs.
 func (s *Server) handleCompareBenchmarks(w http.ResponseWriter, r *http.Request) {
 	ids := strings.Split(r.URL.Query().Get("ids"), ",")

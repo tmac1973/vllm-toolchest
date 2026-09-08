@@ -212,6 +212,13 @@ function visualizeSelectedCells(btn) {
   window.location.href = '/benchmarks/visualize?ids=' + encodeURIComponent(ids.join(','));
 }
 
+function deleteSelectedRuns(btn) {
+  var ids = requireSelection(btn, 1, 'run to delete');
+  if (!ids) return;
+  jobAction('/api/benchmarks/batch-delete?ids=' + encodeURIComponent(ids.join(',')), 'DELETE',
+            'Delete ' + ids.length + ' run' + (ids.length === 1 ? '' : 's') + '? This cannot be undone.');
+}
+
 // --- Job lifecycle ----------------------------------------------------
 function jobAction(url, method, confirmText) {
   if (confirmText && !confirm(confirmText)) return;
