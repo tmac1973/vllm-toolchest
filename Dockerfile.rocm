@@ -57,11 +57,50 @@ ENV GPU_ARCH=${GPU_ARCH} \
     HIP_ARCHITECTURES=${GPU_ARCH} \
     AMDGPU_TARGETS=${GPU_ARCH}
 
-# ── Build-time parallelism cap ─────────────────────────────────────
-# Applies to flash-attention (AITER submodule) and vLLM.
-# Each parallel C++/HIP compile can use 2-3 GB RAM; unbounded ninja
-# parallelism thrashes or OOMs typical build boxes.
-ENV MAX_JOBS=4
+# ── Build-time parallelism ─────────────────────────────────────────
+# How many compile jobs the flash-attention/AITER and vLLM stages run at
+# once. These are the only two stages that build from source, and both are
+# ninja builds that scale close to linearly, so this is the single biggest
+# lever on build time.
+#
+# Empty — the default — means "work it out on the builder": one job per
+# core, capped by RAM. The cap is what the old fixed value of 4 was really
+# protecting against: each parallel C++/HIP compile peaks around 3 GB, and
+# an unbounded ninja on a many-core machine with modest memory thrashes or
+# gets OOM-killed part way through an hours-long stage. Deriving it means a
+# 32-core builder uses 32 jobs and an 8 GB one uses 2, where a fixed number
+# is wrong for both.
+#
+# Set MAX_JOBS to pin it (compose passes it through from .env).
+ARG MAX_JOBS=
+ENV MAX_JOBS=${MAX_JOBS}
+
+# Written rather than COPYed so the build context stays unchanged: adding a
+# file to it would invalidate every layer that copies from it.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      '# Prints the compile-job count for the source-building stages.' \
+      '# MAX_JOBS wins when set; otherwise one per core, capped by RAM at' \
+      '# roughly 3 GB a job. See the ARG MAX_JOBS comment in Dockerfile.rocm.' \
+      'if [ -n "$MAX_JOBS" ]; then echo "$MAX_JOBS"; exit 0; fi' \
+      'cores=$(nproc)' \
+      '# /proc/meminfo reports the host, not this container. A build run' \
+      '# under a memory limit has to see that limit, or the whole point of' \
+      '# capping — not being OOM-killed hours into a stage — is lost.' \
+      'mem_kb=$(sed -n "s/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p" /proc/meminfo)' \
+      'for f in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do' \
+      '  [ -r "$f" ] || continue' \
+      '  lim=$(cat "$f")' \
+      '  case "$lim" in *[!0-9]*|"") continue;; esac' \
+      '  lim_kb=$((lim / 1024))' \
+      '  [ "$lim_kb" -lt "$mem_kb" ] && mem_kb=$lim_kb' \
+      'done' \
+      'by_mem=$((mem_kb / 1024 / 1024 / 3))' \
+      '[ "$by_mem" -lt 1 ] && by_mem=1' \
+      'if [ "$by_mem" -lt "$cores" ]; then echo "$by_mem"; else echo "$cores"; fi' \
+      > /usr/local/bin/build-jobs && \
+    chmod +x /usr/local/bin/build-jobs && \
+    echo "build parallelism: $(/usr/local/bin/build-jobs) jobs ($(nproc) cores)"
 
 # ── ROCm environment ───────────────────────────────────────────────
 ENV ROCM_PATH=/opt/rocm \
@@ -148,6 +187,8 @@ RUN cd /tmp/flash-attention && \
     git -c protocol.version=2 submodule update --init --progress --recursive third_party/aiter
 
 RUN cd /tmp/flash-attention && \
+    export MAX_JOBS="$(build-jobs)" && \
+    echo "building flash-attention + AITER with MAX_JOBS=$MAX_JOBS" && \
     python -u setup.py install 2>&1 && \
     cd / && rm -rf /tmp/flash-attention
 
@@ -197,6 +238,8 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
     cd /tmp/vllm && \
     python /tmp/patch_vllm.py && \
     pip install --no-cache-dir -r requirements/rocm.txt && \
+    export MAX_JOBS="$(build-jobs)" && \
+    echo "building vLLM with MAX_JOBS=$MAX_JOBS" && \
     pip wheel --no-build-isolation --no-deps -w /tmp/vllm-wheel . && \
     pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
     mkdir -p /opt/vllm-tuner && \
