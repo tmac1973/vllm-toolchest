@@ -22,7 +22,10 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.hfClient.Search(r.Context(), query)
+	// The filter goes to the Hub, not just applied to what comes back — see
+	// Client.Search.
+	quantFilter := r.URL.Query().Get("quant")
+	results, err := s.hfClient.Search(r.Context(), query, quantFilter)
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
@@ -33,12 +36,12 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply quant filter if specified
-	quantFilter := r.URL.Query().Get("quant")
+	// The Hub's tag filter is broader than the bucket, so narrow what came
+	// back to what actually belongs in it.
 	if quantFilter != "" {
 		var filtered []huggingface.ModelSearchResult
 		for _, res := range results {
-			if huggingface.MatchesQuantFilter(res.QuantFormat, quantFilter) {
+			if huggingface.MatchesQuantFilter(res.QuantFormat, res.Tags, quantFilter) {
 				filtered = append(filtered, res)
 			}
 		}
@@ -56,7 +59,7 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 		QuantFilter string
 	}{
 		Groups:      hfResultGroups(huggingface.GroupResults(results)),
-		QuantFilter: quantFilter,
+		QuantFilter: huggingface.QuantFilterLabel(quantFilter),
 	})
 }
 

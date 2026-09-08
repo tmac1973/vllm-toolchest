@@ -93,13 +93,64 @@ type ModelGroup struct {
 // We don't filter by pipeline_tag because models may be tagged as
 // text-generation, image-text-to-text, or other tags that vLLM supports.
 // Instead we filter by the transformers library tag and sort by downloads.
-func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult, error) {
+// Search queries HuggingFace for models compatible with vLLM.
+//
+// quantFilter is one of QuantFilterOptions' values, or "". When it names tags,
+// they go into the query so the Hub does the filtering. That is the difference
+// between a filter and a sieve: without it the caller can only narrow whatever
+// 50 repos a broad query returned by download count, and searching "qwen" for
+// MXFP4 found nothing — not because there are none, but because none of them
+// are popular enough to reach that page.
+//
+// We don't filter by pipeline_tag because models may be tagged as
+// text-generation, image-text-to-text, or other tags that vLLM supports.
+// Instead we filter by the transformers library tag and sort by downloads.
+func (c *Client) Search(ctx context.Context, query, quantFilter string) ([]ModelSearchResult, error) {
+	tags := QuantFilterTags(quantFilter)
+	if len(tags) == 0 {
+		return c.search(ctx, query, "")
+	}
+
+	// The Hub ANDs repeated filter parameters, so a bucket covering more than
+	// one tag needs one request per tag, merged. First occurrence wins, which
+	// keeps each request's download ordering.
+	seen := make(map[string]bool)
+	var merged []ModelSearchResult
+	var firstErr error
+	for _, tag := range tags {
+		batch, err := c.search(ctx, query, tag)
+		if err != nil {
+			// One tag failing should not empty the whole bucket.
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, r := range batch {
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			merged = append(merged, r)
+		}
+	}
+	if len(merged) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return merged, nil
+}
+
+// search runs one Hub query, optionally narrowed to a tag.
+func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchResult, error) {
 	// config=true returns each repo's config.json inline. Without it the only
 	// clues to a model's format are its tags and its name, and the name is
 	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
 	// compressed-tensors, and were being labelled AWQ.
 	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50&config=true",
 		apiURL, url.QueryEscape(query))
+	if tag != "" {
+		u += "&filter=" + url.QueryEscape(tag)
+	}
 
 	var raw []ModelSearchResult
 	if err := c.getJSON(ctx, u, &raw); err != nil {

@@ -149,7 +149,7 @@ func TestMatchesQuantFilter(t *testing.T) {
 		{FormatFP16, "other", false},
 		{QuantUnknown, "other", false},
 	} {
-		if got := MatchesQuantFilter(tc.format, tc.filter); got != tc.want {
+		if got := MatchesQuantFilter(tc.format, nil, tc.filter); got != tc.want {
 			t.Errorf("MatchesQuantFilter(%q, %q) = %v, want %v",
 				tc.format, tc.filter, got, tc.want)
 		}
@@ -170,7 +170,7 @@ func TestQuantFilterOptionsAreAllHandled(t *testing.T) {
 			FormatFP16, FormatFP8, FormatAWQ, FormatGPTQ, FormatCompressedTensor,
 			FormatMXFP4, FormatNVFP4, FormatBnB4, FormatQuark, QuantUnknown,
 		} {
-			if !MatchesQuantFilter(f, opt.Value) {
+			if !MatchesQuantFilter(f, nil, opt.Value) {
 				rejectedSomething = true
 				break
 			}
@@ -194,5 +194,49 @@ func TestNormalizeBaseNameGroupsQuantVariants(t *testing.T) {
 		if got := normalizeBaseName(variant); got != base {
 			t.Errorf("normalizeBaseName(%q) = %q, want %q", variant, got, base)
 		}
+	}
+}
+
+// A tag and a quant_method describe different things. NVFP4 is a numeric type,
+// stored by compressed-tensors or modelopt — of 50 nvfp4-tagged Qwen repos,
+// none declared nvfp4 as their method. Matching on the declared method alone
+// would empty the bucket the user picked.
+func TestMatchesQuantFilterOnTags(t *testing.T) {
+	// The real shape: compressed-tensors on disk, nvfp4 as a tag.
+	if !MatchesQuantFilter(FormatCompressedTensor, []string{"safetensors", "nvfp4"}, "fp4") {
+		t.Error("an nvfp4-tagged compressed-tensors repo belongs in the FP4 bucket")
+	}
+	// modelopt is the other producer of NVFP4.
+	if !MatchesQuantFilter(FormatModelOpt, []string{"nvfp4"}, "fp4") {
+		t.Error("an nvfp4-tagged modelopt repo belongs in the FP4 bucket")
+	}
+	// Without the tag it is just compressed-tensors, and stays out.
+	if MatchesQuantFilter(FormatCompressedTensor, []string{"safetensors"}, "fp4") {
+		t.Error("compressed-tensors with no FP4 tag must not match the FP4 bucket")
+	}
+	// The tag route must not smuggle a model into a bucket it has no claim on.
+	if MatchesQuantFilter(FormatAWQ, []string{"awq"}, "fp8") {
+		t.Error("an awq repo must not match the FP8 bucket")
+	}
+	// Buckets with no tags fall through to format matching only.
+	if MatchesQuantFilter(FormatCompressedTensor, []string{"compressed-tensors"}, "unquantized") {
+		t.Error("tags must not let a quantized repo into the unquantized bucket")
+	}
+}
+
+// Every bucket that can be expressed as a Hub query should be, or it degrades
+// to sieving whichever 50 repos a broad search happened to return.
+func TestQuantFilterTagsCoverTheNarrowBuckets(t *testing.T) {
+	for _, f := range []string{"fp8", "awq", "gptq", "compressed-tensors", "fp4", "bnb", "other"} {
+		if len(QuantFilterTags(f)) == 0 {
+			t.Errorf("filter %q has no Hub tags, so it can only sieve one page", f)
+		}
+	}
+	// "unquantized" genuinely has none: the Hub has no "not quantized" tag.
+	if len(QuantFilterTags("unquantized")) != 0 {
+		t.Error("unquantized cannot be expressed as a tag")
+	}
+	if len(QuantFilterTags("")) != 0 {
+		t.Error("the empty filter must not narrow the query")
 	}
 }

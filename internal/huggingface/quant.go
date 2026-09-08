@@ -201,14 +201,74 @@ func QuantFilterOptions() []QuantFilterOption {
 	}
 }
 
-// MatchesQuantFilter reports whether a detected format belongs in a bucket.
+// QuantFilterLabel is a bucket's human name, for messages about it. Falls back
+// to the raw value so an unknown one still reads as something.
+func QuantFilterLabel(filter string) string {
+	for _, o := range QuantFilterOptions() {
+		if o.Value == filter {
+			return o.Label
+		}
+	}
+	return filter
+}
+
+// QuantFilterTags are the Hub tags that find a bucket's models.
+//
+// These matter twice. The Hub applies them server-side, which is what makes a
+// filter a search rather than a sieve over whichever 50 repos a broad query
+// happened to return by download count — "qwen" with the FP4 filter found
+// nothing before, because no MXFP4 Qwen repo is popular enough to reach that
+// page. And they widen matching, because a tag and a quant_method describe
+// different things: NVFP4 is a numeric type, stored by compressed-tensors or
+// modelopt, so almost no repo declares nvfp4 as its method.
+//
+// Empty for buckets no tag expresses: "unquantized" has no negative tag, and
+// "other" is defined by what it is not.
+func QuantFilterTags(filter string) []string {
+	switch filter {
+	case "fp8":
+		return []string{"fp8"}
+	case "awq":
+		return []string{"awq"}
+	case "gptq":
+		return []string{"gptq"}
+	case "compressed-tensors":
+		return []string{"compressed-tensors"}
+	case "fp4":
+		return []string{"mxfp4", "nvfp4"}
+	case "bnb":
+		return []string{"bitsandbytes"}
+	case "other":
+		// The named producers of the formats with no bucket of their own.
+		return []string{"quark", "auto-round", "modelopt"}
+	}
+	return nil
+}
+
+// MatchesQuantFilter reports whether a repo belongs in a bucket.
+//
+// A repo matches on either axis: the format its config declares, or a Hub tag.
+// Both are needed. A repo declaring compressed-tensors and tagged nvfp4 is an
+// FP4 model — matching only on the declared method would drop it, which is
+// most of what the Hub returns for that bucket.
 //
 // An unknown format matches only "All formats": it is not evidence of full
 // precision, and quietly listing it under FP16 is how a page of 4-bit models
 // came back from a search for unquantized ones.
-func MatchesQuantFilter(format, filter string) bool {
+func MatchesQuantFilter(format string, tags []string, filter string) bool {
 	if filter == "" {
 		return true
+	}
+	if wanted := QuantFilterTags(filter); len(wanted) > 0 {
+		has := make(map[string]bool, len(tags))
+		for _, t := range tags {
+			has[strings.ToLower(strings.TrimSpace(t))] = true
+		}
+		for _, w := range wanted {
+			if has[w] {
+				return true
+			}
+		}
 	}
 	switch filter {
 	case "unquantized":
