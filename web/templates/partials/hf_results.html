@@ -12,7 +12,7 @@
       <div>
         <strong>{{.ID}}</strong>{{if .Gated}} <small style="color:var(--pico-del-color);">[gated]</small>{{end}}
         <a href="https://huggingface.co/{{.ID}}" target="_blank" rel="noopener" style="font-size:0.75rem;margin-left:0.5rem;text-decoration:none;" title="View on HuggingFace">&#8599;</a>
-        <br><small style="opacity:0.7;">{{.Author}} &middot; {{.Downloads}} downloads &middot; {{.Likes}} likes</small>
+        <br><small style="opacity:0.7;">{{with .Author}}{{.}} &middot; {{end}}{{.Downloads}} downloads &middot; {{.Likes}} likes</small>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
         {{- range .Variants}}

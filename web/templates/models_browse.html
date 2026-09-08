@@ -21,11 +21,9 @@
            style="margin:0;flex:1;min-width:200px;">
     <select name="quant" id="quant-filter" style="width:auto;margin:0;"
             onchange="var input=document.getElementById('hf-search-input');if(input.value)htmx.trigger(input,'search');">
-        <option value="">All formats</option>
-        <option value="fp16">FP16/BF16</option>
-        <option value="awq">AWQ</option>
-        <option value="gptq">GPTQ</option>
-        <option value="fp8">FP8</option>
+        {{- range .QuantFilters}}
+        <option value="{{.Value}}">{{.Label}}</option>
+        {{- end}}
     </select>
     <span id="search-spinner" class="htmx-indicator" aria-busy="true">Searching...</span>
 </div>

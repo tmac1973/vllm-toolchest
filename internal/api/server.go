@@ -313,7 +313,13 @@ func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "models_browse.html", pageData{Title: "Search HuggingFace", Nav: "browse"})
+	s.render(w, "models_browse.html", struct {
+		pageData
+		QuantFilters []huggingface.QuantFilterOption
+	}{
+		pageData:     pageData{Title: "Search HuggingFace", Nav: "browse"},
+		QuantFilters: huggingface.QuantFilterOptions(),
+	})
 }
 
 // modelChoice is one entry of the server page's model picker.

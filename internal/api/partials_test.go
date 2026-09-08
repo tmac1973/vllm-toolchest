@@ -64,8 +64,10 @@ func TestGoldenPartials(t *testing.T) {
 						{ID: "unsloth/Qwen3.8-27B-FP8", Format: "FP8", Color: "#7a3db8"},
 					},
 				}, {
+					// The search API often returns no author; the separator
+					// has to go with it rather than leading the line.
 					ID: "meta-llama/Llama-4-70B", SafeID: "meta-llama--Llama-4-70B",
-					Author: "meta-llama", Downloads: "980.0K", Likes: "2.1K", Gated: true,
+					Author: "", Downloads: "980.0K", Likes: "2.1K", Gated: true,
 					Variants: []hfResultVariant{
 						{ID: "meta-llama/Llama-4-70B", Format: "FP16", Color: "#555"},
 					},

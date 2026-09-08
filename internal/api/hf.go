@@ -34,15 +34,11 @@ func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply quant filter if specified
-	quantFilter := strings.ToUpper(r.URL.Query().Get("quant"))
+	quantFilter := r.URL.Query().Get("quant")
 	if quantFilter != "" {
 		var filtered []huggingface.ModelSearchResult
 		for _, res := range results {
-			format := strings.ToUpper(res.QuantFormat)
-			if format == "" {
-				format = "FP16"
-			}
-			if format == quantFilter || (quantFilter == "FP16" && format == "") {
+			if huggingface.MatchesQuantFilter(res.QuantFormat, quantFilter) {
 				filtered = append(filtered, res)
 			}
 		}
@@ -102,8 +98,12 @@ func hfResultGroups(groups []huggingface.ModelGroup) []hfResultGroup {
 		seen := map[string]bool{}
 		for _, v := range g.Variants {
 			format := v.QuantFormat
-			if format == "" {
-				format = "FP16"
+			if format == huggingface.QuantUnknown {
+				// The repo published no config and carried no marker. That is
+				// not evidence of full precision, and saying "FP16" here is
+				// how a search for unquantized models filled up with 4-bit
+				// ones.
+				format = "unknown"
 			}
 			if seen[format] {
 				continue
@@ -469,8 +469,18 @@ func quantBadgeColor(format string) string {
 		return "#2d6a8a"
 	case "FP8":
 		return "#7a3db8"
-	case "BNB-4BIT", "BNB-8BIT":
+	case "BNB-4BIT", "BNB-8BIT", "BITSANDBYTES":
 		return "#b8a33d"
+	case "COMPRESSED-TENSORS":
+		return "#b5622d"
+	case "MXFP4", "NVFP4":
+		return "#a8397c"
+	case "QUARK", "AUTOROUND", "MODELOPT":
+		return "#4a6b8a"
+	case "UNKNOWN":
+		// Deliberately dimmer than the rest: it is an absence of information,
+		// not a format.
+		return "#3f3f3f"
 	default:
 		return "#555"
 	}
