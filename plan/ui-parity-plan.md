@@ -535,6 +535,41 @@ silently.
 
 ---
 
+## Found while writing the help page — fixed
+
+`scripts/patch_vllm.py` is vendored from an R9700-specific repo and hardcoded
+`gfx1201` unconditionally, while `Dockerfile.rocm` exposes a `GPU_ARCH` build
+arg that `.env` sets to `gfx1100` on the 7900 XTX box. Nobody made the patches
+follow the arg, so that image shipped a vLLM that believed it was gfx1201:
+
+    _GCN_ARCH = "gfx1201"          # patched, not detected
+    _ON_MI3XX = True               # should be False
+    _ON_RDNA4 = True               # should be False
+    _ON_GFX11 = False              # should be True
+    _ON_GFX1100 = False            # should be True
+    get_device_name() → "AMD-gfx1201"   on a card rocminfo calls gfx1100
+
+Every RDNA3 code path off and RDNA4/MI3XX paths on, on RDNA3 hardware. The four
+gfx1201-specific patches are now gated on `GPU_ARCH` (already an ENV in scope at
+the patch step, so no Dockerfile change was needed); the rest, which are generic
+ROCm corrections, still apply everywhere. Verified both ways against the real
+vLLM source.
+
+Two follow-ons, because the fix would otherwise have been masked:
+
+- The **device-name cache** now records the arch it was resolved under, and a
+  bare pre-versioning file is treated as stale. The data directory outlives the
+  image and the name is a property of the build, so there was no way to tell a
+  valid cache from one a rebuild had invalidated.
+- A **device name stored in the config** that encodes a gfx target contradicting
+  `GPU_ARCH` is discarded at boot with a warning. The probe is skipped entirely
+  while any stored name is present, so the live box's `vllm_device_name:
+  AMD-gfx1201` under `gpu_arch: gfx1100` would have survived every restart and
+  rebuild. Marketing names (`AMD_Radeon_R9700`) encode no target and are left
+  alone.
+
+---
+
 ## Cross-cutting, unscheduled
 
 Small items with no natural home; fold into whichever phase touches them first.
