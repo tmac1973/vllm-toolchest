@@ -148,9 +148,18 @@ func (d *Downloader) Start(modelID string, files []ModelFile) (string, error) {
 	id := strings.ReplaceAll(modelID, "/", "--")
 
 	d.mu.Lock()
-	if _, exists := d.active[id]; exists {
-		d.mu.Unlock()
-		return id, nil // already downloading
+	if existing, exists := d.active[id]; exists {
+		existing.mu.Lock()
+		running := existing.status == "downloading"
+		existing.mu.Unlock()
+		if running {
+			d.mu.Unlock()
+			return id, nil // already downloading
+		}
+		// A settled entry lingers for 30s so late subscribers can read its
+		// final state. Resuming inside that window has to replace it, or the
+		// resume silently becomes a no-op that returns the dead download's id.
+		delete(d.active, id)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -207,7 +216,6 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 			dl.errMsg = err.Error()
 			dl.mu.Unlock()
 			dl.broadcast()
-			d.cleanupFiles(modelDir)
 			return
 		}
 	}
@@ -225,7 +233,6 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 			dl.status = "cancelled"
 			dl.mu.Unlock()
 			dl.broadcast()
-			d.cleanupFiles(modelDir)
 			return
 		case sem <- struct{}{}:
 		}
@@ -247,7 +254,6 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 		dl.errMsg = firstErr.Error()
 		dl.mu.Unlock()
 		dl.broadcast()
-		d.cleanupFiles(modelDir)
 		return
 	}
 
@@ -261,9 +267,36 @@ func (d *Downloader) run(ctx context.Context, downloadID, modelID string, files 
 	}
 }
 
-// cleanupFiles removes the model directory and all its contents.
-func (d *Downloader) cleanupFiles(modelDir string) {
-	os.RemoveAll(modelDir)
+// Discard removes a model's partially-downloaded files.
+//
+// This is the only path that deletes them. Cancelling and failing used to call
+// it implicitly, which threw away every byte of a 30GB transfer on a network
+// blip — and made the Range-resume support in downloadFile unreachable, since
+// there was never a .part file left to resume from.
+func (d *Downloader) Discard(modelID string) error {
+	// modelDir falls back to joining whatever it is given, so an empty or
+	// traversing id resolves to the models root — and this would then delete
+	// every model on the box. Require the owner/name shape it actually writes.
+	owner, name, ok := strings.Cut(modelID, "/")
+	if !ok || owner == "" || name == "" ||
+		strings.Contains(owner, "/") || strings.Contains(name, "/") ||
+		owner == "." || owner == ".." || name == "." || name == ".." {
+		return fmt.Errorf("not a model id: %q", modelID)
+	}
+
+	dir := d.modelDir(modelID)
+	root := filepath.Join(d.dataDir, "models")
+	if dir == "" || dir == d.dataDir || dir == root {
+		return fmt.Errorf("refusing to remove %q", dir)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	// Model dirs are owner/name, so removing the last model by an owner leaves
+	// an empty owner directory behind. Remove returns an error for a non-empty
+	// one, which is exactly the check wanted here.
+	_ = os.Remove(filepath.Dir(dir))
+	return nil
 }
 
 func (d *Downloader) downloadFile(ctx context.Context, modelID, modelDir string, f ModelFile, dl *download) error {

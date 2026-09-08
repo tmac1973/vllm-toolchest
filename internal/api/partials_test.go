@@ -123,13 +123,33 @@ func TestGoldenPartials(t *testing.T) {
 			data:    downloadView{ID: "abc123", Status: "failed", Error: "unexpected EOF after 4.2 GB"},
 		},
 		{
-			name:    "active_downloads",
-			partial: "active_downloads",
-			data: []downloadView{{
-				ID: "abc123", ModelID: "unsloth/Qwen3.8-27B-FP8", Status: "downloading",
-				Percent: 42, DownloadedLabel: "12.1 GB", TotalLabel: "28.8 GB",
-				SpeedLabel: "94.2 MB/s", CompletedFiles: 3, TotalFiles: 7,
+			// One transfer running and one paused, which is the case the panel
+			// exists for: a paused download that nothing showed would be disk
+			// usage with no way to find or reclaim it.
+			name:    "downloads_panel",
+			partial: "downloads_panel",
+			data: struct{ Rows []downloadRow }{[]downloadRow{
+				{
+					downloadView: downloadView{
+						ID: "abc123", ModelID: "unsloth/Qwen3.8-27B-FP8", Status: "downloading",
+						Percent: 42, DownloadedLabel: "12.1 GB", TotalLabel: "28.8 GB",
+						SpeedLabel: "94.2 MB/s", CompletedFiles: 3, TotalFiles: 7,
+					},
+					Active: true,
+				},
+				{
+					downloadView: downloadView{ModelID: "TheBloke/Mixtral-8x7B-AWQ"},
+					OnDiskLabel:  "8.4 GB",
+					PartFiles:    2,
+				},
 			}},
+		},
+		{
+			// Nothing in flight and nothing half-finished: the panel renders
+			// nothing at all rather than an empty card.
+			name:    "downloads_panel_empty",
+			partial: "downloads_panel",
+			data:    struct{ Rows []downloadRow }{nil},
 		},
 		{
 			name:    "benchmark_form_loaded",

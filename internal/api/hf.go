@@ -373,26 +373,75 @@ func (s *Server) handleHFDownloadProgress(w http.ResponseWriter, r *http.Request
 	s.renderPartial(w, "download_progress", view)
 }
 
-// handleHFActiveDownloads returns progress for all active downloads (used by
-// both the browse and models pages).
-func (s *Server) handleHFActiveDownloads(w http.ResponseWriter, r *http.Request) {
-	downloads := s.downloader.ActiveDownloads()
+// downloadRow is one line of the downloads panel: either a transfer in
+// flight, or one that stopped partway and still has bytes on disk.
+type downloadRow struct {
+	downloadView
+	Active      bool
+	OnDiskLabel string
+	PartFiles   int
+}
+
+// handleHFDownloads renders the downloads panel, shown above both the models
+// and browse pages.
+func (s *Server) handleHFDownloads(w http.ResponseWriter, r *http.Request) {
+	active := s.downloader.ActiveDownloads()
 
 	if !isHTMX(r) {
-		respondJSON(w, downloads)
+		respondJSON(w, map[string]any{
+			"active":     active,
+			"incomplete": s.downloader.ListIncomplete(),
+		})
 		return
 	}
 
-	views := []downloadView{}
-	for _, dl := range downloads {
-		if dl.Status == "complete" {
+	rows := []downloadRow{}
+	running := map[string]bool{}
+	for _, dl := range active {
+		if dl.Status != "downloading" {
 			continue
 		}
-		views = append(views, newDownloadView(dl))
+		running[dl.ModelID] = true
+		rows = append(rows, downloadRow{downloadView: newDownloadView(dl), Active: true})
+	}
+	// Anything with partial files and nothing moving them is resumable. A
+	// model that is downloading right now also has .part files, so the running
+	// set is what keeps it from being listed twice.
+	for _, inc := range s.downloader.ListIncomplete() {
+		if running[inc.ModelID] {
+			continue
+		}
+		rows = append(rows, downloadRow{
+			downloadView: downloadView{ModelID: inc.ModelID},
+			OnDiskLabel:  huggingface.FormatBytes(inc.OnDisk),
+			PartFiles:    inc.PartFiles,
+		})
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "active_downloads", views)
+	s.renderPartial(w, "downloads_panel", struct{ Rows []downloadRow }{rows})
+}
+
+// handleHFDiscardIncomplete deletes a stalled download's partial files. It is
+// the only path that removes them: pausing and failing deliberately leave them
+// so the transfer can pick up where it stopped.
+func (s *Server) handleHFDiscardIncomplete(w http.ResponseWriter, r *http.Request) {
+	modelID := r.URL.Query().Get("model_id")
+	if modelID == "" {
+		http.Error(w, "missing model_id", http.StatusBadRequest)
+		return
+	}
+	// Only ever for a model that is not in the registry: a registered model's
+	// directory holds its weights, and this must not be a way to delete those.
+	if _, registered := s.registry.Get(modelID); registered {
+		http.Error(w, "model is registered — remove it from the Models page instead", http.StatusConflict)
+		return
+	}
+	if err := s.downloader.Discard(modelID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleHFDownloadCancel(w http.ResponseWriter, r *http.Request) {

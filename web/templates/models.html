@@ -23,10 +23,11 @@
      hx-swap="innerHTML">
 </div>
 
-<div id="active-downloads"
+<div id="downloads-panel"
      hx-get="/api/hf/downloads"
-     hx-trigger="load, every 2s, modelsChanged from:body"
-     hx-swap="innerHTML">
+     hx-trigger="load, every 3s, downloadsChanged from:body, modelsChanged from:body"
+     hx-swap="innerHTML"
+     hx-on::before-swap="if(event.detail.xhr.responseText===this.innerHTML){event.detail.shouldSwap=false;}">
 </div>
 
 <div id="model-list"

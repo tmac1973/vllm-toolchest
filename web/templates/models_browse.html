@@ -1,10 +1,11 @@
 {{define "content"}}
 <h1>Search HuggingFace</h1>
 
-<div id="active-downloads"
+<div id="downloads-panel"
      hx-get="/api/hf/downloads"
-     hx-trigger="load, every 3s"
-     hx-swap="innerHTML">
+     hx-trigger="load, every 3s, downloadsChanged from:body"
+     hx-swap="innerHTML"
+     hx-on::before-swap="if(event.detail.xhr.responseText===this.innerHTML){event.detail.shouldSwap=false;}">
 </div>
 
 <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.5rem;">
