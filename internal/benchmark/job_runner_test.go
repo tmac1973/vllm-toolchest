@@ -288,11 +288,36 @@ func TestSubmitJobRejectsWhenAdHocRunActive(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer svc.CancelRun("r1")
+	// Cancelling only signals; the run's goroutines keep writing to the store
+	// for a moment after. t.TempDir's cleanup runs as soon as the test returns,
+	// and removing a directory the store is still saving into fails with
+	// "directory not empty" — which failed this test perhaps half the time,
+	// for a reason that had nothing to do with what it asserts.
+	t.Cleanup(func() {
+		svc.CancelRun("r1")
+		waitForNoActiveRun(t, svc)
+	})
 
 	// Job submit should be rejected while the run is active.
 	err := svc.SubmitJob(BenchmarkJob{ID: "jx", Cells: []JobCell{{ModelID: "a", Preset: "internal-quick"}}})
 	if err == nil {
 		t.Fatal("expected ErrRunAlreadyActive, got nil")
 	}
+}
+
+// waitForNoActiveRun blocks until the service has finished tearing a run down,
+// so a test's temp directory outlives the goroutines writing into it.
+func waitForNoActiveRun(t *testing.T, svc *Service) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, active := svc.ActiveRunID(); !active {
+			// The store save happens just after the flag clears; give it the
+			// scheduler slot it needs rather than racing it.
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Error("run did not finish within 5s of being cancelled")
 }

@@ -163,6 +163,7 @@ func (s *Server) initTemplates() {
 		"models_browse.html",
 		"server.html",
 		"benchmarks.html",
+		"visualize.html",
 		"tuning.html",
 		"settings.html",
 	}
@@ -203,6 +204,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/models/browse", s.handleModelsBrowsePage)
 	r.Get("/server", s.handleServerPage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
+	r.Get("/benchmarks/visualize", s.handleVisualizePage)
 	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
 
@@ -248,6 +250,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/form", s.handleBenchmarkForm)
 			r.Get("/about", s.handleBenchmarksAbout)
 			r.Get("/compare", s.handleCompareBenchmarks)
+			r.Get("/visualize", s.handleVisualizeData)
 			r.Get("/timings", s.handleTimingsList)
 			r.Get("/timings/*", s.handleTimingsForModel)
 			r.Get("/probe-context/form", s.handleProbeForm)

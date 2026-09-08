@@ -1,0 +1,74 @@
+{{define "content"}}
+<style>
+.viz-controls {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    margin: 0.75rem 0 0.5rem;
+}
+.viz-controls label { margin: 0; font-size: 0.85rem; flex: 1 1 200px; }
+.viz-controls select { margin: 0; }
+.viz-controls span { cursor: help; }
+.viz-note { font-size: 0.85rem; color: var(--pico-muted-color); margin: 0 0 0.5rem; display: none; }
+/* The one page where a bigger window should mean a bigger chart, so lift the
+   layout's 1200px cap and Pico's container width. The plot is responsive and
+   follows. */
+main.container { max-width: none; }
+</style>
+
+<article>
+  <header style="display:flex;justify-content:space-between;align-items:baseline;gap:1rem;flex-wrap:wrap;">
+    <div>
+      <strong>Visualize benchmarks</strong>
+      {{if .RunCount}}<small style="color:var(--pico-muted-color);"> — {{.RunCount}} runs{{if .Skipped}}, {{.Skipped}} left out for having no measurements{{end}}</small>{{end}}
+    </div>
+    <a href="/benchmarks" role="button" class="outline secondary" style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;width:auto;">Back to benchmarks</a>
+  </header>
+
+  {{if .Error}}
+  <p><mark>{{.Error}}</mark></p>
+  {{else}}
+
+  <div class="viz-controls">
+    <label>
+      <span title="What the chart draws. Heatmap and the 3D views need two dimensions that both vary.">Chart</span>
+      <select id="viz-chart" onchange="vizRender()">
+        <option value="scatter">Scatter — one parameter against one measurement</option>
+        <option value="leaderboard">Leaderboard — every run ranked</option>
+        <option value="heatmap">Heatmap — two parameters, colour is the measurement</option>
+        <option value="facets">Faceted heatmaps — one panel per value of a third parameter</option>
+        <option value="pareto">Pareto — prompt speed against generation speed</option>
+        <option value="parcoords">Parallel coordinates — everything at once</option>
+        <option value="surface3d">3D surface — two parameters as a landscape</option>
+        <option value="scatter3d">3D scatter — two parameters as points in space</option>
+      </select>
+    </label>
+    <label id="viz-metric-wrap">
+      <span title="The measurement being plotted.">Measurement</span>
+      <select id="viz-metric" onchange="vizRender()"></select>
+    </label>
+    <label id="viz-x-wrap">
+      <span title="The parameter along the horizontal axis.">X axis</span>
+      <select id="viz-x" onchange="vizRender()"></select>
+    </label>
+    <label id="viz-y-wrap">
+      <span title="The second parameter, for the charts that take one.">Y axis</span>
+      <select id="viz-y" onchange="vizRender()"></select>
+    </label>
+    <label id="viz-facet-wrap">
+      <span title="One panel per value of this parameter.">Facet by</span>
+      <select id="viz-facet" onchange="vizRender()"></select>
+    </label>
+  </div>
+
+  <p class="viz-note" id="viz-note"></p>
+  <div id="viz-plot" style="width:100%;height:620px;"></div>
+
+  <script id="viz-data" type="application/json">{{.DataJSON}}</script>
+  <script src="/static/plotly.min.js"></script>
+  <script src="/static/viz.js"></script>
+  <script>vizInit();</script>
+  {{end}}
+</article>
+{{end}}

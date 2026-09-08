@@ -1,6 +1,6 @@
 .PHONY: build run dev docker docker-cuda docker-rocm docker-radiance docker-rebuild \
 	up down up-cuda down-cuda up-rocm down-rocm up-radiance down-radiance \
-	logs shell test reload clean
+	logs shell test js-test reload clean
 
 # ─── Variant + GPU auto-detection ───────────────────────────────────
 # setup.sh records the chosen image variant in .env; honour it here so `make
@@ -94,8 +94,15 @@ logs:
 shell:
 	docker exec -it vllm-toolchest bash
 
-test:
+test: js-test
 	go test ./...
+
+# The visualize page's chart logic runs against a node harness rather than a
+# browser — the parts worth testing are decisions about the data, not drawing.
+# Skipped where node is absent so `make test` still works on a bare box.
+js-test:
+	@command -v node >/dev/null 2>&1 || { echo "js-test: node not installed, skipping"; exit 0; }
+	@node web/jstest/viz_test.js
 
 # ─── Dev: rebuild Go binary and inject into running container ───────
 # Compiles on host, copies into container, restarts the process.
