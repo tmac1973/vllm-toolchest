@@ -65,7 +65,7 @@ func (s *Server) modelRows() []modelRow {
 		// server stopped, Start will pick up the choice anyway.
 		row.NeedsRestart = row.Active && servingID != "" && !row.Serving
 		row.SearchText = strings.ToLower(strings.Join([]string{
-			m.ID, row.DisplayName, row.Quant.Label, m.HFConfig.ModelType,
+			m.ID, row.DisplayName, row.Quant.Label(), m.HFConfig.ModelType,
 		}, " "))
 		rows = append(rows, row)
 	}
@@ -346,23 +346,37 @@ func effectiveVRAM(m *models.Model) models.VRAMEstimate {
 	return m.VRAMEstimate
 }
 
-// quantBadge is a model's quantization, as one short label.
+// quantBadge is a model's quantization. Method and Width are separate because
+// the label has to be allowed to wrap — "COMPRESSED_TENSORS 4-bit" is too wide
+// for the column — and the only acceptable place to break it is the space
+// between them. Left as one string, the browser also breaks at the hyphen in
+// "4-bit", which reads as badly as the overflow it replaced.
 type quantBadge struct {
-	Label string
+	Method string
+	Width  string
+}
+
+// Label is the two parts joined, for anything that wants the plain text.
+func (q quantBadge) Label() string {
+	if q.Width == "" {
+		return q.Method
+	}
+	return q.Method + " " + q.Width
 }
 
 func newQuantBadge(q models.QuantMeta) quantBadge {
-	label := strings.ToUpper(q.Method)
-	if label == "NONE" || label == "" {
-		label = "FP16"
+	method := strings.ToUpper(q.Method)
+	if method == "NONE" || method == "" {
+		method = "FP16"
 	}
+	badge := quantBadge{Method: method}
 	if q.Bits > 0 {
-		label += fmt.Sprintf(" %d-bit", q.Bits)
+		badge.Width = fmt.Sprintf("%d-bit", q.Bits)
 	}
 	if q.GGUFQuantType != "" {
-		label = "GGUF " + q.GGUFQuantType
+		badge = quantBadge{Method: "GGUF", Width: q.GGUFQuantType}
 	}
-	return quantBadge{Label: label}
+	return badge
 }
 
 // vramLabel is a model's VRAM estimate and fit verdict, rendered by the
