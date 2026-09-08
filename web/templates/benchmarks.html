@@ -1,4 +1,71 @@
 {{define "content"}}
+<style>
+/* ── Job rows ── */
+.job-list .job-row {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--pico-card-background-color);
+}
+.job-list .job-row > summary { list-style: none; cursor: pointer; }
+.job-list .job-row > summary::marker,
+.job-list .job-row > summary::-webkit-details-marker { display: none; }
+.job-list .job-row > summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 1rem;
+    color: var(--pico-muted-color);
+}
+.job-list .job-row[open] > summary::before { content: "▾"; }
+.job-row-line1 { display: inline-flex; gap: 0.6rem; align-items: baseline; }
+.job-row-line2 { display: block; margin-left: 1rem; margin-top: 0.1rem; color: var(--pico-muted-color); }
+
+/* ── Status pills ── */
+.job-status, .cell-status {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.4;
+    background: var(--pico-muted-border-color);
+    color: var(--pico-color);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+/* Translucent fill plus on-tone text, so the pills read at a glance without
+   fighting whichever theme is active. */
+.status-running   { background: rgba(154, 166, 212, .16); color: var(--pico-primary); }
+.status-completed { background: rgba(127, 180, 144, .16); color: var(--pico-ins-color); }
+.status-failed    { background: rgba(217, 138, 138, .16); color: var(--pico-del-color); }
+.status-canceled, .status-skipped {
+    background: var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+}
+.status-pending {
+    background: transparent;
+    border: 1px solid var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+}
+.cell-failed-tag { color: var(--pico-del-color); font-size: 0.75rem; }
+.job-progress    { font-size: 0.8rem; color: var(--pico-muted-color); }
+.job-detail-slot { padding: 0.5rem 0 0; }
+.job-meta, .job-desc { font-size: 0.75rem; }
+/* Its own line: a description and a timestamp side by side read as one
+   run-on sentence. */
+.job-desc { display: block; }
+
+/* The row of actions under a job's cells. */
+.job-action {
+    margin: 0;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.8rem;
+    width: auto;
+    text-decoration: none;
+}
+</style>
+
 <h1>Benchmarks <a href="#" style="font-size:0.6em;" onclick="event.preventDefault();document.getElementById('bench-about').showModal();">[?]</a></h1>
 
 <p style="opacity:0.7;">
@@ -42,24 +109,94 @@ Benchmark inference performance with structured results, multi-run comparison, a
 </details>
 
 <h2 style="margin-top:1.5rem;">Jobs &amp; runs</h2>
+<div id="comparison-view"></div>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"
-         hx-trigger="load, benchStarted from:body"
+         hx-trigger="load, benchStarted from:body, jobChanged from:body"
          hx-swap="innerHTML">
   <p style="opacity:0.6;">Loading…</p>
 </section>
 
 <script>
-  // Refresh the job list when a new run or job starts.
-  document.body.addEventListener('htmx:afterRequest', function(evt) {
-    if (evt.detail && evt.detail.xhr &&
-        evt.detail.xhr.status === 202 &&
-        evt.detail.requestConfig &&
-        (evt.detail.requestConfig.path === '/api/benchmarks/' ||
-         evt.detail.requestConfig.path === '/api/benchmark-jobs/') &&
-        evt.detail.requestConfig.verb === 'post') {
-      htmx.trigger('body', 'benchStarted');
-    }
-  });
+// Refresh the job list when a new run or job starts.
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+  if (evt.detail && evt.detail.xhr &&
+      evt.detail.xhr.status === 202 &&
+      evt.detail.requestConfig &&
+      (evt.detail.requestConfig.path === '/api/benchmarks/' ||
+       evt.detail.requestConfig.path === '/api/benchmark-jobs/') &&
+      evt.detail.requestConfig.verb === 'post') {
+    htmx.trigger('body', 'benchStarted');
+  }
+});
+
+// --- Cell selection ---------------------------------------------------
+// The checkboxes live inside whichever job detail is open; the actions below
+// read them from the button's own table so two open jobs cannot mix.
+function selectedRunIDs(btn) {
+  var root = btn.closest('.job-detail');
+  if (!root) return [];
+  return Array.prototype.slice
+    .call(root.querySelectorAll('.cell-check:checked'))
+    .map(function(c) { return c.value; });
+}
+
+function requireSelection(btn, min, what) {
+  var ids = selectedRunIDs(btn);
+  if (ids.length < min) {
+    alert('Select at least ' + min + ' ' + what + '.');
+    return null;
+  }
+  return ids;
+}
+
+function compareSelectedCells(btn) {
+  var ids = requireSelection(btn, 2, 'runs to compare');
+  if (!ids) return;
+  htmx.ajax('GET', '/api/benchmarks/compare?ids=' + encodeURIComponent(ids.join(',')),
+            {target: '#comparison-view', swap: 'innerHTML'});
+  document.getElementById('comparison-view').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function visualizeSelectedCells(btn) {
+  var ids = requireSelection(btn, 2, 'runs to visualize');
+  if (!ids) return;
+  // Same tab: a chart is where the work continues, not a side trip.
+  window.location.href = '/benchmarks/visualize?ids=' + encodeURIComponent(ids.join(','));
+}
+
+// --- Job lifecycle ----------------------------------------------------
+function jobAction(url, method, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  fetch(url, {method: method, headers: {'HX-Request': 'true'}})
+    .then(function(r) {
+      if (!r.ok) { return r.text().then(function(t) { throw new Error(t || r.status); }); }
+      htmx.trigger(document.body, 'jobChanged');
+    })
+    .catch(function(e) { alert(String(e.message || e)); });
+}
+
+function cancelJob(id) {
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '/cancel', 'POST',
+            'Cancel this job? Cells that have not run yet will be skipped.');
+}
+
+function retryFailed(id) {
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '/retry-failed', 'POST', null);
+}
+
+function deleteJob(id, disposition) {
+  var msg = disposition === 'cascade'
+    ? 'Delete this job and every run it produced? This cannot be undone.'
+    : 'Delete this job but keep its runs? They move to Ad-Hoc Runs.';
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '?runs=' + disposition, 'DELETE', msg);
+}
+
+function openJobEditForm(id) {
+  htmx.ajax('GET', '/api/benchmark-jobs/form?from=' + encodeURIComponent(id),
+            {target: '#bench-job-form', swap: 'innerHTML'});
+  var d = document.getElementById('bench-job-form').closest('details');
+  if (d) { d.open = true; d.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+}
 </script>
 {{end}}

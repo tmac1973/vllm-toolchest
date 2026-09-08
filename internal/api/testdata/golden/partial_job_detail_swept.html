@@ -1,19 +1,18 @@
 
-<span id="job-status-j1" hx-swap-oob="true" class="job-status status-failed" title="status: failed">failed</span>
-<span id="job-progress-j1" hx-swap-oob="true" class="job-progress">1/2 cells <span class="cell-failed-tag" title="failed cells">· 1 failed</span>
+<span id="job-status-j3" hx-swap-oob="true" class="job-status status-running" title="status: running">running</span>
+<span id="job-progress-j3" hx-swap-oob="true" class="job-progress">1/3 cells
 </span>
 <div class="job-detail"
-     >
-    <small><strong>Overrides applied:</strong> max_model_len=32768 · tensor_parallel_size=2</small>
+     hx-get="/api/benchmark-jobs/j3" hx-trigger="every 2s" hx-swap="outerHTML">
     <table role="grid" style="font-size:0.85rem;margin-top:0.5rem;">
         <thead>
             <tr>
-                <th style="width:2rem;"><input type="checkbox" id="cell-check-all-j1" hx-preserve="true" style="margin:0;"
+                <th style="width:2rem;"><input type="checkbox" id="cell-check-all-j3" hx-preserve="true" style="margin:0;"
                     onchange="this.closest('table').querySelectorAll('.cell-check').forEach(function(c){c.checked=this.checked}.bind(this));"></th>
                 <th>Model</th>
                 <th>Quant</th>
                 <th>Preset</th>
-                
+                <th>Sweep</th>
                 <th>Status</th>
                 <th title="Token generation tokens/sec">TG t/s</th>
                 <th title="Prompt processing tokens/sec">PP t/s</th>
@@ -23,17 +22,17 @@
             </tr>
         </thead>
         <tbody>
-            <tr id="cell-row-j1-0">
+            <tr id="cell-row-j3-0">
                 <td><input type="checkbox" id="cell-check-r1" hx-preserve="true" class="cell-check" value="r1" style="margin:0;"></td>
                 <td>Qwen3.8-27B-FP8</td>
                 <td><kbd>fp8</kbd></td>
                 <td><small>internal-quick</small></td>
-                
+                <td><small>max_model_len=8192</small></td>
                 <td><span class="cell-status status-completed">completed</span>
                 </td>
-                <td>102.2</td>
-                <td>928</td>
-                <td>928 ms</td>
+                <td>110.4</td>
+                <td>1204</td>
+                <td>412 ms</td>
                 <td><small>1</small></td>
                 <td>
                     <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;width:auto;"
@@ -42,26 +41,24 @@
                 </td>
             </tr>
             
-            <tr id="cell-detail-j1-0" hx-preserve="true"><td colspan="10" class="bench-detail"></td></tr>
-            <tr id="cell-row-j1-1">
+            <tr id="cell-detail-j3-0" hx-preserve="true"><td colspan="11" class="bench-detail"></td></tr>
+            <tr id="cell-row-j3-1">
                 <td></td>
-                <td>Mixtral-8x7B-AWQ</td>
-                <td><kbd>awq</kbd></td>
+                <td>Qwen3.8-27B-FP8</td>
+                <td><kbd>fp8</kbd></td>
                 <td><small>internal-quick</small></td>
-                
-                <td><span class="cell-status status-failed">failed</span><br><small style="color:var(--pico-del-color);" title="EngineCore initialization failed. See root cause above.
-Traceback (most recent call last):
-  File &#34;/opt/vllm/...&#34;">EngineCore initialization failed. See root cause abo…</small>
+                <td><small>max_model_len=32768</small></td>
+                <td><span class="cell-status status-running">running</span>
                 </td>
                 <td>—</td>
                 <td>—</td>
                 <td>—</td>
-                <td><small>2</small></td>
+                <td><small>1</small></td>
                 <td>
                 </td>
             </tr>
             
-            <tr id="cell-detail-j1-1" hx-preserve="true"><td colspan="10" class="bench-detail"></td></tr>
+            <tr id="cell-detail-j3-1" hx-preserve="true"><td colspan="11" class="bench-detail"></td></tr>
         </tbody>
     </table>
 
@@ -72,18 +69,16 @@ Traceback (most recent call last):
                 title="Open charts of the selected cells — scatter, heatmap and 3D views of a sweep."
                 onclick="visualizeSelectedCells(this)">Visualize selected</button>
         <button type="button" class="outline secondary job-action"
-                onclick="retryFailed('j1')">Retry failed</button>
-        <button type="button" class="outline secondary job-action"
-                onclick="openJobEditForm('j1')">Edit &amp; Re-run</button>
+                onclick="cancelJob('j3')">Cancel</button>
         <a class="outline secondary job-action" role="button"
-           href="/api/benchmark-jobs/j1/export?format=csv&scope=cells" download>CSV (cells)</a>
+           href="/api/benchmark-jobs/j3/export?format=csv&scope=cells" download>CSV (cells)</a>
         <a class="outline secondary job-action" role="button"
-           href="/api/benchmark-jobs/j1/export?format=csv&scope=summary" download>CSV (summary)</a>
+           href="/api/benchmark-jobs/j3/export?format=csv&scope=summary" download>CSV (summary)</a>
         <a class="outline secondary job-action" role="button"
-           href="/api/benchmark-jobs/j1/export?format=json" download>JSON</a>
+           href="/api/benchmark-jobs/j3/export?format=json" download>JSON</a>
         <button type="button" class="outline secondary job-action"
-                onclick="deleteJob('j1','cascade')">Delete (with runs)</button>
+                onclick="deleteJob('j3','cascade')">Delete (with runs)</button>
         <button type="button" class="outline secondary job-action"
-                onclick="deleteJob('j1','orphan')">Delete (keep runs)</button>
+                onclick="deleteJob('j3','orphan')">Delete (keep runs)</button>
     </div>
 </div>

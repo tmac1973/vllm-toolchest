@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -228,96 +229,233 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 	}{choices, benchmark.Presets()})
 }
 
-// jobRow is one job's summary line plus the runs it produced.
+// jobRow is one job's collapsed summary line.
 type jobRow struct {
 	ID          string
 	Name        string
-	Kind        string
+	Description string
 	Status      string
-	CellSummary string
+	IsAdhoc     bool
+	Done        int
+	Total       int
+	Failed      int
+	RunCount    int
 	CreatedAt   string
-	CanCancel   bool
-	CanRetry    bool
-	CanDelete   bool
-	Runs        []runRow
+	FinishedAt  string
 }
 
-// renderJobList renders the job-grouped table for the benchmarks page.
+// jobSummary counts a job's cells. The ad-hoc pseudo-job has no cells — its
+// runs arrived one at a time — so it counts runs instead.
+func (s *Server) jobSummary(job benchmark.BenchmarkJob) jobRow {
+	row := jobRow{
+		ID:          job.ID,
+		Name:        job.Name,
+		Description: job.Description,
+		Status:      job.Status,
+		IsAdhoc:     job.ID == benchmark.AdhocJobID,
+		Total:       len(job.Cells),
+	}
+	if !job.CreatedAt.IsZero() {
+		row.CreatedAt = job.CreatedAt.Format("Jan 2 15:04")
+	}
+	if !job.FinishedAt.IsZero() {
+		row.FinishedAt = job.FinishedAt.Format("Jan 2 15:04")
+	}
+	for _, c := range job.Cells {
+		switch c.Status {
+		case benchmark.CellStatusCompleted:
+			row.Done++
+		case benchmark.CellStatusFailed:
+			row.Failed++
+		}
+	}
+	if row.IsAdhoc {
+		row.RunCount = len(s.bench.RunsForJob(job.ID))
+	}
+	return row
+}
+
+// renderJobList renders the collapsed job rows. Each one loads its own cells
+// on first open.
 func (s *Server) renderJobList(w http.ResponseWriter, jobs []benchmark.BenchmarkJob) {
 	rows := make([]jobRow, 0, len(jobs))
 	for _, job := range jobs {
-		row := jobRow{
-			ID:          job.ID,
-			Name:        job.Name,
-			Kind:        job.Kind,
-			Status:      job.Status,
-			CellSummary: fmt.Sprintf("%d cell(s)", len(job.Cells)),
-			CreatedAt:   job.CreatedAt.Format("Jan 2 15:04"),
-			CanCancel:   job.Status == benchmark.JobStatusRunning,
-			CanRetry:    job.Status == benchmark.JobStatusFailed || job.Status == benchmark.JobStatusCanceled,
-			// The ad-hoc job is the bucket every unattached run lands in;
-			// deleting it would have nowhere to put them.
-			CanDelete: job.ID != benchmark.AdhocJobID,
-		}
-		if len(job.Cells) > 0 {
-			done, failed := 0, 0
-			for _, c := range job.Cells {
-				switch c.Status {
-				case benchmark.CellStatusCompleted:
-					done++
-				case benchmark.CellStatusFailed:
-					failed++
-				}
-			}
-			row.CellSummary = fmt.Sprintf("%d/%d done, %d failed", done, len(job.Cells), failed)
-		}
-		for _, run := range s.bench.RunsForJob(job.ID) {
-			r := runRow{
-				ID:        run.ID,
-				ModelName: run.ModelName,
-				Preset:    run.Preset,
-				AvgGen:    "\u2014",
-				AvgTTFT:   "\u2014",
-				Status:    run.Status,
-			}
-			if run.Summary != nil {
-				r.AvgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
-				r.AvgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
-			}
-			row.Runs = append(row.Runs, r)
-		}
-		rows = append(rows, row)
+		rows = append(rows, s.jobSummary(job))
 	}
 	s.renderPartial(w, "job_list", rows)
 }
 
-// jobCellRow is one cell of a job's model x preset matrix.
+// jobCellRow is one cell of a job's matrix, joined with whatever its run
+// measured.
 type jobCellRow struct {
-	ModelID string
-	Preset  string
-	Status  string
-	Error   string
-	Attempt int
-	RunID   string
+	Idx        int
+	ModelName  string
+	Quant      string
+	Preset     string
+	SweepText  string
+	Status     string
+	Error      string
+	ErrorShort string
+	TGTPS      string
+	PPTPS      string
+	TTFT       string
+	Attempt    int
+	RunID      string
+}
+
+// errorSummary is the first line of an error, for a table cell. The full text
+// stays in the title attribute — a vLLM traceback is hundreds of lines and
+// would otherwise be the whole page.
+func errorSummary(err string) string {
+	if err == "" {
+		return ""
+	}
+	line := err
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	const max = 60
+	if len(line) > max {
+		line = line[:max-1] + "\u2026"
+	}
+	return line
 }
 
 func (s *Server) renderJobDetail(w http.ResponseWriter, job *benchmark.BenchmarkJob) {
-	cells := make([]jobCellRow, 0, len(job.Cells))
-	for _, c := range job.Cells {
-		cells = append(cells, jobCellRow{
-			ModelID: c.ModelID,
-			Preset:  c.Preset,
-			Status:  c.Status,
-			Error:   c.Error,
-			Attempt: c.Attempt,
-			RunID:   c.BenchmarkRunID,
-		})
+	// Runs indexed by id, so each cell can show what its attempt measured
+	// without a lookup per row.
+	runs := make(map[string]benchmark.BenchmarkRun)
+	for _, r := range s.bench.RunsForJob(job.ID) {
+		runs[r.ID] = r
 	}
+
+	summary := s.jobSummary(*job)
+	cells := job.Cells
+	// The ad-hoc job holds runs rather than cells; synthesize a row per run so
+	// it lists like any other job.
+	if summary.IsAdhoc && len(cells) == 0 {
+		for _, r := range s.bench.RunsForJob(job.ID) {
+			cells = append(cells, benchmark.JobCell{
+				ModelID:        r.ModelID,
+				Preset:         r.Preset,
+				Status:         cellStatusForRun(r.Status),
+				Attempt:        1,
+				BenchmarkRunID: r.ID,
+			})
+		}
+	}
+
+	hasSweeps := false
+	rows := make([]jobCellRow, 0, len(cells))
+	for i, c := range cells {
+		row := jobCellRow{
+			Idx:        i,
+			ModelName:  c.ModelID,
+			Preset:     c.Preset,
+			Status:     c.Status,
+			Error:      c.Error,
+			ErrorShort: errorSummary(c.Error),
+			Attempt:    c.Attempt,
+			RunID:      c.BenchmarkRunID,
+			TGTPS:      "\u2014",
+			PPTPS:      "\u2014",
+			TTFT:       "\u2014",
+		}
+		if m, ok := s.registry.Get(c.ModelID); ok {
+			row.ModelName = displayNameOf(m)
+		}
+		if run, ok := runs[c.BenchmarkRunID]; ok {
+			row.Quant = run.Quant
+			if run.Summary != nil {
+				row.TGTPS = fmt.Sprintf("%.1f", run.Summary.AvgGenTokPerSec)
+				row.PPTPS = fmt.Sprintf("%.0f", run.Summary.AvgPromptTokPerSec)
+				row.TTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
+			}
+		}
+		if len(c.SweepValues) > 0 {
+			row.SweepText = sweepValuesText(c.SweepValues)
+			hasSweeps = true
+		}
+		rows = append(rows, row)
+	}
+
+	// Checkbox, model, quant, preset, status, TG, PP, TTFT, attempt, detail —
+	// plus the sweep column when there is one.
+	colSpan := 10
+	if hasSweeps {
+		colSpan++
+	}
+
 	s.renderPartial(w, "job_detail", struct {
-		Name        string
-		Kind        string
-		Status      string
-		Description string
-		Cells       []jobCellRow
-	}{job.Name, job.Kind, job.Status, job.Description, cells})
+		jobRow
+		Running      bool
+		HasSweeps    bool
+		ColSpan      int
+		OverrideText string
+		Rows         []jobCellRow
+	}{
+		jobRow:       summary,
+		Running:      job.Status == benchmark.JobStatusRunning,
+		HasSweeps:    hasSweeps,
+		ColSpan:      colSpan,
+		OverrideText: overridesText(job.Overrides),
+		Rows:         rows,
+	})
+}
+
+// cellStatusForRun maps a run's status onto the cell vocabulary, for the
+// synthesized ad-hoc rows.
+func cellStatusForRun(status string) string {
+	switch status {
+	case benchmark.StatusCompleted:
+		return benchmark.CellStatusCompleted
+	case benchmark.StatusFailed:
+		return benchmark.CellStatusFailed
+	case benchmark.StatusRunning:
+		return benchmark.CellStatusRunning
+	}
+	return benchmark.CellStatusPending
+}
+
+// overridesText renders the config overrides a job applied on top of each
+// model's saved settings, so a surprising number has somewhere to come from.
+func overridesText(o *benchmark.ConfigOverrides) string {
+	if o == nil {
+		return ""
+	}
+	var parts []string
+	if o.MaxModelLen != nil {
+		parts = append(parts, fmt.Sprintf("max_model_len=%d", *o.MaxModelLen))
+	}
+	if o.TensorParallelSize != nil {
+		parts = append(parts, fmt.Sprintf("tensor_parallel_size=%d", *o.TensorParallelSize))
+	}
+	if o.GPUMemoryUtilization != nil {
+		parts = append(parts, fmt.Sprintf("gpu_memory_utilization=%.2f", *o.GPUMemoryUtilization))
+	}
+	if o.KVCacheDtype != nil {
+		parts = append(parts, "kv_cache_dtype="+*o.KVCacheDtype)
+	}
+	if o.EnforceEager != nil {
+		parts = append(parts, fmt.Sprintf("enforce_eager=%v", *o.EnforceEager))
+	}
+	if o.Dtype != nil {
+		parts = append(parts, "dtype="+*o.Dtype)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// sweepValuesText renders a cell's swept values in a stable order — a map
+// would otherwise reorder them on every poll.
+func sweepValuesText(values map[string]string) string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+values[k])
+	}
+	return strings.Join(parts, " ")
 }

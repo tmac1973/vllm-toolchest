@@ -266,35 +266,70 @@ func TestGoldenPartials(t *testing.T) {
 			name:    "job_list",
 			partial: "job_list",
 			data: []jobRow{{
-				ID: "j1", Name: "Quant compare", Kind: "matrix", Status: "completed",
-				CellSummary: "4/4 done, 0 failed", CreatedAt: "Sep 7 18:00",
-				CanDelete: true,
-				Runs: []runRow{
-					{ID: "r1", ModelName: "Qwen3.8-27B-FP8", Preset: "internal-quick",
-						AvgGen: "102.2 t/s", AvgTTFT: "928 ms", Status: "completed"},
-				},
+				ID: "j1", Name: "Quant compare", Description: "FP8 vs AWQ at 32K",
+				Status: "completed", Done: 4, Total: 4,
+				CreatedAt: "Sep 7 18:00", FinishedAt: "Sep 7 18:41",
 			}, {
-				ID: "j2", Name: "Long context sweep", Kind: "matrix", Status: "running",
-				CellSummary: "1/6 done, 0 failed", CreatedAt: "Sep 8 10:15",
-				CanCancel: true, CanDelete: true,
+				ID: "j2", Name: "Long context sweep", Status: "running",
+				Done: 1, Total: 6, Failed: 1, CreatedAt: "Sep 8 10:15",
+			}, {
+				// The catch-all pseudo-job counts runs, not cells.
+				ID: "adhoc", Name: "Ad-Hoc Runs", Status: "completed",
+				IsAdhoc: true, RunCount: 22, CreatedAt: "Apr 25 18:14",
 			}},
 		},
 		{
 			name:    "job_detail",
 			partial: "job_detail",
 			data: struct {
-				Name        string
-				Kind        string
-				Status      string
-				Description string
-				Cells       []jobCellRow
+				jobRow
+				Running      bool
+				HasSweeps    bool
+				ColSpan      int
+				OverrideText string
+				Rows         []jobCellRow
 			}{
-				Name: "Quant compare", Kind: "matrix", Status: "failed",
-				Description: "FP8 vs AWQ at 32K",
-				Cells: []jobCellRow{
-					{ModelID: "unsloth/Qwen3.8-27B-FP8", Preset: "internal-quick", Status: "completed", Attempt: 1, RunID: "r1"},
-					{ModelID: "TheBloke/Mixtral-8x7B-AWQ", Preset: "internal-quick", Status: "failed", Attempt: 2,
-						Error: "engine core initialization failed: out of memory"},
+				jobRow: jobRow{
+					ID: "j1", Name: "Quant compare", Status: "failed",
+					Done: 1, Total: 2, Failed: 1, CreatedAt: "Sep 7 18:00",
+				},
+				ColSpan:      10,
+				OverrideText: "max_model_len=32768 · tensor_parallel_size=2",
+				Rows: []jobCellRow{
+					{Idx: 0, ModelName: "Qwen3.8-27B-FP8", Quant: "fp8", Preset: "internal-quick",
+						Status: "completed", TGTPS: "102.2", PPTPS: "928", TTFT: "928 ms",
+						Attempt: 1, RunID: "r1"},
+					{Idx: 1, ModelName: "Mixtral-8x7B-AWQ", Quant: "awq", Preset: "internal-quick",
+						Status: "failed", Attempt: 2,
+						TGTPS: "—", PPTPS: "—", TTFT: "—",
+						Error:      "EngineCore initialization failed. See root cause above.\nTraceback (most recent call last):\n  File \"/opt/vllm/...\"",
+						ErrorShort: "EngineCore initialization failed. See root cause abo…"},
+				},
+			},
+		},
+		{
+			// A sweep grows a column, and the cells carry their swept values.
+			name:    "job_detail_swept",
+			partial: "job_detail",
+			data: struct {
+				jobRow
+				Running      bool
+				HasSweeps    bool
+				ColSpan      int
+				OverrideText string
+				Rows         []jobCellRow
+			}{
+				jobRow:    jobRow{ID: "j3", Name: "Context sweep", Status: "running", Done: 1, Total: 3},
+				Running:   true,
+				HasSweeps: true,
+				ColSpan:   11,
+				Rows: []jobCellRow{
+					{Idx: 0, ModelName: "Qwen3.8-27B-FP8", Quant: "fp8", Preset: "internal-quick",
+						SweepText: "max_model_len=8192", Status: "completed",
+						TGTPS: "110.4", PPTPS: "1204", TTFT: "412 ms", Attempt: 1, RunID: "r1"},
+					{Idx: 1, ModelName: "Qwen3.8-27B-FP8", Quant: "fp8", Preset: "internal-quick",
+						SweepText: "max_model_len=32768", Status: "running",
+						TGTPS: "—", PPTPS: "—", TTFT: "—", Attempt: 1},
 				},
 			},
 		},

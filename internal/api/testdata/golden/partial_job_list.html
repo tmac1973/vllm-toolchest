@@ -1,24 +1,68 @@
-<article style="margin-bottom:1rem;">
-  <header>
-    <strong>Quant compare</strong>
-    <small style="opacity:0.7;">&middot; matrix &middot; <ins>completed</ins> &middot; 4/4 done, 0 failed &middot; Sep 7 18:00</small>
-    <span style="float:right;font-size:0.85em;"><a href="#" hx-delete="/api/benchmark-jobs/j1?runs=orphan" hx-confirm="Delete job (orphan runs to ad-hoc)?" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">delete</a></span>
-  </header>
-  <table style="margin-top:0.5rem;"><thead><tr>
-    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th></th>
-  </tr></thead><tbody>
-    <tr>
-      <td><small>Qwen3.8-27B-FP8</small></td><td>internal-quick</td><td>102.2 t/s</td><td>928 ms</td><td><ins>completed</ins></td>
-      <td><small>
-        <a href="#" hx-get="/api/benchmarks/r1" hx-target="#bench-detail-r1" hx-swap="innerHTML">details</a>
-      </small></td>
-    </tr>
-    <tr><td colspan="6"><div id="bench-detail-r1"></div></td></tr>
-  </tbody></table>
-</article><article style="margin-bottom:1rem;">
-  <header>
-    <strong>Long context sweep</strong>
-    <small style="opacity:0.7;">&middot; matrix &middot; <mark>running</mark> &middot; 1/6 done, 0 failed &middot; Sep 8 10:15</small>
-    <span style="float:right;font-size:0.85em;"><a href="#" hx-post="/api/benchmark-jobs/j2/cancel" hx-confirm="Cancel this job?">cancel</a> &middot; <a href="#" hx-delete="/api/benchmark-jobs/j2?runs=orphan" hx-confirm="Delete job (orphan runs to ad-hoc)?" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">delete</a></span>
-  </header>
-</article>
+<div class="job-list">
+<details class="job-row" data-job-id="j1"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Quant compare</strong>
+            <span id="job-status-j1" class="job-status status-completed" title="status: completed">completed</span>
+            <span id="job-progress-j1" class="job-progress">4/4 cells
+            </span>
+        </span>
+        <span class="job-row-line2"><small class="job-desc">FP8 vs AWQ at 32K</small>
+            <small class="job-meta">created Sep 7 18:00 · finished Sep 7 18:41
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/j1"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+<details class="job-row" data-job-id="j2"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Long context sweep</strong>
+            <span id="job-status-j2" class="job-status status-running" title="status: running">running</span>
+            <span id="job-progress-j2" class="job-progress">1/6 cells <span class="cell-failed-tag" title="failed cells">· 1 failed</span>
+            </span>
+        </span>
+        <span class="job-row-line2">
+            <small class="job-meta">created Sep 8 10:15
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/j2"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+<details class="job-row" data-job-id="adhoc"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Ad-Hoc Runs</strong>
+            <span id="job-status-adhoc" class="job-status status-completed" title="status: completed">completed</span>
+            <span id="job-progress-adhoc" class="job-progress">22 runs
+            </span>
+        </span>
+        <span class="job-row-line2">
+            <small class="job-meta">created Apr 25 18:14
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/adhoc"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+</div>

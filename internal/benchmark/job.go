@@ -76,12 +76,16 @@ type ConfigOverrides struct {
 // most one BenchmarkRun at a time; on retry the run ID is rewritten to
 // point at the latest attempt.
 type JobCell struct {
-	ModelID        string `json:"model_id"`
-	Preset         string `json:"preset"`
-	Status         string `json:"status"`
-	Attempt        int    `json:"attempt"`
-	BenchmarkRunID string `json:"benchmark_run_id,omitempty"`
-	Error          string `json:"error,omitempty"`
+	ModelID string `json:"model_id"`
+	Preset  string `json:"preset"`
+	Status  string `json:"status"`
+	Attempt int    `json:"attempt"`
+	// SweepValues are the swept parameters this cell was run at, e.g.
+	// {"max_model_len": "32768"}. Empty on a job with no sweep, which is why
+	// the detail table only grows a Sweep column when some cell has one.
+	SweepValues    map[string]string `json:"sweep_values,omitempty"`
+	BenchmarkRunID string            `json:"benchmark_run_id,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 // newAdhocJob synthesizes the catch-all "Ad-Hoc Runs" pseudo-job that
