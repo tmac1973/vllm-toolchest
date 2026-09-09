@@ -207,31 +207,24 @@ func (c *captureWriter) Flush() {
 	}
 }
 
+// handleV1Models answers the OpenAI-compatible model listing.
+//
+// It reports the model actually being served, and nothing else. vLLM serves
+// one model per process, so the list is either one entry or none.
+//
+// This used to fall back to listing the whole registry when the engine was
+// stopped, which advertised models no request could be served by: a client
+// discovering a name there got a 404 for it, and the same endpoint answered
+// with a different identifier depending on whether the engine happened to be
+// up. Nothing loaded now means an empty list, which is the honest answer and
+// the one a client can act on.
 func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 	if s.process.GetStatus().State == process.StateRunning {
 		s.newProxyHandler().ServeHTTP(w, r)
 		return
 	}
-
-	list := s.registry.List()
-	type modelObj struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-	}
-	type response struct {
-		Object string     `json:"object"`
-		Data   []modelObj `json:"data"`
-	}
-
-	resp := response{Object: "list"}
-	for _, m := range list {
-		resp.Data = append(resp.Data, modelObj{
-			ID:      m.ID,
-			Object:  "model",
-			OwnedBy: "vllm-toolchest",
-		})
-	}
-
-	respondJSON(w, resp)
+	respondJSON(w, struct {
+		Object string `json:"object"`
+		Data   []any  `json:"data"`
+	}{Object: "list", Data: []any{}})
 }

@@ -158,9 +158,10 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	if snap.EnforceEager {
 		eager = true
 	}
-	// Start from the stored config so every flag the model was configured
-	// with survives, then apply the fields this job's snapshot overrides.
-	cfg := v.StartConfig()
+	// Start from the model's own config so every flag it was configured with
+	// survives — including the served name — then apply the fields this job's
+	// snapshot overrides.
+	cfg := m.StartConfig()
 	cfg.Dtype = dt
 	cfg.MaxModelLen = maxLen
 	cfg.TensorParallelSize = tp

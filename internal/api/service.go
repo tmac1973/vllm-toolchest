@@ -111,7 +111,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modelPath := process.ResolveModelPath(m.LocalPath)
-	startCfg := m.VLLMConfig.StartConfig()
+	startCfg := m.StartConfig()
 	args := process.BuildArgs(startCfg)
 	env := s.launchEnv(m.Quantization.Method)
 
@@ -195,7 +195,7 @@ func (s *Server) startModel(m *models.Model) error {
 	return s.process.Start(
 		m.ID,
 		process.ResolveModelPath(m.LocalPath),
-		process.BuildArgs(m.VLLMConfig.StartConfig()),
+		process.BuildArgs(m.StartConfig()),
 		s.launchEnv(m.Quantization.Method),
 	)
 }

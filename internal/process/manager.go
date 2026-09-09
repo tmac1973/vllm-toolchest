@@ -450,6 +450,13 @@ func (m *Manager) waitForReady() {
 func BuildArgs(cfg VLLMStartConfig) []string {
 	var args []string
 
+	// Without this vLLM names the model by the path it was loaded from, so
+	// /v1/models answers "/data/models/owner/repo" and a client has to send
+	// that container-local path as its model id. Naming it explicitly makes
+	// the served name the same HuggingFace repo id the rest of the tool uses.
+	if cfg.ServedModelName != "" {
+		args = append(args, "--served-model-name", cfg.ServedModelName)
+	}
 	if cfg.Dtype != "" && cfg.Dtype != "auto" {
 		args = append(args, "--dtype", cfg.Dtype)
 	}
@@ -625,6 +632,10 @@ func ResolveModelPath(localPath string) string {
 
 // VLLMStartConfig mirrors the config fields needed to build the command.
 type VLLMStartConfig struct {
+	// ServedModelName is what vLLM will call this model in /v1/models and
+	// what clients pass in a request's "model" field. Empty leaves vLLM's
+	// own default, which is the model path.
+	ServedModelName        string
 	Dtype                  string
 	MaxModelLen            int
 	TensorParallelSize     int

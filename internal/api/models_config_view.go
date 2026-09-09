@@ -287,6 +287,9 @@ func (s *Server) effectiveServeCommand(m *models.Model, modelLen int) string {
 	}
 
 	cfg := c.StartConfig()
+	// The preview has to match what a start actually runs, and the served
+	// name is part of that command.
+	cfg.ServedModelName = m.ID
 	cfg.MaxModelLen = modelLen
 	cfg.ToolCallParser = parser
 

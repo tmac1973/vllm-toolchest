@@ -79,7 +79,7 @@
     </fieldset>
 
     <fieldset><legend>Effective Command</legend>
-      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/evil/model --host 0.0.0.0 --port 8000 --dtype bfloat16 --max-model-len 12345 --gpu-memory-utilization 0.92 --trust-remote-code --max-num-seqs 4 --reasoning-parser qwen3 --speculative-config={&#34;method&#34;:&#34;mtp&#34;,&#34;num_speculative_tokens&#34;:8} --compilation-config={&#34;cudagraph_capture_sizes&#34;:[1,2,4,8]} --chat-template /tmp/tpl &amp; more.jinja --swap-space 4 --served-model-name my model</pre>
+      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/evil/model --host 0.0.0.0 --port 8000 --served-model-name evil/model &#34;x&gt;&lt;script&gt; --dtype bfloat16 --max-model-len 12345 --gpu-memory-utilization 0.92 --trust-remote-code --max-num-seqs 4 --reasoning-parser qwen3 --speculative-config={&#34;method&#34;:&#34;mtp&#34;,&#34;num_speculative_tokens&#34;:8} --compilation-config={&#34;cudagraph_capture_sizes&#34;:[1,2,4,8]} --chat-template /tmp/tpl &amp; more.jinja --swap-space 4 --served-model-name my model</pre>
     </fieldset>
     <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
     <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>

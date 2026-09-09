@@ -79,7 +79,7 @@
     </fieldset>
 
     <fieldset><legend>Effective Command</legend>
-      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/unsloth/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --max-model-len 32768 --tensor-parallel-size 2 --kv-cache-dtype fp8 --enable-chunked-prefill --enable-auto-tool-choice --tool-call-parser hermes</pre>
+      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/unsloth/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --served-model-name unsloth/Qwen3.8-27B-FP8 --max-model-len 32768 --tensor-parallel-size 2 --kv-cache-dtype fp8 --enable-chunked-prefill --enable-auto-tool-choice --tool-call-parser hermes</pre>
     </fieldset>
     <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
     <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>

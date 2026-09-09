@@ -12,6 +12,19 @@ import "github.com/tmac1973/vllm-toolchest/internal/process"
 // template. Callers that vary a field (the probe sweeps context length; a
 // benchmark job overrides from its snapshot) should call this and then assign
 // over the handful of fields they own.
+// StartConfig is the model's own launch config: its stored settings plus the
+// name vLLM should serve it under.
+//
+// Separate from VLLMConfig.StartConfig because the served name is a property
+// of the model, not of its settings, and every launch path needs it — left
+// unset, vLLM names the model by the path it was loaded from and clients have
+// to send that container-local path as their model id.
+func (m *Model) StartConfig() process.VLLMStartConfig {
+	cfg := m.VLLMConfig.StartConfig()
+	cfg.ServedModelName = m.ID
+	return cfg
+}
+
 func (c VLLMConfig) StartConfig() process.VLLMStartConfig {
 	return process.VLLMStartConfig{
 		Dtype:                  c.Dtype,

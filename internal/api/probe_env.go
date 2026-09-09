@@ -66,7 +66,7 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 	// otherwise reproduce the real serve: a backend or speculative config the
 	// model needs changes how much VRAM it takes, so a probe without them
 	// measures a configuration that is never actually served.
-	cfg := m.VLLMConfig.StartConfig()
+	cfg := m.StartConfig()
 	cfg.MaxModelLen = attempt.MaxModelLen
 	cfg.TensorParallelSize = attempt.TensorParallelSize
 	cfg.GPUMemoryUtilization = attempt.GPUMemoryUtilization

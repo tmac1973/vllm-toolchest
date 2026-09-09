@@ -79,7 +79,7 @@
     </fieldset>
 
     <fieldset><legend>Effective Command</legend>
-      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/TheBloke/Mixtral-8x7B-AWQ --host 0.0.0.0 --port 8000 --dtype float16 --max-model-len 8192 --gpu-memory-utilization 0.85 --max-num-seqs 32 --attention-backend TRITON_ATTN</pre>
+      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/TheBloke/Mixtral-8x7B-AWQ --host 0.0.0.0 --port 8000 --served-model-name TheBloke/Mixtral-8x7B-AWQ --dtype float16 --max-model-len 8192 --gpu-memory-utilization 0.85 --max-num-seqs 32 --attention-backend TRITON_ATTN</pre>
     </fieldset>
     <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
     <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>

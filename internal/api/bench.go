@@ -637,10 +637,14 @@ func displayNameOf(m *models.Model) string {
 	return m.ID
 }
 
-// discoverServedName queries vLLM's /v1/models to find the identifier the
-// server actually responds to. vLLM uses the local filesystem path by
-// default; --served-model-name overrides that. We match by suffix on the
-// model's HF repo id (e.g. "Hermes-3" matches "/data/models/.../Hermes-3").
+// discoverServedName asks vLLM what identifier it is answering to.
+//
+// Every launch now passes --served-model-name, so the answer should be the
+// model's own repo id and the exact match below should hit. The fallback to
+// whatever vLLM reports stays for the case that matters: an engine started
+// before this tool set the name, or by something else entirely, still names
+// itself by its path — and a benchmark run against it should measure the
+// model that is loaded rather than fail on the name.
 func (s *Server) discoverServedName(modelID string) (string, error) {
 	url := fmt.Sprintf("http://%s:%d/v1/models", s.cfg.VLLMHost, s.cfg.VLLMPort)
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -671,7 +675,8 @@ func (s *Server) discoverServedName(modelID string) (string, error) {
 			return m.ID, nil
 		}
 	}
-	// vLLM typically reports the model path; pick the first entry.
+	// One model per process, so a single unmatched entry is that model under
+	// a name we did not choose.
 	return body.Data[0].ID, nil
 }
 

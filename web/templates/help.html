@@ -105,12 +105,13 @@
     {{end}}
 
     <h3>Served model names</h3>
-    <p>The name a client must pass in the <code>model</code> field is whatever <code>/v1/models</code> reports, and that changes depending on what is running:</p>
-    <ul>
-        <li><strong>Engine running:</strong> the request is proxied straight to vLLM, which reports the model by its local filesystem path.</li>
-        <li><strong>Engine stopped:</strong> this tool answers instead, listing every registered model by its HuggingFace repo ID so a client can discover what is available.</li>
-    </ul>
-    <p>Query <code>/v1/models</code> and use what comes back, rather than assuming either form.</p>
+    <p>The name a client passes in the <code>model</code> field is the model's HuggingFace repo ID &mdash;
+       <code>cyankiwi/Qwen3.5-4B-AWQ-4bit</code> &mdash; the same identifier the Models page shows. Every
+       launch passes it to vLLM explicitly; left to itself vLLM names a model by the path it was loaded
+       from, and a client would have to send a container-local path.</p>
+    <p><code>/v1/models</code> reports the model being served, and nothing else. vLLM serves one model per
+       process, so the list is one entry or none &mdash; an empty list means nothing is loaded, not that
+       nothing is installed. Use the Models page to see what is available to load.</p>
 
     <h3>Quantization formats</h3>
     <p>Quantization does two different jobs, and conflating them causes most of the disappointment:</p>
@@ -236,8 +237,11 @@ curl $BASE/v1/chat/completions \
         <dt>The model loads but is much slower than expected</dt>
         <dd>Check what the quantization is actually buying you: a 4-bit weight-only checkpoint runs its matmuls at bf16 speed. On the radiance image at TP=2, also check the batched-token setting against the all-reduce ceiling shown in the model config panel — exceeding it costs about 2.3&times; and reports nothing.</dd>
 
-        <dt>A model does not appear in <code>/v1/models</code></dt>
-        <dd>Only the running model is listed while the engine is up. If the engine is stopped, every registered model is listed instead. If it appears in neither, the registry has no entry — check the Models page for a <del>missing</del> badge.</dd>
+        <dt><code>/v1/models</code> is empty</dt>
+        <dd>Nothing is loaded. The listing reports what is being served, not what is installed — it is deliberately not a catalogue, because a name listed there that no request can be served by is worse than an empty list. Make a model active on the Models page and start the engine.</dd>
+
+        <dt>A request is rejected with an unknown model</dt>
+        <dd>Pass the repo ID exactly as <code>/v1/models</code> reports it. An engine started before this tool set the served name — or started by hand — will still be answering to its file path instead; restarting it from the Server page fixes that.</dd>
 
         <dt>A downloaded model is not on the Models page</dt>
         <dd>If the models directory was overridden without a restart, the scan is still reading the old path. Restart the container.</dd>
