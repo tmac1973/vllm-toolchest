@@ -37,6 +37,14 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
+	// The ad-hoc job is a container for individually-started runs, not a cell
+	// matrix, and the questions asked of it are different: which model, when,
+	// and how did these compare — not which cell of a sweep failed. So it gets
+	// the grouped run list rather than the cell table.
+	if job.ID == benchmark.AdhocJobID {
+		s.renderRunList(w, s.bench.RunsForJob(benchmark.AdhocJobID))
+		return
+	}
 	s.renderJobDetail(w, job)
 }
 
@@ -494,19 +502,6 @@ func (s *Server) renderJobDetail(w http.ResponseWriter, job *benchmark.Benchmark
 
 	summary := s.jobSummary(*job)
 	cells := job.Cells
-	// The ad-hoc job holds runs rather than cells; synthesize a row per run so
-	// it lists like any other job.
-	if summary.IsAdhoc && len(cells) == 0 {
-		for _, r := range s.bench.RunsForJob(job.ID) {
-			cells = append(cells, benchmark.JobCell{
-				ModelID:        r.ModelID,
-				Preset:         r.Preset,
-				Status:         cellStatusForRun(r.Status),
-				Attempt:        1,
-				BenchmarkRunID: r.ID,
-			})
-		}
-	}
 
 	hasSweeps := false
 	rows := make([]jobCellRow, 0, len(cells))

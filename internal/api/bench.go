@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -417,41 +418,83 @@ func (s *Server) handleBenchmarkProgress(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// renderRunList lists runs in a simple table for the benchmarks page.
 // runRow is one line of the benchmark run table.
 type runRow struct {
 	ID        string
 	ModelName string
 	ModelID   string
+	Quant     string
 	Preset    string
-	AvgGen    string
-	AvgTTFT   string
+	PPTPS     string
+	TGTPS     string
+	TTFT      string
 	Status    string
 	Running   bool
 	When      string
+	// SweepText names the point of a sweep this run measured, so a run
+	// listed on its own still says what it was measuring.
+	SweepText string
+	// Search is the lowercased haystack the filter box matches against.
+	Search string
+}
+
+// runGroup collects one model's runs. The list groups because a history of a
+// few hundred runs across a handful of models is unreadable flat, and the
+// question being asked is almost always about one model at a time.
+type runGroup struct {
+	Name string
+	Rows []runRow
 }
 
 func (s *Server) renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
-	rows := make([]runRow, 0, len(runs))
+	byModel := map[string]*runGroup{}
+	var order []string
 	for _, run := range runs {
 		row := runRow{
 			ID:        run.ID,
 			ModelName: run.ModelName,
 			ModelID:   run.ModelID,
+			Quant:     run.Quant,
 			Preset:    run.Preset,
-			AvgGen:    "\u2014",
-			AvgTTFT:   "\u2014",
+			PPTPS:     "\u2014",
+			TGTPS:     "\u2014",
+			TTFT:      "\u2014",
 			Status:    run.Status,
 			Running:   run.Status == benchmark.StatusRunning,
 			When:      run.CreatedAt.Format("Jan 2 15:04"),
+			SweepText: sweepValuesText(run.SweepValues),
 		}
 		if run.Summary != nil {
-			row.AvgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
-			row.AvgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
+			row.PPTPS = fmt.Sprintf("%.0f", run.Summary.AvgPromptTokPerSec)
+			row.TGTPS = fmt.Sprintf("%.1f", run.Summary.AvgGenTokPerSec)
+			row.TTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
 		}
-		rows = append(rows, row)
+		row.Search = strings.ToLower(strings.Join(
+			[]string{run.ModelName, run.ModelID, run.Quant, run.Preset, row.SweepText}, " "))
+
+		name := run.ModelName
+		if name == "" {
+			name = run.ModelID
+		}
+		if name == "" {
+			name = "(unknown)"
+		}
+		g, ok := byModel[name]
+		if !ok {
+			g = &runGroup{Name: name}
+			byModel[name] = g
+			order = append(order, name)
+		}
+		g.Rows = append(g.Rows, row)
 	}
-	s.renderPartial(w, "run_list", rows)
+	sort.Slice(order, func(i, j int) bool {
+		return strings.ToLower(order[i]) < strings.ToLower(order[j])
+	})
+	groups := make([]runGroup, 0, len(order))
+	for _, name := range order {
+		groups = append(groups, *byModel[name])
+	}
+	s.renderPartial(w, "run_list", groups)
 }
 
 // runResultRow is one test point within a run.

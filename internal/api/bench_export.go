@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,91 @@ func (s *Server) handleExportJob(w http.ResponseWriter, r *http.Request) {
 			writeCSVExport(w, base+"-cells.csv", runs, writeCSVCells)
 		case "summary":
 			writeCSVExport(w, base+"-summary.csv", runs, writeCSVSummary)
+		default:
+			http.Error(w, fmt.Sprintf("unknown scope %q (want cells or summary)", scope), http.StatusBadRequest)
+		}
+	default:
+		http.Error(w, fmt.Sprintf("unknown format %q (want csv or json)", format), http.StatusBadRequest)
+	}
+}
+
+// handleExportRuns writes an arbitrary selection of runs as CSV or JSON.
+//
+// Separate from handleExportJob because the selection here is not a job: the
+// runs list lets you tick rows across jobs and across the ad-hoc history, and
+// the comparison worth exporting is usually exactly that cross-section. Runs
+// still get their sweep values backfilled from whichever job produced them, so
+// a row exported from here carries the same independent variable it would have
+// carried in its own job's export.
+func (s *Server) handleExportRuns(w http.ResponseWriter, r *http.Request) {
+	var ids []string
+	for _, id := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		http.Error(w, "no run ids given", http.StatusBadRequest)
+		return
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+
+	// Walked in stored order rather than in the order the ids arrived, so two
+	// exports of the same selection are byte-identical.
+	var runs []benchmark.BenchmarkRun
+	for _, run := range s.bench.List() {
+		if want[run.ID] {
+			runs = append(runs, run)
+		}
+	}
+	if len(runs) == 0 {
+		http.Error(w, "none of those runs exist", http.StatusNotFound)
+		return
+	}
+
+	// Each run's sweep values come from its own job, so a selection spanning
+	// several jobs is filled in correctly rather than from whichever one
+	// happened to be first.
+	byJob := map[string][]benchmark.BenchmarkRun{}
+	for _, run := range runs {
+		byJob[run.JobID] = append(byJob[run.JobID], run)
+	}
+	filled := make([]benchmark.BenchmarkRun, 0, len(runs))
+	for jobID, group := range byJob {
+		if job, err := s.bench.GetJob(jobID); err == nil {
+			group = backfillSweepValues(group, job)
+		}
+		filled = append(filled, group...)
+	}
+	sort.Slice(filled, func(i, j int) bool { return filled[i].ID < filled[j].ID })
+
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "csv"
+	}
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = "cells"
+	}
+	base := fmt.Sprintf("vllm-toolchest-runs-%s", time.Now().Format("2006-01-02"))
+
+	switch format {
+	case "json":
+		s.writeJSONExport(w, base+".json", exportEnvelope{
+			ExportedAt: time.Now().UTC(),
+			Tool:       "vllm-toolchest",
+			Version:    s.versionLabel(),
+			Runs:       filled,
+		})
+	case "csv":
+		switch scope {
+		case "cells":
+			writeCSVExport(w, base+"-cells.csv", filled, writeCSVCells)
+		case "summary":
+			writeCSVExport(w, base+"-summary.csv", filled, writeCSVSummary)
 		default:
 			http.Error(w, fmt.Sprintf("unknown scope %q (want cells or summary)", scope), http.StatusBadRequest)
 		}

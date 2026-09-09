@@ -230,13 +230,34 @@ func TestGoldenPartials(t *testing.T) {
 		{
 			name:    "run_list",
 			partial: "run_list",
-			data: []runRow{
-				{ID: "r1", ModelName: "Qwen3.8-27B-FP8", ModelID: "unsloth/Qwen3.8-27B-FP8",
-					Preset: "internal-thorough", AvgGen: "102.2 t/s", AvgTTFT: "928 ms",
-					Status: "completed", When: "Sep 7 19:31"},
-				{ID: "r2", ModelName: "Mixtral-8x7B-AWQ", ModelID: "TheBloke/Mixtral-8x7B-AWQ",
-					Preset: "internal-quick", AvgGen: "—", AvgTTFT: "—",
-					Status: "running", Running: true, When: "Sep 8 09:02"},
+			// Two groups, because grouping is the point of this list, and one
+			// of them holds a run at a sweep point and a running one.
+			data: []runGroup{
+				{
+					Name: "Qwen3.8-27B-FP8",
+					Rows: []runRow{
+						{ID: "r1", ModelName: "Qwen3.8-27B-FP8", ModelID: "unsloth/Qwen3.8-27B-FP8",
+							Quant: "fp8", Preset: "internal-thorough",
+							PPTPS: "928", TGTPS: "102.2", TTFT: "928 ms",
+							SweepText: "max_model_len=32768", Status: "completed",
+							When: "Sep 7 19:31", Search: "qwen3.8-27b-fp8 fp8 internal-thorough"},
+						{ID: "r3", ModelName: "Qwen3.8-27B-FP8", ModelID: "unsloth/Qwen3.8-27B-FP8",
+							Quant: "fp8", Preset: "internal-quick",
+							PPTPS: "—", TGTPS: "—", TTFT: "—",
+							Status: "running", Running: true,
+							When: "Sep 8 09:10", Search: "qwen3.8-27b-fp8 fp8 internal-quick"},
+					},
+				},
+				{
+					Name: "Mixtral-8x7B-AWQ",
+					Rows: []runRow{
+						{ID: "r2", ModelName: "Mixtral-8x7B-AWQ", ModelID: "TheBloke/Mixtral-8x7B-AWQ",
+							Quant: "awq", Preset: "internal-quick",
+							PPTPS: "612", TGTPS: "44.0", TTFT: "1204 ms",
+							Status: "completed", When: "Sep 8 09:02",
+							Search: "mixtral-8x7b-awq awq internal-quick"},
+					},
+				},
 			},
 		},
 		{

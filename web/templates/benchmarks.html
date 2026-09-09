@@ -180,11 +180,15 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
 // --- Cell selection ---------------------------------------------------
 // The checkboxes live inside whichever job detail is open; the actions below
 // read them from the button's own table so two open jobs cannot mix.
+/* Selection lives in two places — a job's cell table and the ad-hoc runs
+   list — and the actions on it are the same either way, so the scope is
+   resolved from whichever container the button sits in rather than
+   duplicating compare/visualize/export/delete per context. */
 function selectedRunIDs(btn) {
-  var root = btn.closest('.job-detail');
+  var root = btn.closest('.job-detail') || btn.closest('.bench-runs-container');
   if (!root) return [];
   return Array.prototype.slice
-    .call(root.querySelectorAll('.cell-check:checked'))
+    .call(root.querySelectorAll('.cell-check:checked, .bench-check:checked'))
     .map(function(c) { return c.value; });
 }
 
@@ -217,6 +221,87 @@ function deleteSelectedRuns(btn) {
   if (!ids) return;
   jobAction('/api/benchmarks/batch-delete?ids=' + encodeURIComponent(ids.join(',')), 'DELETE',
             'Delete ' + ids.length + ' run' + (ids.length === 1 ? '' : 's') + '? This cannot be undone.');
+}
+
+function compareSelectedRuns(btn) { compareSelectedCells(btn); }
+function visualizeSelectedRuns(btn) { visualizeSelectedCells(btn); }
+
+function exportSelectedRuns(btn, format) {
+  var ids = requireSelection(btn, 1, 'run to export');
+  if (!ids) return;
+  /* A plain navigation rather than fetch: the response is a download, and
+     letting the browser handle it keeps the filename the server sets. */
+  window.location.href = '/api/benchmarks/export?format=' + format +
+    '&ids=' + encodeURIComponent(ids.join(','));
+}
+
+// --- Ad-hoc runs list -------------------------------------------------
+
+function benchGroupRows(header) {
+  return header.parentElement.querySelector(
+    '.bench-group-rows[data-group="' + CSS.escape(header.getAttribute('data-group')) + '"]');
+}
+
+function toggleBenchGroup(header) {
+  var rows = benchGroupRows(header);
+  if (!rows) return;
+  var collapsed = header.classList.toggle('collapsed');
+  rows.hidden = collapsed;
+  var caret = header.querySelector('.caret');
+  if (caret) caret.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+}
+
+function setAllBenchGroups(btn, open) {
+  var root = btn.closest('.bench-runs-container');
+  if (!root) return;
+  root.querySelectorAll('.bench-group-header').forEach(function (h) {
+    if (h.classList.contains('collapsed') === !open) return;
+    toggleBenchGroup(h);
+  });
+}
+
+/* Filters rows by the haystack the server put on each one, and hides a group
+   whose rows all filtered out — a header claiming five runs above nothing is
+   worse than no header. An expanded detail row follows its own run. */
+function filterBenchRuns(input) {
+  var root = input.closest('.bench-runs-container');
+  if (!root) return;
+  var q = (input.value || '').trim().toLowerCase();
+
+  root.querySelectorAll('.bench-group-rows').forEach(function (body) {
+    var shown = 0;
+    body.querySelectorAll('tr[data-search]').forEach(function (tr) {
+      var match = !q || tr.getAttribute('data-search').indexOf(q) !== -1;
+      tr.hidden = !match;
+      var detail = tr.nextElementSibling;
+      if (detail && detail.classList.contains('bench-detail-row')) detail.hidden = !match;
+      if (match) shown++;
+    });
+    var header = root.querySelector(
+      '.bench-group-header[data-group="' + CSS.escape(body.getAttribute('data-group')) + '"]');
+    if (header) header.hidden = shown === 0;
+    /* A search should reveal what it matched, so matching rows in a collapsed
+       group are shown; clearing the box restores the collapse. */
+    if (q && shown > 0 && header && header.classList.contains('collapsed')) {
+      toggleBenchGroup(header);
+      header.dataset.autoOpened = '1';
+    } else if (!q && header && header.dataset.autoOpened) {
+      delete header.dataset.autoOpened;
+      if (!header.classList.contains('collapsed')) toggleBenchGroup(header);
+    }
+  });
+}
+
+/* Select-all covers what is visible: after filtering, ticking the header box
+   and pressing Delete should not take rows the filter is hiding. */
+function selectAllBenchRuns(box) {
+  var root = box.closest('.bench-runs-container');
+  if (!root) return;
+  root.querySelectorAll('.bench-group-rows tr[data-search]').forEach(function (tr) {
+    if (tr.hidden) return;
+    var c = tr.querySelector('.bench-check');
+    if (c) c.checked = box.checked;
+  });
 }
 
 // --- Job lifecycle ----------------------------------------------------

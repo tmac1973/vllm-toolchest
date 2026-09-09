@@ -404,6 +404,23 @@
         button.action-icon:hover { color: var(--pico-primary); }
         .action-icon-placeholder { display: inline-block; width: 1.1rem; }
 
+        /* Benchmarks: the ad-hoc runs list, grouped by model. */
+        .bench-runs-table { font-size: 0.85rem; }
+        .bench-runs-table td, .bench-runs-table th { padding: 0.3rem 0.5rem; }
+        .bench-group-header > tr { cursor: pointer; }
+        .bench-group-header td {
+            background: var(--pico-card-sectioning-background-color);
+            border-bottom: 1px solid var(--pico-muted-border-color);
+        }
+        .bench-group-header .caret {
+            display: inline-block;
+            width: 1rem;
+            color: var(--pico-muted-color);
+        }
+        /* An empty detail row would otherwise draw a full-width blank stripe
+           under every run in the table. */
+        .bench-detail-row:has(> td > div:empty) { display: none; }
+
         /* Benchmarks: the batch-job parameter menus. One collapsible menu per
            sweepable parameter, so a form with ten of them reads as a list of
            choices rather than a wall of checkboxes. */

@@ -2,28 +2,72 @@
 {{if not . -}}
 <p style="opacity:0.7;">No benchmark runs yet. Load a model and start a run from the form above.</p>
 {{- else -}}
-<table><thead><tr>
-    <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th>When</th><th></th>
-  </tr></thead><tbody>
-{{- range . -}}
-<tr>
-      <td><strong>{{.ModelName}}</strong><br><small style="opacity:0.6;">{{.ModelID}}</small></td>
-      <td>{{.Preset}}</td>
-      <td>{{.AvgGen}}</td>
-      <td>{{.AvgTTFT}}</td>
-      <td>{{template "run_status" .Status}}</td>
-      <td><small>{{.When}}</small></td>
-      <td><small>
-        {{- if .Running -}}
-        <a href="#" hx-post="/api/benchmarks/{{.ID}}/cancel" hx-confirm="Cancel this run?">cancel</a>
-        {{- else -}}
-        <a href="#" hx-get="/api/benchmarks/{{.ID}}" hx-target="#bench-detail-{{.ID}}" hx-swap="innerHTML">details</a> &middot; <a href="#" hx-delete="/api/benchmarks/{{.ID}}" hx-confirm="Delete this run?" hx-target="#bench-runs" hx-swap="none" hx-on::after-request="if(event.detail.successful) htmx.ajax('GET','/api/benchmarks/','#bench-runs')">delete</a>
-        {{- end -}}
-      </small></td>
-    </tr>
-    <tr><td colspan="7"><div id="bench-detail-{{.ID}}"></div></td></tr>
-{{- end -}}
-</tbody></table>
+<div class="bench-runs-container">
+  <div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by model, quant, preset, sweep&hellip;"
+           oninput="filterBenchRuns(this)" autocomplete="off">
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, false)">Collapse all</button>
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, true)">Expand all</button>
+    <button type="button" class="outline secondary" onclick="compareSelectedRuns(this)">Compare</button>
+    <button type="button" class="outline secondary"
+            title="Open charts of the selected runs — scatter, heatmap and 3D views of a sweep."
+            onclick="visualizeSelectedRuns(this)">Visualize</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'csv')">Export CSV</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'json')">Export JSON</button>
+    <button type="button" class="outline secondary" onclick="deleteSelectedRuns(this)">Delete selected</button>
+  </div>
+  <table role="grid" class="bench-runs-table">
+    <thead><tr>
+      <th style="width:2rem;"><input type="checkbox" style="margin:0;" title="Select all"
+          onchange="selectAllBenchRuns(this)"></th>
+      <th>Model</th>
+      <th>Quant</th>
+      <th>Preset</th>
+      <th>Sweep</th>
+      <th title="Prompt processing tokens/sec — higher is better.">PP t/s</th>
+      <th title="Token generation tokens/sec — the speed you feel during chat.">TG t/s</th>
+      <th title="Time to first token — lower is better.">TTFT</th>
+      <th>Status</th>
+      <th>When</th>
+      <th></th>
+    </tr></thead>
+    {{- range .}}
+    {{/* One tbody per model, and a second per run, so a group header and its
+         rows stay associated without the rows having to carry the group name
+         in the DOM. */}}
+    <tbody class="bench-group-header" data-group="{{.Name}}">
+      <tr onclick="toggleBenchGroup(this.closest('tbody'))">
+        <td colspan="11"><span class="caret">&#9662;</span> <strong>{{.Name}}</strong> <small>({{len .Rows}})</small></td>
+      </tr>
+    </tbody>
+    <tbody class="bench-group-rows" data-group="{{.Name}}">
+      {{- range .Rows}}
+      <tr data-search="{{.Search}}">
+        <td><input type="checkbox" class="bench-check" value="{{.ID}}" style="margin:0;"
+                   {{if .Running}}title="Running — select to delete anyway"{{end}}></td>
+        <td><small style="opacity:0.6;">{{.ModelID}}</small></td>
+        <td>{{if .Quant}}<kbd>{{.Quant}}</kbd>{{else}}&mdash;{{end}}</td>
+        <td><small>{{.Preset}}</small></td>
+        <td><small>{{if .SweepText}}{{.SweepText}}{{else}}&mdash;{{end}}</small></td>
+        <td>{{.PPTPS}}</td>
+        <td><strong>{{.TGTPS}}</strong></td>
+        <td>{{.TTFT}}</td>
+        <td>{{template "run_status" .Status}}</td>
+        <td><small>{{.When}}</small></td>
+        <td><small>
+          {{- if .Running -}}
+          <a href="#" hx-post="/api/benchmarks/{{.ID}}/cancel" hx-confirm="Cancel this run?">cancel</a>
+          {{- else -}}
+          <a href="#" hx-get="/api/benchmarks/{{.ID}}" hx-target="#bench-detail-{{.ID}}" hx-swap="innerHTML">details</a>
+          {{- end -}}
+        </small></td>
+      </tr>
+      <tr class="bench-detail-row"><td colspan="11"><div id="bench-detail-{{.ID}}"></div></td></tr>
+      {{- end}}
+    </tbody>
+    {{- end}}
+  </table>
+</div>
 {{- end}}
 {{- end}}
 
@@ -92,7 +136,10 @@
 {{- end}}
 {{- end}}
 
-{{define "run_started"}}<p>Started run <code>{{.}}</code>. <a href="#" hx-get="/api/benchmarks/" hx-target="#bench-runs">Refresh list</a></p>{{end}}
+{{/* The run appears under Ad-Hoc Runs in the jobs list. That link targeted a
+     #bench-runs element that no longer exists, so it silently did nothing;
+     refreshing the list it actually lands in is the useful thing to offer. */}}
+{{define "run_started"}}<p>Started run <code>{{.}}</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs" hx-swap="innerHTML">Refresh list</a></p>{{end}}
 
 {{/* The passive timing table: what real traffic through the proxy measured. */}}
 {{define "timings_list" -}}
