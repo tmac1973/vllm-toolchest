@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
@@ -258,10 +259,25 @@ func (e *stubJobEnv) VLLMVersion() string             { return "" }
 func TestJobSubmissionSignalsSuccessOnlyWhenItSucceeded(t *testing.T) {
 	s := newGoldenServer(t, goldenEnvGeneric)
 	s.benchSvc.SetJobEnv(&stubJobEnv{})
+	// Cancelling only signals; the runner's goroutine keeps writing to the
+	// store for a moment after. t.TempDir removes the directory as soon as the
+	// test returns, and deleting one the store is still saving into fails with
+	// "directory not empty" — a flake with nothing to do with what is asserted.
 	t.Cleanup(func() {
 		if id, busy := s.benchSvc.ActiveJobID(); busy {
 			s.benchSvc.CancelJob(id)
 		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, busy := s.benchSvc.ActiveJobID(); !busy {
+				// The final save lands just after the flag clears; give it the
+				// scheduler slot rather than racing it.
+				time.Sleep(20 * time.Millisecond)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Error("job did not finish within 5s of being cancelled")
 	})
 
 	post := func(form url.Values) *httptest.ResponseRecorder {
