@@ -92,7 +92,44 @@
     <strong>config</strong>:
     {{.ConfigLine}}
   </small>
+  {{- if .Hardware}}
+  {{/* Which hardware produced a number is part of the number. Once the
+       machine changes, a run's own record is the only place it survives. */}}
+  <br><small><strong>hardware</strong>: {{.Hardware}}{{if .VLLMVer}} &middot; vLLM {{.VLLMVer}}{{end}}</small>
+  {{- else if .VLLMVer}}
+  <br><small><strong>vLLM</strong>: {{.VLLMVer}}</small>
+  {{- end}}
+
+  {{- if .PerSize}}
+  <p style="margin:0.6rem 0 0.2rem;"><small><strong>Results by prompt size</strong> &mdash; one row per prompt
+    length, mean &plusmn; standard deviation across repetitions. Prompt throughput climbs steeply with prompt
+    length, so the run's overall average matches none of these; this is the form comparable with figures
+    published elsewhere, which are always quoted per length.</small></p>
+  <table role="grid" style="font-size:0.85rem;">
+    <thead><tr>
+      <th title="Prompt length, llama-bench style: pp&lt;prompt tokens&gt;">Test</th>
+      <th title="Prompt processing, mean &plusmn; stddev">PP t/s</th>
+      <th title="Token generation, mean &plusmn; stddev">TG t/s</th>
+      <th title="Time to first token">TTFT</th>
+      <th title="Repetitions at this prompt length">Reps</th>
+    </tr></thead>
+    <tbody>
+    {{- range .PerSize}}
+      <tr>
+        <td><kbd>{{.Label}}</kbd></td>
+        <td><strong>{{printf "%.0f" .PromptMean}}</strong>{{if gt .Count 1}} &plusmn; {{printf "%.0f" .PromptStd}}{{end}}</td>
+        <td><strong>{{printf "%.1f" .GenMean}}</strong>{{if gt .Count 1}} &plusmn; {{printf "%.1f" .GenStd}}{{end}}</td>
+        <td>{{printf "%.0f" .TTFTMean}} ms</td>
+        <td>{{.Count}}</td>
+      </tr>
+    {{- end}}
+    </tbody>
+  </table>
+  {{- end}}
+
   {{- if .Results}}
+  <details style="margin-top:0.4rem;">
+    <summary><small><strong>Individual requests</strong> ({{len .Results}})</small></summary>
   <table><thead><tr>
     <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
   </tr></thead><tbody>
@@ -102,6 +139,7 @@
     </tr>
   {{- end}}
   </tbody></table>
+  </details>
   {{- end}}
   {{- if .Summary}}
   <p><strong>summary</strong>: {{.Summary}}</p>

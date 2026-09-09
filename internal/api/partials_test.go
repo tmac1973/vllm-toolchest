@@ -300,12 +300,24 @@ func TestGoldenPartials(t *testing.T) {
 				Error      string
 				Progress   string
 				ConfigLine string
+				Hardware   string
+				VLLMVer    string
+				PerSize    []benchmark.PerSizeStats
 				Results    []runResultRow
 				Summary    string
 				Warnings   []string
 			}{
 				Preset: "internal-thorough", CreatedAt: "2026-09-07 19:31:04",
 				ConfigLine: "max_model_len=32768, tp=2, gpu_mem_util=0.90, dtype=auto, kv_cache=fp8, eager=false, quant=fp8",
+				Hardware:   "2 × AMD Radeon AI PRO R9700 (32 GB)",
+				VLLMVer:    "0.1.dev1",
+				// Two sizes, one with repetitions and one without, so both the
+				// "± spread" and the bare-mean branches render.
+				PerSize: benchmark.PerSize([]benchmark.BenchmarkResult{
+					{PromptTokens: 256, PromptTokPerSec: 275.8, GenTokPerSec: 102.2, TTFTMs: 928},
+					{PromptTokens: 256, PromptTokPerSec: 281.2, GenTokPerSec: 99.8, TTFTMs: 940},
+					{PromptTokens: 1024, PromptTokPerSec: 927.5, GenTokPerSec: 98.1, TTFTMs: 1104},
+				}),
 				Results: []runResultRow{
 					{N: 1, PromptTokens: 256, GenTokens: 128, TTFTMs: 928, TotalMs: 2180, PromptTokPerSec: 275.8, GenTokPerSec: 102.2},
 					{N: 2, PromptTokens: 1024, GenTokens: 128, TTFTMs: 1104, TotalMs: 2410, PromptTokPerSec: 927.5, GenTokPerSec: 98.1},

@@ -497,6 +497,42 @@ func (s *Server) renderRunList(w http.ResponseWriter, runs []benchmark.Benchmark
 	s.renderPartial(w, "run_list", groups)
 }
 
+// gpuSnapshotText names the cards a run was measured on. Which hardware
+// produced a number is part of the number: the same config on a different card
+// is a different measurement, and a run's own record is the only place that
+// survives once the machine changes.
+func gpuSnapshotText(gpus []benchmark.GPUSnapshot) string {
+	if len(gpus) == 0 {
+		return ""
+	}
+	// Identical cards are the common multi-GPU case, and listing the same
+	// name four times says less than "4 x <name>".
+	counts := map[string]int{}
+	var order []string
+	for _, g := range gpus {
+		name := g.Name
+		if name == "" {
+			name = "unknown GPU"
+		}
+		if g.VRAMTotalMB > 0 {
+			name = fmt.Sprintf("%s (%.0f GB)", name, float64(g.VRAMTotalMB)/1024)
+		}
+		if counts[name] == 0 {
+			order = append(order, name)
+		}
+		counts[name]++
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		if counts[name] > 1 {
+			parts = append(parts, fmt.Sprintf("%d \u00d7 %s", counts[name], name))
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, " + ")
+}
+
 // runResultRow is one test point within a run.
 type runResultRow struct {
 	N               int
@@ -517,6 +553,9 @@ func (s *Server) renderRunDetail(w http.ResponseWriter, run *benchmark.Benchmark
 		Error      string
 		Progress   string
 		ConfigLine string
+		Hardware   string
+		VLLMVer    string
+		PerSize    []benchmark.PerSizeStats
 		Results    []runResultRow
 		Summary    string
 		Warnings   []string
@@ -528,6 +567,11 @@ func (s *Server) renderRunDetail(w http.ResponseWriter, run *benchmark.Benchmark
 			"max_model_len=%d, tp=%d, gpu_mem_util=%.2f, dtype=%s, kv_cache=%s, eager=%v, quant=%s",
 			c.MaxModelLen, c.TensorParallelSize, c.GPUMemoryUtilization,
 			c.Dtype, c.KVCacheDtype, c.EnforceEager, c.QuantMethod),
+		Hardware: gpuSnapshotText(run.GPUs),
+		VLLMVer:  run.VLLMVersion,
+		// Derived from the stored results rather than read from the summary,
+		// so runs recorded before this existed get the breakdown too.
+		PerSize:  benchmark.PerSize(run.Results),
 		Warnings: run.Warnings,
 	}
 	// Progress detail is only meaningful while the run is still moving.
