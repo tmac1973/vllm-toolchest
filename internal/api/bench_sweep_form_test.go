@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
+	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 )
 
 // postJob submits the batch-job form the way the browser does.
@@ -192,19 +194,104 @@ func TestSweepSummary(t *testing.T) {
 
 // An unparseable value is rejected at submit with the parameter named, rather
 // than stored and discovered several engine loads into the job.
+//
+// htmx does not swap a non-2xx response, so a rejection sent as an HTTP error
+// is invisible to the page: the button clicks and nothing happens. The htmx
+// caller therefore gets 200 and the message; everyone else keeps the status
+// code.
 func TestSweepRejectsABadValue(t *testing.T) {
-	s := newGoldenServer(t, goldenEnvGeneric)
-	code, body := postJob(t, s, url.Values{
+	bad := url.Values{
 		"name":                {"bad"},
 		"model_ids":           {"TheBloke/Mixtral-8x7B-AWQ"},
 		"presets":             {"internal-quick"},
 		"sweep_max_model_len": {"not-a-number"},
-	})
-	if code != http.StatusBadRequest {
-		t.Errorf("status %d, want 400", code)
 	}
-	if !strings.Contains(body, "Context length") {
-		t.Errorf("the message should name the parameter: %q", body)
+
+	t.Run("htmx sees the reason", func(t *testing.T) {
+		s := newGoldenServer(t, goldenEnvGeneric)
+		code, body := postJob(t, s, bad)
+		if code != http.StatusOK {
+			t.Errorf("status %d, want 200 so htmx swaps it", code)
+		}
+		if !strings.Contains(body, "Context length") {
+			t.Errorf("the message should name the parameter: %q", body)
+		}
+		if len(s.bench.ListJobs()) != 0 {
+			t.Error("a rejected submission must not create a job")
+		}
+	})
+
+	t.Run("a plain client keeps the status code", func(t *testing.T) {
+		s := newGoldenServer(t, goldenEnvGeneric)
+		r := httptest.NewRequest(http.MethodPost, "/api/benchmark-jobs/",
+			strings.NewReader(bad.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		s.handleCreateJob(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status %d, want 400", w.Code)
+		}
+	})
+}
+
+// stubJobEnv is the least that lets SubmitJob accept a job. It never gets as
+// far as loading anything: the runner blocks on EnsureModelLoaded, and the
+// test only cares what the handler returned.
+type stubJobEnv struct{ blocked chan struct{} }
+
+func (e *stubJobEnv) ResolveModel(id string) (benchmark.ModelInfo, error) {
+	return benchmark.ModelInfo{HFRepoID: id, ServedName: id}, nil
+}
+func (e *stubJobEnv) CurrentLoadedModel() string { return "" }
+func (e *stubJobEnv) EnsureModelLoaded(ctx context.Context, _ string, _ benchmark.ConfigSnapshot) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (e *stubJobEnv) CurrentMetrics() monitor.Metrics { return monitor.Metrics{} }
+func (e *stubJobEnv) VLLMURL() string                 { return "http://127.0.0.1:1" }
+func (e *stubJobEnv) HFToken() string                 { return "" }
+func (e *stubJobEnv) HFCacheDir() string              { return "" }
+func (e *stubJobEnv) VLLMVersion() string             { return "" }
+
+// The page closes the editor on this trigger, so its absence on a rejection is
+// what keeps a bad submission's form open with its error showing.
+func TestJobSubmissionSignalsSuccessOnlyWhenItSucceeded(t *testing.T) {
+	s := newGoldenServer(t, goldenEnvGeneric)
+	s.benchSvc.SetJobEnv(&stubJobEnv{})
+	t.Cleanup(func() {
+		if id, busy := s.benchSvc.ActiveJobID(); busy {
+			s.benchSvc.CancelJob(id)
+		}
+	})
+
+	post := func(form url.Values) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/benchmark-jobs/",
+			strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		s.handleCreateJob(w, r)
+		return w
+	}
+
+	rejected := post(url.Values{"name": {"no models"}, "presets": {"internal-quick"}})
+	if got := rejected.Result().Header.Get("HX-Trigger"); got != "" {
+		t.Errorf("a rejected submission signalled %q; the form would close over the error", got)
+	}
+
+	accepted := post(url.Values{
+		"name":      {"good"},
+		"model_ids": {"TheBloke/Mixtral-8x7B-AWQ"},
+		"presets":   {"internal-quick"},
+	})
+	if got := accepted.Result().Header.Get("HX-Trigger"); got != "jobSubmitted" {
+		t.Errorf("HX-Trigger = %q, want jobSubmitted", got)
+	}
+	// The confirmation is swapped out-of-band, since the form it was
+	// submitted from is about to close.
+	if body := accepted.Body.String(); !strings.Contains(body, `hx-swap-oob="true"`) ||
+		!strings.Contains(body, "bench-notice") {
+		t.Errorf("confirmation is not an out-of-band notice: %q", body)
 	}
 }
 

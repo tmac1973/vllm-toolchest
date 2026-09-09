@@ -157,7 +157,14 @@
 {{- end}}
 {{- end}}
 
-{{define "job_started"}}<p>Started job <code>{{.}}</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>{{end}}
+{{/* Swapped out-of-band into the notice slot above the jobs list rather than
+     into the form's own result area: the form closes on success, so a
+     confirmation rendered inside it would be hidden by the same event that
+     signals success. The body is otherwise empty, which also clears whatever
+     error the previous attempt left in the form. */}}
+{{define "job_started"}}<div id="bench-notice" hx-swap-oob="true">
+  <p><ins>Started <strong>{{.Name}}</strong></ins> <small style="opacity:0.7;">&mdash; job <code>{{.ID}}</code>, listed below.</small></p>
+</div>{{end}}
 
 {{define "job_form" -}}
 <article>

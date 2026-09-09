@@ -59,17 +59,31 @@ type createJobRequest struct {
 }
 
 // handleCreateJob persists a new batch job and dispatches it.
+// jobFail reports a rejected job submission. htmx does not swap a non-2xx
+// response, so an htmx caller given http.Error sees nothing at all — the
+// button clicks, the form sits there, and the reason is only in the network
+// tab. It gets 200 and the error partial instead; everything else keeps real
+// status codes.
+func (s *Server) jobFail(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if isHTMX(r) {
+		respondHTML(w)
+		s.renderPartial(w, "error_message", msg)
+		return
+	}
+	http.Error(w, msg, status)
+}
+
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	var req createJobRequest
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "json") {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			s.jobFail(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 	} else {
 		if err := r.ParseForm(); err != nil {
-			http.Error(w, "invalid form", http.StatusBadRequest)
+			s.jobFail(w, r, http.StatusBadRequest, "invalid form")
 			return
 		}
 		req.Name = r.FormValue("name")
@@ -90,7 +104,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			}
 			values, err := benchmark.ParseSweepValues(f, raw)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				s.jobFail(w, r, http.StatusBadRequest, err.Error())
 				return
 			}
 			if len(values) > 0 {
@@ -100,11 +114,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(req.ModelIDs) == 0 {
-		http.Error(w, "at least one model is required", http.StatusBadRequest)
+		s.jobFail(w, r, http.StatusBadRequest, "at least one model is required")
 		return
 	}
 	if len(req.Presets) == 0 {
-		http.Error(w, "at least one preset is required", http.StatusBadRequest)
+		s.jobFail(w, r, http.StatusBadRequest, "at least one preset is required")
 		return
 	}
 	if req.Name == "" {
@@ -113,12 +127,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	for _, m := range req.ModelIDs {
 		if _, ok := s.registry.Get(m); !ok {
-			http.Error(w, "model not registered: "+m, http.StatusBadRequest)
+			s.jobFail(w, r, http.StatusBadRequest, "model not registered: "+m)
 			return
 		}
 	}
 	if err := benchmark.ValidateSweeps(req.Sweeps); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.jobFail(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	presetSet := map[string]bool{}
@@ -127,7 +141,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range req.Presets {
 		if !presetSet[p] {
-			http.Error(w, "unknown preset: "+p, http.StatusBadRequest)
+			s.jobFail(w, r, http.StatusBadRequest, "unknown preset: "+p)
 			return
 		}
 	}
@@ -147,7 +161,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.bench.SaveJob(job); err != nil {
-		http.Error(w, "save job: "+err.Error(), http.StatusInternalServerError)
+		s.jobFail(w, r, http.StatusInternalServerError, "save job: "+err.Error())
 		return
 	}
 
@@ -156,10 +170,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		job.Status = benchmark.JobStatusFailed
 		_ = s.bench.SaveJob(job)
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.jobFail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -169,8 +183,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
+	// Tells the page the submission took, so it can close the form. Without
+	// it the editor stays open over a confirmation it is hiding, which reads
+	// as nothing having happened.
+	w.Header().Set("HX-Trigger", "jobSubmitted")
 	w.WriteHeader(http.StatusAccepted)
-	s.renderPartial(w, "job_started", job.ID)
+	s.renderPartial(w, "job_started", struct {
+		ID   string
+		Name string
+	}{job.ID, job.Name})
 }
 
 // handleCancelJob cancels the in-flight job with the given id.

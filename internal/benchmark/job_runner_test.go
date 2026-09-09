@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -113,15 +114,28 @@ func TestJobFinalStatus(t *testing.T) {
 	}
 }
 
-// fakeJobEnv tracks how many times each model was loaded so the test can
-// verify the model-grouped pass loads each model exactly once.
+// fakeJobEnv records what was loaded and with which configuration, so tests
+// can check both that a model is loaded once per configuration and that the
+// configuration asked for is the one that took effect.
 type fakeJobEnv struct {
-	mu          sync.Mutex
-	loaded      string
+	mu     sync.Mutex
+	loaded string
+	// loadedCfg is the configuration the current load was started with. The
+	// real environment compares the engine's launch arguments; this compares
+	// the snapshot those arguments are built from, which is the same question
+	// asked one level up.
+	loadedCfg   ConfigSnapshot
 	loadCounts  map[string]*int32
+	loadLog     []loadEvent
 	vllmURL     string
 	models      map[string]ModelInfo
 	vllmVersion string
+}
+
+// loadEvent is one engine start the runner asked for.
+type loadEvent struct {
+	ModelID string
+	Config  ConfigSnapshot
 }
 
 func newFakeJobEnv(url string) *fakeJobEnv {
@@ -151,11 +165,16 @@ func (f *fakeJobEnv) CurrentLoadedModel() string {
 
 func (f *fakeJobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg ConfigSnapshot) error {
 	f.mu.Lock()
-	if f.loaded == modelID {
+	// Model *and* configuration, matching the real implementation: every
+	// sweep axis is a launch parameter, so the same model at a different
+	// context length is a different engine and has to be reloaded.
+	if f.loaded == modelID && f.loadedCfg == cfg {
 		f.mu.Unlock()
 		return nil
 	}
 	f.loaded = modelID
+	f.loadedCfg = cfg
+	f.loadLog = append(f.loadLog, loadEvent{ModelID: modelID, Config: cfg})
 	counter, ok := f.loadCounts[modelID]
 	if !ok {
 		var c int32
@@ -165,6 +184,13 @@ func (f *fakeJobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg 
 	f.mu.Unlock()
 	atomic.AddInt32(counter, 1)
 	return nil
+}
+
+// loads returns the engine starts the runner asked for, in order.
+func (f *fakeJobEnv) loads() []loadEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]loadEvent(nil), f.loadLog...)
 }
 
 func (f *fakeJobEnv) CurrentMetrics() monitor.Metrics { return monitor.Metrics{} }
@@ -320,4 +346,87 @@ func waitForNoActiveRun(t *testing.T, svc *Service) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Error("run did not finish within 5s of being cancelled")
+}
+
+// A sweep reloads the engine for every distinct configuration.
+//
+// This is the bug that produced a run recorded at max_model_len=65536 while
+// vLLM reported "This model's maximum context length is 8192 tokens": the
+// loaded-check compared the model id alone, so the second and every later
+// sweep point was reported as already loaded and measured against whatever
+// the first one started. Each run still recorded the configuration it asked
+// for, so the numbers looked fine and were attributed to settings that were
+// never in effect.
+func TestSweepReloadsForEachConfiguration(t *testing.T) {
+	fv := &fakeVLLM{
+		firstDelay: 2 * time.Millisecond, followDelay: time.Millisecond,
+		numChunks: 4, usagePrompt: 32, usageGen: 8,
+	}
+	srv := httptest.NewServer(fv.handler())
+	defer srv.Close()
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	store := NewStore(dir)
+	env := newFakeJobEnv(srv.URL)
+	svc := NewService(store)
+	svc.SetJobEnv(env)
+
+	sweeps := []SweepAxis{{Field: "max_model_len", Values: []string{"8192", "65536"}}}
+	job := BenchmarkJob{
+		ID: "sweep-job", Name: "ctx sweep", Kind: JobKindBatch,
+		Status: JobStatusPending, CreatedAt: time.Now(),
+		ModelIDs: []string{"a"}, Presets: []string{"internal-quick"},
+		Sweeps: sweeps,
+		Cells:  ExpandCells([]string{"a"}, []string{"internal-quick"}, sweeps),
+	}
+	if err := store.SaveJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SubmitJob(job); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, busy := svc.ActiveJobID(); !busy {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, busy := svc.ActiveJobID(); busy {
+		t.Fatal("job never finished")
+	}
+
+	loads := env.loads()
+	if len(loads) != 2 {
+		t.Fatalf("expected one engine load per sweep point, got %d: %+v", len(loads), loads)
+	}
+	got := []int{loads[0].Config.MaxModelLen, loads[1].Config.MaxModelLen}
+	if got[0] == got[1] {
+		t.Fatalf("both loads used max_model_len=%d; the second sweep point never took effect", got[0])
+	}
+	want := map[int]bool{8192: true, 65536: true}
+	for _, v := range got {
+		if !want[v] {
+			t.Errorf("unexpected max_model_len %d among loads %v", v, got)
+		}
+		delete(want, v)
+	}
+
+	// And every run records the configuration it was actually measured at.
+	runs := store.RunsForJob("sweep-job")
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(runs))
+	}
+	for _, r := range runs {
+		want := r.SweepValues["max_model_len"]
+		if want == "" {
+			t.Errorf("run %s has no recorded sweep value", r.ID)
+			continue
+		}
+		if got := strconv.Itoa(r.Config.MaxModelLen); got != want {
+			t.Errorf("run %s recorded max_model_len=%s but its sweep point was %s", r.ID, got, want)
+		}
+	}
 }

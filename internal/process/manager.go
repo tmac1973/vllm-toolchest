@@ -36,6 +36,13 @@ type Status struct {
 	StartedAt time.Time `json:"started_at,omitempty"`
 	Uptime    string    `json:"uptime,omitempty"`
 	Error     string    `json:"error,omitempty"`
+
+	// Args is the flag list the running engine was launched with, after the
+	// model path and host/port. Recorded because "is the right thing running?"
+	// cannot be answered by the model id alone: a benchmark sweep serves one
+	// model at several context lengths, and every one of those is the same
+	// model with different arguments.
+	Args []string `json:"args,omitempty"`
 }
 
 // Launcher is the argv prefix used to start a server. The generic image runs
@@ -52,10 +59,12 @@ var DefaultLauncher = Launcher{Bin: "vllm", Args: []string{"serve"}}
 
 // Manager manages a single vLLM process.
 type Manager struct {
-	mu         sync.RWMutex
-	cmd        *exec.Cmd
-	state      State
-	modelID    string
+	mu      sync.RWMutex
+	cmd     *exec.Cmd
+	state   State
+	modelID string
+	// args is the flag list the running process was launched with; see Status.
+	args       []string
 	pid        int
 	startedAt  time.Time
 	lastError  string
@@ -105,6 +114,7 @@ func (m *Manager) GetStatus() Status {
 		State:   m.state,
 		ModelID: m.modelID,
 		PID:     m.pid,
+		Args:    append([]string(nil), m.args...),
 	}
 	if m.state == StateRunning || m.state == StateStarting {
 		s.StartedAt = m.startedAt
@@ -125,6 +135,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	}
 	m.state = StateStarting
 	m.modelID = modelID
+	m.args = append([]string(nil), args...)
 	m.lastError = ""
 	m.startedAt = time.Now()
 	m.mu.Unlock()

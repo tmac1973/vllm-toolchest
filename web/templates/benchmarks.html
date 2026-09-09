@@ -156,6 +156,9 @@ Benchmark inference performance with structured results, multi-run comparison, a
 </details>
 
 <h2 style="margin-top:1.5rem;">Jobs &amp; runs</h2>
+{{/* Where a submission confirmation lands, out-of-band, so it survives the
+     form closing. */}}
+<div id="bench-notice"></div>
 <div id="comparison-view"></div>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"
@@ -175,6 +178,20 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
       evt.detail.requestConfig.verb === 'post') {
     htmx.trigger('body', 'benchStarted');
   }
+});
+
+/* Close the batch-job editor once the job is away, and put the list it landed
+   in where the eye already is. The server sends jobSubmitted only on success,
+   so a rejected submission leaves the form open with its error showing. */
+document.body.addEventListener('jobSubmitted', function () {
+  var form = document.getElementById('bench-job-form');
+  if (!form) return;
+  var d = form.closest('details');
+  if (d) d.open = false;
+  var result = document.getElementById('bench-job-result');
+  if (result) result.innerHTML = '';
+  var notice = document.getElementById('bench-notice');
+  if (notice) notice.scrollIntoView({behavior: 'smooth', block: 'center'});
 });
 
 // --- Cell selection ---------------------------------------------------
