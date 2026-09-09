@@ -272,6 +272,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/", s.handleCreateJob)
 			r.Get("/form", s.handleJobForm)
 			r.Get("/{id}", s.handleGetJob)
+			r.Put("/{id}", s.handleUpdateJob)
 			r.Get("/{id}/export", s.handleExportJob)
 			r.Delete("/{id}", s.handleDeleteJob)
 			r.Post("/{id}/cancel", s.handleCancelJob)

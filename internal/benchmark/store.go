@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -264,6 +265,110 @@ func (s *Store) SaveJob(job BenchmarkJob) error {
 	}
 	s.jobs = append(s.jobs, job)
 	return s.save()
+}
+
+// JobDefinition is the part of a job an edit may change: what to measure.
+// Everything else — the id, the cells, the results — is a consequence.
+type JobDefinition struct {
+	Name        string
+	Description string
+	ModelIDs    []string
+	Presets     []string
+	Overrides   *ConfigOverrides
+	Sweeps      []SweepAxis
+}
+
+// UpdateJobDefinition rewrites a job in place and returns it ready to submit
+// again. This is what "Edit & re-run" does: the job keeps its identity, so
+// re-running after a tweak does not leave a trail of near-duplicate jobs with
+// names ending in "(re-run) (re-run)".
+//
+// Two things are deliberately preserved:
+//
+//   - A cell that survives the edit unchanged and had completed keeps its
+//     result. Re-running a job to fix one failed cell, or to add a value to a
+//     sweep, should not re-measure everything that already worked — those are
+//     the expensive engine loads.
+//   - A run whose cell did not survive is reassigned to the ad-hoc job rather
+//     than deleted. It measured something real; the job it belonged to has
+//     simply stopped claiming it.
+func (s *Store) UpdateJobDefinition(id string, def JobDefinition) (*BenchmarkJob, error) {
+	if id == AdhocJobID {
+		return nil, errors.New("cannot edit the synthetic ad-hoc job")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := -1
+	for i := range s.jobs {
+		if s.jobs[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, fmt.Errorf("job not found: %s", id)
+	}
+	job := s.jobs[idx]
+
+	prev := make(map[string]JobCell, len(job.Cells))
+	for _, c := range job.Cells {
+		prev[cellIdentity(c)] = c
+	}
+
+	cells := ExpandCells(def.ModelIDs, def.Presets, def.Sweeps)
+	kept := map[string]bool{}
+	for i := range cells {
+		old, ok := prev[cellIdentity(cells[i])]
+		if !ok || old.Status != CellStatusCompleted {
+			continue
+		}
+		cells[i] = old
+		if old.BenchmarkRunID != "" {
+			kept[old.BenchmarkRunID] = true
+		}
+	}
+
+	for i := range s.runs {
+		if s.runs[i].JobID == id && !kept[s.runs[i].ID] {
+			s.runs[i].JobID = AdhocJobID
+		}
+	}
+
+	job.Name = def.Name
+	job.Description = def.Description
+	job.ModelIDs = def.ModelIDs
+	job.Presets = def.Presets
+	job.Overrides = def.Overrides
+	job.Sweeps = def.Sweeps
+	job.Cells = cells
+	job.Status = JobStatusPending
+	job.StartedAt = time.Time{}
+	job.FinishedAt = time.Time{}
+	s.jobs[idx] = job
+
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	out := job
+	return &out, nil
+}
+
+// cellIdentity is what makes two cells the same measurement: the model, the
+// preset, and the sweep point. Sweep values are key-sorted so a map's
+// iteration order cannot make a cell fail to match itself.
+func cellIdentity(c JobCell) string {
+	keys := make([]string, 0, len(c.SweepValues))
+	for k := range c.SweepValues {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+c.SweepValues[k])
+	}
+	return c.ModelID + "\x00" + c.Preset + "\x00" + strings.Join(parts, ",")
 }
 
 // DeleteJob removes a job. With DeleteCascade the job's runs are also

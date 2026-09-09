@@ -73,18 +73,20 @@ func (s *Server) jobFail(w http.ResponseWriter, r *http.Request, status int, msg
 	http.Error(w, msg, status)
 }
 
-func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+// parseJobRequest reads a job definition from JSON or the form. Shared by
+// create and update so the two cannot drift on what a field means.
+func (s *Server) parseJobRequest(w http.ResponseWriter, r *http.Request) (createJobRequest, bool) {
 	var req createJobRequest
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "json") {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.jobFail(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return
+			return req, false
 		}
 	} else {
 		if err := r.ParseForm(); err != nil {
 			s.jobFail(w, r, http.StatusBadRequest, "invalid form")
-			return
+			return req, false
 		}
 		req.Name = r.FormValue("name")
 		req.Description = r.FormValue("description")
@@ -105,7 +107,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			values, err := benchmark.ParseSweepValues(f, raw)
 			if err != nil {
 				s.jobFail(w, r, http.StatusBadRequest, err.Error())
-				return
+				return req, false
 			}
 			if len(values) > 0 {
 				req.Sweeps = append(req.Sweeps, benchmark.SweepAxis{Field: f.Name, Values: values})
@@ -113,13 +115,19 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	return req, true
+}
+
+// validateJobRequest checks a definition is runnable, reporting the first
+// problem. Shared by create and update for the same reason as the parse.
+func (s *Server) validateJobRequest(w http.ResponseWriter, r *http.Request, req createJobRequest) bool {
 	if len(req.ModelIDs) == 0 {
 		s.jobFail(w, r, http.StatusBadRequest, "at least one model is required")
-		return
+		return false
 	}
 	if len(req.Presets) == 0 {
 		s.jobFail(w, r, http.StatusBadRequest, "at least one preset is required")
-		return
+		return false
 	}
 	if req.Name == "" {
 		req.Name = fmt.Sprintf("Batch %s", time.Now().Format("2006-01-02 15:04"))
@@ -128,12 +136,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	for _, m := range req.ModelIDs {
 		if _, ok := s.registry.Get(m); !ok {
 			s.jobFail(w, r, http.StatusBadRequest, "model not registered: "+m)
-			return
+			return false
 		}
 	}
 	if err := benchmark.ValidateSweeps(req.Sweeps); err != nil {
 		s.jobFail(w, r, http.StatusBadRequest, err.Error())
-		return
+		return false
 	}
 	presetSet := map[string]bool{}
 	for _, p := range benchmark.Presets() {
@@ -142,8 +150,23 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	for _, p := range req.Presets {
 		if !presetSet[p] {
 			s.jobFail(w, r, http.StatusBadRequest, "unknown preset: "+p)
-			return
+			return false
 		}
+	}
+
+	return true
+}
+
+func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	req, ok := s.parseJobRequest(w, r)
+	if !ok {
+		return
+	}
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("Batch %s", time.Now().Format("2006-01-02 15:04"))
+	}
+	if !s.validateJobRequest(w, r, req) {
+		return
 	}
 
 	job := benchmark.BenchmarkJob{
@@ -192,6 +215,64 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		ID   string
 		Name string
 	}{job.ID, job.Name})
+}
+
+// handleUpdateJob rewrites a job's definition and runs it again. This is what
+// the form's Edit & re-run submits to.
+//
+// The job keeps its id, so editing and re-running does not accumulate
+// near-duplicate jobs. Cells that survive the edit and had completed keep
+// their results — the point of an edit is usually to change one thing, and
+// re-measuring the rest costs an engine load each.
+func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == benchmark.AdhocJobID {
+		s.jobFail(w, r, http.StatusBadRequest, "the Ad-Hoc Runs list is not a job that can be edited")
+		return
+	}
+
+	req, ok := s.parseJobRequest(w, r)
+	if !ok {
+		return
+	}
+	if !s.validateJobRequest(w, r, req) {
+		return
+	}
+
+	updated, err := s.bench.UpdateJobDefinition(id, benchmark.JobDefinition{
+		Name:        req.Name,
+		Description: req.Description,
+		ModelIDs:    req.ModelIDs,
+		Presets:     req.Presets,
+		Overrides:   req.Overrides,
+		Sweeps:      req.Sweeps,
+	})
+	if err != nil {
+		s.jobFail(w, r, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if err := s.benchSvc.SubmitJob(*updated); err != nil {
+		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
+			s.jobFail(w, r, http.StatusConflict, err.Error())
+			return
+		}
+		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if !isHTMX(r) {
+		w.WriteHeader(http.StatusAccepted)
+		respondJSON(w, map[string]any{"id": updated.ID, "status": updated.Status})
+		return
+	}
+	respondHTML(w)
+	w.Header().Set("HX-Trigger", "jobSubmitted")
+	w.WriteHeader(http.StatusAccepted)
+	s.renderPartial(w, "job_started", struct {
+		ID   string
+		Name string
+	}{updated.ID, updated.Name})
 }
 
 // handleCancelJob cancels the in-flight job with the given id.
@@ -333,12 +414,15 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 	chosenModels := map[string]bool{}
 	chosenPresets := map[string]bool{}
 	sweepValues := map[string][]string{}
-	name, description, fromName := "", "", ""
+	name, description, fromName, fromID := "", "", "", ""
 	if from != nil {
 		fromName = from.Name
-		// A re-run is a new job, so the name gets a marker rather than
-		// silently colliding with the one it came from.
-		name = from.Name + " (re-run)"
+		fromID = from.ID
+		// The name is kept as-is: an edit re-runs this job rather than
+		// creating another, so there is nothing to disambiguate it from.
+		// Appending a marker here is what produced names like
+		// "test run (re-run) (re-run)".
+		name = from.Name
 		description = from.Description
 		for _, m := range from.ModelIDs {
 			chosenModels[m] = true
@@ -402,6 +486,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 	respondHTML(w)
 	s.renderPartial(w, "job_form", struct {
 		FromJob     string
+		FromID      string
 		Name        string
 		Description string
 		Models      []jobFormChoice
@@ -411,6 +496,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 		MaxCells    int
 	}{
 		FromJob:     fromName,
+		FromID:      fromID,
 		Name:        name,
 		Description: description,
 		Models:      models,

@@ -1,7 +1,9 @@
 <article>
   <header><strong>New batch job</strong></header>
+  
   <form id="new-job-form" data-max-cells="64"
-        hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded"
+        hx-post="/api/benchmark-jobs/"
+        hx-encoding="application/x-www-form-urlencoded"
         hx-target="#bench-job-result" hx-swap="innerHTML">
     <label>Name <input type="text" name="name" value="" placeholder="Quant compare"></label>
     <label>Description <input type="text" name="description" value="" placeholder="optional"></label>

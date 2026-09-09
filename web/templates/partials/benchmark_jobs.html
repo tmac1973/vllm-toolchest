@@ -169,8 +169,17 @@
 {{define "job_form" -}}
 <article>
   <header><strong>{{if .FromJob}}Edit &amp; re-run: {{.FromJob}}{{else}}New batch job{{end}}</strong></header>
+  {{- if .FromJob}}
+  <p><small style="opacity:0.7;">This re-runs the same job rather than making another. Cells that
+    still match and already completed keep their results, so only what changed is measured again;
+    results that no longer belong move to Ad-Hoc Runs rather than being lost.</small></p>
+  {{- end}}
+  {{/* PUT when editing so the job keeps its id, POST otherwise. Two attributes
+       rather than one templated verb: htmx reads the method from which
+       attribute is present. */}}
   <form id="new-job-form" data-max-cells="{{.MaxCells}}"
-        hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded"
+        {{if .FromID}}hx-put="/api/benchmark-jobs/{{.FromID}}"{{else}}hx-post="/api/benchmark-jobs/"{{end}}
+        hx-encoding="application/x-www-form-urlencoded"
         hx-target="#bench-job-result" hx-swap="innerHTML">
     <label>Name <input type="text" name="name" value="{{.Name}}" placeholder="Quant compare"></label>
     <label>Description <input type="text" name="description" value="{{.Description}}" placeholder="optional"></label>

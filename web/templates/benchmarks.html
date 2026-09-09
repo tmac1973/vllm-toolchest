@@ -162,19 +162,21 @@ Benchmark inference performance with structured results, multi-run comparison, a
 <div id="comparison-view"></div>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"
-         hx-trigger="load, benchStarted from:body, jobChanged from:body"
+         hx-trigger="load, benchStarted from:body, jobSubmitted from:body, jobChanged from:body"
          hx-swap="innerHTML">
   <p style="opacity:0.6;">Loading…</p>
 </section>
 
 <script>
-// Refresh the job list when a new run or job starts.
+/* Refresh the list when an ad-hoc run starts. Batch jobs signal themselves
+   with HX-Trigger jobSubmitted, which covers both creating one and editing an
+   existing one — matching on path and verb here would have missed the PUT an
+   edit sends. */
 document.body.addEventListener('htmx:afterRequest', function(evt) {
   if (evt.detail && evt.detail.xhr &&
       evt.detail.xhr.status === 202 &&
       evt.detail.requestConfig &&
-      (evt.detail.requestConfig.path === '/api/benchmarks/' ||
-       evt.detail.requestConfig.path === '/api/benchmark-jobs/') &&
+      evt.detail.requestConfig.path === '/api/benchmarks/' &&
       evt.detail.requestConfig.verb === 'post') {
     htmx.trigger('body', 'benchStarted');
   }
