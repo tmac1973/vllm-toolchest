@@ -1,0 +1,66 @@
+{{define "dashboard_cards" -}}
+<article>
+    <header>GPU</header>
+    {{if not .GPUs}}<p>No GPU detected</p>{{end}}
+    {{- range .GPUs}}
+    <p><strong>{{.Name}}</strong></p>
+    <p>VRAM: {{printf "%.1f" .UsedGB}} / {{printf "%.1f" .TotalGB}} GB</p>
+    {{if .Versions}}<p>{{.Versions}}</p>{{end}}
+    {{- end}}
+</article>
+<article>
+    <header>Models</header>
+    <p><strong>{{.ModelCount}}</strong> model{{if ne .ModelCount 1}}s{{end}} registered</p>
+    <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
+</article>
+<article>
+    <header>API Endpoint</header>
+    <p style="display:flex;align-items:center;gap:0.3rem;">
+        <code style="user-select:all;">{{.APIURL}}</code>
+        <button type="button" class="action-icon" title="Copy endpoint"
+                data-copy="{{.APIURL}}" onclick="copyFromButton(this)">{{template "icon_copy"}}</button>
+    </p>
+    {{- if .ServedModel}}
+    <p style="display:flex;align-items:center;gap:0.3rem;">
+        <small>Serving</small> <code style="user-select:all;">{{.ServedModel}}</code>
+        <button type="button" class="action-icon" title="Copy model name"
+                data-copy="{{.ServedModel}}" onclick="copyFromButton(this)">{{template "icon_copy"}}</button>
+    </p>
+    {{- end}}
+    <p>Tool use: {{if .ToolUseEnabled}}<ins>enabled</ins>{{else}}disabled{{end}}</p>
+    <p><a href="/settings">Settings &rarr;</a></p>
+</article>
+{{- end}}
+
+{{/* The vLLM process state as a coloured word. Takes the state string. */}}
+{{define "service_badge"}}
+{{- if eq . "running"}}<ins>Running</ins>
+{{- else if eq . "starting"}}<mark>Starting...</mark>
+{{- else if eq . "stopping"}}<mark>Stopping...</mark>
+{{- else if eq . "error"}}<del>Error</del>
+{{- else}}Stopped
+{{- end}}
+{{- end}}
+
+{{define "service_status" -}}
+<div>
+  <p>Status: {{template "service_badge" .State}}</p>
+  {{- if .ModelID}}
+  <p>Model: <strong>{{.ModelID}}</strong></p>
+  {{- end}}
+  {{- if .Uptime}}
+  <p>Uptime: {{.Uptime}} (PID: {{.PID}})</p>
+  {{- end}}
+  {{- if .Error}}
+  <p><small><del>{{.Error}}</del></small></p>
+  {{- end}}
+</div>
+{{- /* Once the state settles, wipe the start/stop message that was left
+       behind — otherwise "Stopping..." stays on screen next to "Stopped". */ -}}
+{{if .Settled}}<div id="service-action-result" hx-swap-oob="innerHTML"></div>{{end}}
+{{- end}}
+
+{{/* Icons. Defined once here and referenced by template, so the markup never
+     has to travel through Go as a string that something must decide not to
+     escape. */}}
+{{define "icon_copy"}}<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M3 11V3.5A.5.5 0 0 1 3.5 3H10"/></svg>{{end}}

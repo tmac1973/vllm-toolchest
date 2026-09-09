@@ -20,12 +20,12 @@ type VRAMEstimate struct {
 // EstimateVRAM computes VRAM requirements for a model.
 //
 // Weight memory is computed two ways and the larger wins:
-//   1. Structural — param-count × bytes-per-param. Accurate for plain
-//      transformers, but undercounts hybrid (Mamba/GDN) and MoE models
-//      because the formula only models attention + dense MLP layers.
-//   2. Disk-floor — the safetensors files on disk are roughly equal to
-//      the in-memory weight footprint. The file size is a hard lower
-//      bound for any sane quantization, so use it as a sanity floor.
+//  1. Structural — param-count × bytes-per-param. Accurate for plain
+//     transformers, but undercounts hybrid (Mamba/GDN) and MoE models
+//     because the formula only models attention + dense MLP layers.
+//  2. Disk-floor — the safetensors files on disk are roughly equal to
+//     the in-memory weight footprint. The file size is a hard lower
+//     bound for any sane quantization, so use it as a sanity floor.
 //
 // This avoids two known underestimate failure modes: the param-count
 // formula missing Mamba layers (Qwen3.5+, Jamba, Hunyuan) and unknown

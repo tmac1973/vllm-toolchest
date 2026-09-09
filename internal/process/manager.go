@@ -36,6 +36,13 @@ type Status struct {
 	StartedAt time.Time `json:"started_at,omitempty"`
 	Uptime    string    `json:"uptime,omitempty"`
 	Error     string    `json:"error,omitempty"`
+
+	// Args is the flag list the running engine was launched with, after the
+	// model path and host/port. Recorded because "is the right thing running?"
+	// cannot be answered by the model id alone: a benchmark sweep serves one
+	// model at several context lengths, and every one of those is the same
+	// model with different arguments.
+	Args []string `json:"args,omitempty"`
 }
 
 // Launcher is the argv prefix used to start a server. The generic image runs
@@ -52,10 +59,12 @@ var DefaultLauncher = Launcher{Bin: "vllm", Args: []string{"serve"}}
 
 // Manager manages a single vLLM process.
 type Manager struct {
-	mu         sync.RWMutex
-	cmd        *exec.Cmd
-	state      State
-	modelID    string
+	mu      sync.RWMutex
+	cmd     *exec.Cmd
+	state   State
+	modelID string
+	// args is the flag list the running process was launched with; see Status.
+	args       []string
 	pid        int
 	startedAt  time.Time
 	lastError  string
@@ -105,6 +114,7 @@ func (m *Manager) GetStatus() Status {
 		State:   m.state,
 		ModelID: m.modelID,
 		PID:     m.pid,
+		Args:    append([]string(nil), m.args...),
 	}
 	if m.state == StateRunning || m.state == StateStarting {
 		s.StartedAt = m.startedAt
@@ -125,6 +135,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	}
 	m.state = StateStarting
 	m.modelID = modelID
+	m.args = append([]string(nil), args...)
 	m.lastError = ""
 	m.startedAt = time.Now()
 	m.mu.Unlock()
@@ -439,6 +450,13 @@ func (m *Manager) waitForReady() {
 func BuildArgs(cfg VLLMStartConfig) []string {
 	var args []string
 
+	// Without this vLLM names the model by the path it was loaded from, so
+	// /v1/models answers "/data/models/owner/repo" and a client has to send
+	// that container-local path as its model id. Naming it explicitly makes
+	// the served name the same HuggingFace repo id the rest of the tool uses.
+	if cfg.ServedModelName != "" {
+		args = append(args, "--served-model-name", cfg.ServedModelName)
+	}
 	if cfg.Dtype != "" && cfg.Dtype != "auto" {
 		args = append(args, "--dtype", cfg.Dtype)
 	}
@@ -614,6 +632,10 @@ func ResolveModelPath(localPath string) string {
 
 // VLLMStartConfig mirrors the config fields needed to build the command.
 type VLLMStartConfig struct {
+	// ServedModelName is what vLLM will call this model in /v1/models and
+	// what clients pass in a request's "model" field. Empty leaves vLLM's
+	// own default, which is the model path.
+	ServedModelName        string
 	Dtype                  string
 	MaxModelLen            int
 	TensorParallelSize     int

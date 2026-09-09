@@ -1,0 +1,100 @@
+{{define "model_list"}}
+{{- if not .Rows -}}
+<p>No models registered. <a href="/models/browse">Download models from HuggingFace &rarr;</a></p>
+{{- else -}}
+<div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by name, quant, architecture…"
+           oninput="filterModels(this.value)" aria-label="Filter models">
+</div>
+<div class="model-card-header">
+    <div></div>
+    <div>Model</div>
+    <div>Quant</div>
+    <div>VRAM est.</div>
+    <div>Size</div>
+    <div></div>
+</div>
+<div class="model-card-list">
+{{- range .Rows}}
+    {{template "model_card" .}}
+{{- end}}
+</div>
+{{- end -}}
+{{end}}
+
+{{define "model_card" -}}
+<article class="model-card{{if .Orphaned}} model-card-orphan{{end}}"
+         id="model-card-{{.SafeID}}"
+         data-search="{{.SearchText}}">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            {{/* vLLM serves one model per process, so this is a choice among
+                 models rather than a set of them: picking one says what Start
+                 will launch, and nothing is loaded until it does. */}}
+            <input type="radio" name="active-model" style="margin:0;"
+                   {{if .Active}}checked{{end}}
+                   {{if .Orphaned}}disabled{{end}}
+                   title="{{if .Orphaned}}Model files are missing — cannot be served{{else}}Serve this model when the server starts{{end}}"
+                   {{if not .Orphaned}}
+                   hx-put="/api/models/activate?id={{.ID}}"
+                   hx-target="#model-list"
+                   hx-swap="innerHTML"
+                   {{end}}>
+        </div>
+        <div class="model-card-name">
+            {{- if .NeedsRestart}}<span title="Restart the server to serve this model instead" style="cursor:help;color:var(--pico-primary);margin-right:0.2rem;">&#x21bb;</span>{{end}}
+            {{- .DisplayName}}
+            {{- with .URL}}<a href="{{.}}" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a>{{end}}
+            {{- if .Serving}} <mark style="padding:0 0.3rem;font-size:0.75rem;">serving</mark>{{end}}
+            {{- if .ToolParser}} <mark style="padding:0 0.3rem;font-size:0.75rem;" title="Tool calling via the {{.ToolParser}} parser">tools</mark>{{end}}
+            {{- if .Orphaned}} <del>missing</del>{{end}}
+            <br><small style="opacity:0.6;">{{.ID}}</small>
+        </div>
+        <div class="model-card-quant"><kbd>{{.Quant.Method}}{{with .Quant.Width}} <span class="nowrap">{{.}}</span>{{end}}</kbd></div>
+        <div class="model-card-vram" title="Estimated VRAM at the configured context length">{{template "vram_label" .VRAM}}</div>
+        <div class="model-card-size">{{.SizeLabel}}</div>
+        <div class="model-card-actions">
+            <div role="group">
+                <button type="button" class="outline"
+                        hx-get="/api/models/config-panel?id={{.ID}}"
+                        hx-target="#config-{{.SafeID}}"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('config-{{.SafeID}}'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Configure
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            {{/* Removing a model and deleting tens of gigabytes are different
+                 acts, and the old single Delete button did both without
+                 saying so. */}}
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>{{.DisplayName}}</strong> ({{.Quant.Label}}) from the registry?</p>
+                    <p><small>Its files take {{.SizeLabel}} on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id={{.ID}}&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id={{.ID}}"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-{{.SafeID}}"></div>
+</article>
+{{- end}}

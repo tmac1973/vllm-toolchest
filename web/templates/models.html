@@ -1,22 +1,54 @@
 {{define "content"}}
-<h1>Models</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0 0.25rem 0.5rem 0;">
+    <h1 style="margin:0;">Models</h1>
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <span id="scan-result"></span>
+        <a href="/models/browse" role="button" class="outline"
+           style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;">Download New Models</a>
+        <button type="button" class="outline secondary"
+                style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;"
+                hx-post="/api/models/scan"
+                hx-target="#scan-result"
+                hx-swap="innerHTML"
+                hx-on::after-request="htmx.trigger(document.body,'modelsChanged')"
+                title="Scan the models directory for anything not yet in the registry">
+            Rescan Disk
+        </button>
+    </div>
+</div>
 
-<div id="active-downloads"
-     hx-get="/api/hf/downloads"
-     hx-trigger="load, every 2s"
+<div id="gpu-map"
+     hx-get="/api/gpu-map"
+     hx-trigger="load, every 5s"
      hx-swap="innerHTML">
 </div>
 
-<div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
-    <a href="/models/browse"><button class="outline">Download New Models</button></a>
-    <button class="secondary outline" hx-post="/api/models/scan" hx-target="#scan-result" hx-swap="innerHTML">Rescan Disk</button>
-    <span id="scan-result"></span>
+<div id="downloads-panel"
+     hx-get="/api/hf/downloads"
+     hx-trigger="load, every 3s, downloadsChanged from:body, modelsChanged from:body"
+     hx-swap="innerHTML"
+     hx-on::before-swap="if(event.detail.xhr.responseText===this.innerHTML){event.detail.shouldSwap=false;}">
 </div>
 
 <div id="model-list"
      hx-get="/api/models"
-     hx-trigger="load"
+     hx-trigger="load, modelsChanged from:body"
      hx-swap="innerHTML">
     <p aria-busy="true">Loading models...</p>
 </div>
+
+<script>
+// --- Model list: text filter ---
+// Filters the cards in place rather than round-tripping, so typing stays
+// responsive and an open configure panel is not thrown away.
+function filterModels(q) {
+    q = (q || '').trim().toLowerCase();
+    var root = document.getElementById('model-list');
+    if (!root) return;
+    root.querySelectorAll('.model-card').forEach(function(card) {
+        var matches = !q || (card.dataset.search || '').indexOf(q) !== -1;
+        card.style.display = matches ? '' : 'none';
+    });
+}
+</script>
 {{end}}

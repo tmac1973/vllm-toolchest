@@ -1,0 +1,68 @@
+<div class="job-list">
+<details class="job-row" data-job-id="j1"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Quant compare</strong>
+            <span id="job-status-j1" class="job-status status-completed" title="status: completed">completed</span>
+            <span id="job-progress-j1" class="job-progress">4/4 cells
+            </span>
+        </span>
+        <span class="job-row-line2"><small class="job-desc">FP8 vs AWQ at 32K</small>
+            <small class="job-meta">created Sep 7 18:00 · finished Sep 7 18:41
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/j1"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+<details class="job-row" data-job-id="j2"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Long context sweep</strong>
+            <span id="job-status-j2" class="job-status status-running" title="status: running">running</span>
+            <span id="job-progress-j2" class="job-progress">1/6 cells <span class="cell-failed-tag" title="failed cells">· 1 failed</span>
+            </span>
+        </span>
+        <span class="job-row-line2">
+            <small class="job-meta">created Sep 8 10:15
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/j2"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+<details class="job-row" data-job-id="adhoc"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>Ad-Hoc Runs</strong>
+            <span id="job-status-adhoc" class="job-status status-completed" title="status: completed">completed</span>
+            <span id="job-progress-adhoc" class="job-progress">22 runs
+            </span>
+        </span>
+        <span class="job-row-line2">
+            <small class="job-meta">created Apr 25 18:14
+            </small>
+        </span>
+    </summary>
+    
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/adhoc"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+</div>

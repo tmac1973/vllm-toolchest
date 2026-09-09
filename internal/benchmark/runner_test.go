@@ -162,7 +162,7 @@ func TestRunnerInternalEndToEnd(t *testing.T) {
 	cfg := RunnerConfig{
 		Run: run,
 		Preset: Preset{
-			Source: PresetSourceInternal,
+			Source:       PresetSourceInternal,
 			PromptTokens: []int{64},
 			GenTokens:    16,
 			Repetitions:  2,
@@ -228,7 +228,7 @@ func TestRunnerSkipsPromptOverMaxModelLen(t *testing.T) {
 	cfg := RunnerConfig{
 		Run: run,
 		Preset: Preset{
-			Source: PresetSourceInternal,
+			Source:       PresetSourceInternal,
 			PromptTokens: []int{64, 9999}, // second exceeds MaxModelLen
 			GenTokens:    16,
 			Repetitions:  1,
@@ -280,7 +280,7 @@ func TestRunnerCancellation(t *testing.T) {
 	runner.Run(ctx, RunnerConfig{
 		Run: BenchmarkRun{ID: "cx", Status: StatusRunning},
 		Preset: Preset{
-			Source: PresetSourceInternal,
+			Source:       PresetSourceInternal,
 			PromptTokens: []int{32}, GenTokens: 8, Repetitions: 1,
 		},
 		VLLMURL: srv.URL, ServedName: "m", MaxModelLen: 1024,

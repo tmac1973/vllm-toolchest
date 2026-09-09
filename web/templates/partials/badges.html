@@ -1,0 +1,4 @@
+{{/* Small shared bits of markup that more than one page renders. */}}
+
+{{/* A model's VRAM estimate and how it fits. Takes a vramLabel. */}}
+{{define "vram_label"}}{{if .Unknown}}—{{else}}<span style="color:{{.Color}};">{{printf "%.1f" .TotalGB}} GB<br><small>{{.FitLabel}}</small></span>{{end}}{{end}}

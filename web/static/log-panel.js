@@ -49,6 +49,13 @@ function initLogPanels() {
         if (clearBtn) {
             clearBtn.addEventListener('click', () => {
                 pre.textContent = '';
+                // Clearing only the pane leaves the server-side buffer intact,
+                // so the next page load brings everything back. A panel that
+                // names its buffer gets that emptied too.
+                const clearUrl = panel.dataset.clearUrl;
+                if (clearUrl) {
+                    fetch(clearUrl, { method: 'DELETE' }).catch(() => {});
+                }
             });
         }
     });

@@ -1,0 +1,45 @@
+
+<article style="padding:0.5rem 0.75rem;margin:0.5rem 0;">
+    <strong style="font-size:0.9rem;">Downloads</strong>
+    <div class="dl-row" style="padding:0.25rem 0;font-size:0.85rem;border-top:1px solid var(--pico-muted-border-color);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+            <span>
+                <strong>unsloth/Qwen3.8-27B-FP8</strong>
+            </span>
+            
+            <span style="display:inline-flex;gap:0.35rem;margin:0;flex:0 0 auto;">
+                <button type="button" class="outline secondary"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Stop downloading but keep what is already on disk — resume any time"
+                        hx-delete="/api/hf/download/abc123"
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Pause</button>
+            </span>
+        </div>
+        <progress value="42" max="100" style="margin:0.25rem 0;"></progress>
+        <small>12.1 GB / 28.8 GB (94.2 MB/s) &mdash; 42% &mdash; 3/7 files</small>
+    </div>
+    <div class="dl-row" style="padding:0.25rem 0;font-size:0.85rem;border-top:1px solid var(--pico-muted-border-color);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+            <span>
+                <strong>TheBloke/Mixtral-8x7B-AWQ</strong> <small>(8.4 GB on disk, 2 partial files)</small>
+            </span>
+            
+            <span style="display:inline-flex;gap:0.35rem;margin:0;flex:0 0 auto;">
+                <button type="button" class="outline"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Continue from the bytes already on disk"
+                        hx-post="/api/hf/download?model_id=TheBloke/Mixtral-8x7B-AWQ"
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Resume</button>
+                <button type="button" class="outline secondary"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Delete the partial files from disk"
+                        hx-delete="/api/hf/incomplete?model_id=TheBloke/Mixtral-8x7B-AWQ"
+                        hx-confirm="Delete the partial files for TheBloke/Mixtral-8x7B-AWQ? This cannot be undone."
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Discard</button>
+            </span>
+        </div>
+    </div>
+</article>

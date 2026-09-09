@@ -2,6 +2,16 @@
 <h1>Settings</h1>
 
 <form hx-put="/api/settings" hx-trigger="change" hx-target="#settings-save-status" hx-swap="innerHTML" hx-include="closest form">
+{{/* Marks this as the form that owns every toggle below. Without it a form
+     carrying only some of these fields would clear the rest, because an
+     unchecked checkbox submits nothing at all. */}}
+<input type="hidden" name="settings_form" value="1">
+{{/* The same argument for the runtime-environment table and the auto-start
+     toggle: each is read only when its marker is present, so a form that
+     doesn't carry them (the Server page's model picker, say) can't clear
+     them by omission. */}}
+<input type="hidden" name="runtime_env_touched" value="1">
+<input type="hidden" name="auto_start_touched" value="1">
 
 <div id="settings-save-status" style="position:fixed;top:1rem;right:1rem;z-index:100;"></div>
 
@@ -163,6 +173,86 @@
         <input type="checkbox" name="auto_restart" role="switch"{{if .AutoRestart}} checked{{end}}>
         Auto-restart vLLM on crash
     </label>
+    <label title="Start the active model when the container starts, without waiting for someone to press Start. The web UI is available immediately either way — loading happens in the background — so a model that fails to load leaves you a log to read rather than an unreachable server.">
+        <input type="checkbox" name="auto_start" role="switch"{{if .AutoStart}} checked{{end}}>
+        Auto-start the active model on container startup
+    </label>
+    <p><small style="color:var(--pico-muted-color);">
+        Auto-start launches whichever model is active on the Server page. It does
+        nothing if no model has been made active yet.
+    </small></p>
+</article>
+
+<article>
+    <header>Runtime environment</header>
+    <p>Environment variables applied to the vLLM process. They take effect the
+       next time vLLM starts, so a running model keeps the environment it was
+       launched with &mdash; restart it to pick these up.</p>
+    <p><small style="color:var(--pico-muted-color);">
+        These are applied <em>after</em> the container's own environment, so a value
+        set here replaces what the image exports. The effective environment at the
+        bottom shows what that works out to.
+    </small></p>
+    <table class="env-table">
+        <tbody>
+        {{range .RuntimeEnvRows}}
+        <tr>
+            <td title="{{.Help}}">
+                {{.Label}} <code>{{.Name}}</code>
+                {{with .PlatformsLabel}}<small class="env-platform">[{{.}}]</small>{{end}}
+            </td>
+            <td class="env-value">
+                {{if .Values}}
+                <select name="env_{{.Name}}">
+                    {{$current := .Value}}
+                    {{range .Values}}
+                    <option value="{{.}}"{{if eq . $current}} selected{{end}}>{{if eq . ""}}unset{{else}}{{.}}{{end}}</option>
+                    {{end}}
+                </select>
+                {{else}}
+                <input type="text" name="env_{{.Name}}" value="{{.Value}}" placeholder="{{if .Example}}{{.Example}}{{else}}unset{{end}}">
+                {{end}}
+            </td>
+        </tr>
+        {{end}}
+        </tbody>
+    </table>
+    <label style="margin-top:1rem;" title="Variables outside the table above, one KEY=VALUE per line. Lines starting with # are ignored. A name set both here and above takes this value. Anything is accepted, but variables that fight a mechanism this tool relies on are saved with a warning.">
+        Extra environment
+        <textarea name="runtime_env_extra" rows="3"
+                  placeholder="KEY=VALUE &mdash; one per line, # comments allowed"
+                  class="mono" style="font-size:0.85em;">{{.RuntimeEnvExtra}}</textarea>
+    </label>
+    {{range .EnvWarnings}}
+    <p><mark>&#9888; {{.}}</mark></p>
+    {{end}}
+    <label title="What the vLLM process will be launched with, on top of the container's own environment. A line marked as replacing something is overriding a value the image sets.">
+        Effective environment
+        {{if .EffectiveEnv}}
+        <pre class="effective-env">{{template "effective_env" .EffectiveEnv}}</pre>
+        {{else}}
+        <p><small style="color:var(--pico-muted-color);">Nothing set &mdash; vLLM runs with the container's environment as-is.</small></p>
+        {{end}}
+    </label>
+</article>
+
+<article>
+    <header>Storage</header>
+    <p>
+        <strong>Data directory:</strong> <code>{{.DataDir}}</code><br>
+        <small style="color:var(--pico-muted-color);">Holds the registry, benchmark history, tuned kernels and (by default)
+        models. Set at install time and not editable here &mdash; to relocate it, stop the
+        container, move the directory and change the volume mount.</small>
+    </p>
+    <label title="Where model files are downloaded to and scanned from. Leave blank to keep them under the data directory. Must be an absolute path to a directory that already exists — inside the container, which means it has to be a mounted volume.">
+        <strong>Models directory</strong>
+        <input type="text" name="models_dir" value="{{.ModelsDir}}"
+               placeholder="(default: {{.DefaultModelsDir}})" autocomplete="off" spellcheck="false">
+        <small style="color:var(--pico-muted-color);">Overrides where model files live. Leave blank to use
+        <code>{{.DefaultModelsDir}}</code>. This is a path <em>inside the container</em>, so it has to be a
+        mounted volume. <strong>Restart the container after changing this</strong> &mdash; the registry and the
+        downloader read it once, at startup.</small>
+    </label>
 </article>
 
 {{if .IsRadiance}}
@@ -288,8 +378,11 @@
 
 <article>
     <header>Theme</header>
-    <label title="Color theme for the web UI. Saved in your browser.">
+    <p>Applied immediately in this browser, and saved as the default every
+       other browser starts from.</p>
+    <label>
         <select name="theme" onchange="setTheme(this.value);">
+            <option value="graphite"{{if eq .Theme "graphite"}} selected{{end}}>Graphite</option>
             <option value="dark"{{if eq .Theme "dark"}} selected{{end}}>Dark</option>
             <option value="light"{{if eq .Theme "light"}} selected{{end}}>Light</option>
             <option value="terminal-green"{{if eq .Theme "terminal-green"}} selected{{end}}>Terminal Green</option>
@@ -300,4 +393,125 @@
 </article>
 
 </form>
+
+{{/* Outside the settings form: restore is a multipart upload to its own
+     endpoint, and a form cannot be nested inside another. */}}
+<article>
+    <header>Backup &amp; Restore</header>
+    <p>Backs up configuration &mdash; settings, the runtime environment, the
+       Radiance switches, and every model's vLLM launch config. Not models,
+       benchmark history, or tuned kernels. Model configs are keyed by
+       HuggingFace repo ID, so a backup restores onto another machine; a config
+       for a model that isn't installed there waits as pending and attaches
+       automatically when the model is downloaded.</p>
+
+    <div class="grid" style="align-items:end;">
+        <label style="margin-bottom:0;" title="Include the HuggingFace token and API key in the backup file, in plaintext. Off by default — turn it on only when you control where the file ends up.">
+            <input type="checkbox" id="backup-secrets" style="margin-right:0.4rem;">
+            Include secrets (HF token, API key)
+        </label>
+        <a id="backup-export" href="/api/backup" role="button" class="outline" style="margin-bottom:0;"
+           title="Download the backup as JSON. Also fetchable as GET /api/backup for scripting.">Export backup</a>
+    </div>
+    <script>
+    document.getElementById('backup-secrets').addEventListener('change', function () {
+        document.getElementById('backup-export').href = this.checked ? '/api/backup?secrets=1' : '/api/backup';
+    });
+    </script>
+
+    <hr>
+
+    <form hx-post="/api/restore"
+          hx-target="#restore-report"
+          hx-swap="innerHTML"
+          hx-encoding="multipart/form-data">
+        <label title="A vllm-toolchest backup JSON file. It is read in your browser and previewed below before anything is uploaded.">
+            Restore from backup
+            <input type="file" id="restore-file" name="file" accept=".json,application/json">
+        </label>
+        <div class="grid" id="restore-sections" style="grid-template-columns:repeat(4, auto);justify-content:start;gap:0.5rem 1.5rem;">
+            <label style="margin:0;"><input type="checkbox" name="sec_settings" checked style="margin-right:0.3rem;"><span id="sec-label-settings">Settings</span></label>
+            <label style="margin:0;"><input type="checkbox" name="sec_env" checked style="margin-right:0.3rem;"><span id="sec-label-env">Runtime env</span></label>
+            <label style="margin:0;"><input type="checkbox" name="sec_radiance" checked style="margin-right:0.3rem;"><span id="sec-label-radiance">Radiance</span></label>
+            <label style="margin:0;"><input type="checkbox" name="sec_models" checked style="margin-right:0.3rem;"><span id="sec-label-models">Model configs</span></label>
+        </div>
+        <p id="restore-preview-msg"><small style="color:var(--pico-muted-color);">Choose a file to preview what it contains.</small></p>
+        <button type="submit" id="restore-submit" disabled
+                title="Merge the ticked sections into this server's configuration. A restore never deletes anything.">Restore</button>
+    </form>
+    <div id="restore-report"></div>
+    <script>
+    (function () {
+        var fileInput = document.getElementById('restore-file');
+        var submit = document.getElementById('restore-submit');
+        var msg = document.getElementById('restore-preview-msg');
+        var parsedOK = false;
+
+        function boxes() {
+            return document.querySelectorAll('#restore-sections input[type=checkbox]');
+        }
+        function refreshSubmit() {
+            var any = false;
+            boxes().forEach(function (b) { if (b.checked && !b.disabled) any = true; });
+            submit.disabled = !(parsedOK && any);
+        }
+        boxes().forEach(function (b) { b.addEventListener('change', refreshSubmit); });
+
+        // A section the file does not carry is shown, disabled and unticked,
+        // rather than hidden: "Flag presets (0)" greyed out says the file has
+        // none, where a missing row would look like the page was broken.
+        function setSection(id, box, present, label) {
+            document.getElementById(id).textContent = label;
+            box.disabled = !present;
+            if (!present) box.checked = false;
+        }
+
+        fileInput.addEventListener('change', function () {
+            parsedOK = false;
+            var f = fileInput.files[0];
+            if (!f) { refreshSubmit(); return; }
+            var reader = new FileReader();
+            reader.onload = function () {
+                var b = boxes();
+                try {
+                    var d = JSON.parse(reader.result);
+                    if (d.version !== 1) throw new Error('version');
+                    var s = d.settings || {};
+                    var env = d.runtime_env || null;
+                    var envCount = 0;
+                    if (env) {
+                        envCount = Object.keys(env.curated || {}).length;
+                        (env.extra || '').split('\n').forEach(function (l) {
+                            l = l.trim();
+                            if (l && l[0] !== '#') envCount++;
+                        });
+                    }
+                    var radSet = 0;
+                    if (d.radiance) {
+                        Object.keys(d.radiance).forEach(function (k) {
+                            if (d.radiance[k]) radSet++;
+                        });
+                    }
+                    var hasSecrets = !!(s.hf_token || s.api_key);
+                    setSection('sec-label-settings', b[0], !!d.settings,
+                        'Settings' + (hasSecrets ? ' ⚠ contains secrets' : ''));
+                    setSection('sec-label-env', b[1], !!env, 'Runtime env (' + envCount + ')');
+                    setSection('sec-label-radiance', b[2], !!d.radiance, 'Radiance (' + radSet + ' set)');
+                    setSection('sec-label-models', b[3], (d.model_configs || []).length > 0,
+                        'Model configs (' + (d.model_configs || []).length + ')');
+                    parsedOK = true;
+                    msg.innerHTML = hasSecrets
+                        ? '<small><mark>&#9888; this file contains secrets (HF token / API key)</mark></small>'
+                        : '<small style="color:var(--pico-muted-color);">File looks valid. Untick anything you don\'t want restored.</small>';
+                } catch (e) {
+                    msg.innerHTML = '<small><mark>&#9888; not a backup file</mark></small>';
+                }
+                refreshSubmit();
+            };
+            reader.readAsText(f);
+        });
+        refreshSubmit();
+    })();
+    </script>
+</article>
 {{end}}

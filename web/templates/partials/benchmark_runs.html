@@ -1,0 +1,212 @@
+{{define "run_list" -}}
+{{/* These keep the collapsed Ad-Hoc Runs row honest while a run is going. The
+     row is drawn by the job list, which has no idea a run started, so without
+     them it keeps whatever badge it was rendered with — "completed" over a
+     running run, which is what the expanded list then contradicts. htmx
+     ignores an out-of-band target that is not on the page. */}}
+<span id="job-status-adhoc" hx-swap-oob="true" class="job-status status-{{if .Running}}running{{else}}completed{{end}}">
+  {{- if .Running}}running{{else}}completed{{end -}}
+</span>
+<span id="job-progress-adhoc" hx-swap-oob="true" class="job-progress">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}</span>
+{{if not .Groups -}}
+<p style="opacity:0.7;">No benchmark runs yet. Load a model and start a run from the form above.</p>
+{{- else -}}
+{{/* Polls only while something is running, and swaps itself, so an idle list
+     costs nothing and a live one keeps both the rows and the badge current. */}}
+<div class="bench-runs-container"
+     {{if .Running}}hx-get="/api/benchmark-jobs/adhoc" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  <div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by model, quant, preset, sweep&hellip;"
+           oninput="filterBenchRuns(this)" autocomplete="off">
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, false)">Collapse all</button>
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, true)">Expand all</button>
+    <button type="button" class="outline secondary" onclick="compareSelectedRuns(this)">Compare</button>
+    <button type="button" class="outline secondary"
+            title="Open charts of the selected runs — scatter, heatmap and 3D views of a sweep."
+            onclick="visualizeSelectedRuns(this)">Visualize</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'csv')">Export CSV</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'json')">Export JSON</button>
+    <button type="button" class="outline secondary" onclick="deleteSelectedRuns(this)">Delete selected</button>
+  </div>
+  <table role="grid" class="bench-runs-table">
+    <thead><tr>
+      <th style="width:2rem;"><input type="checkbox" style="margin:0;" title="Select all"
+          onchange="selectAllBenchRuns(this)"></th>
+      <th>Model</th>
+      <th>Quant</th>
+      <th>Preset</th>
+      <th>Sweep</th>
+      <th title="Prompt processing tokens/sec — higher is better.">PP t/s</th>
+      <th title="Token generation tokens/sec — the speed you feel during chat.">TG t/s</th>
+      <th title="Time to first token — lower is better.">TTFT</th>
+      <th>Status</th>
+      <th>When</th>
+      <th></th>
+    </tr></thead>
+    {{- range .Groups}}
+    {{/* One tbody per model, and a second per run, so a group header and its
+         rows stay associated without the rows having to carry the group name
+         in the DOM. */}}
+    <tbody class="bench-group-header" data-group="{{.Name}}">
+      <tr onclick="toggleBenchGroup(this.closest('tbody'))">
+        <td colspan="11"><span class="caret">&#9662;</span> <strong>{{.Name}}</strong> <small>({{len .Rows}})</small></td>
+      </tr>
+    </tbody>
+    <tbody class="bench-group-rows" data-group="{{.Name}}">
+      {{- range .Rows}}
+      <tr data-search="{{.Search}}">
+        <td><input type="checkbox" class="bench-check" value="{{.ID}}" style="margin:0;"
+                   {{if .Running}}title="Running — select to delete anyway"{{end}}></td>
+        <td><small style="opacity:0.6;">{{.ModelID}}</small></td>
+        <td>{{if .Quant}}<kbd>{{.Quant}}</kbd>{{else}}&mdash;{{end}}</td>
+        <td><small>{{.Preset}}</small></td>
+        <td><small>{{if .SweepText}}{{.SweepText}}{{else}}&mdash;{{end}}</small></td>
+        <td>{{.PPTPS}}</td>
+        <td><strong>{{.TGTPS}}</strong></td>
+        <td>{{.TTFT}}</td>
+        <td>{{template "run_status" .Status}}</td>
+        <td><small>{{.When}}</small></td>
+        <td><small>
+          {{- if .Running -}}
+          <a href="#" hx-post="/api/benchmarks/{{.ID}}/cancel" hx-confirm="Cancel this run?">cancel</a>
+          {{- else -}}
+          <a href="#" hx-get="/api/benchmarks/{{.ID}}" hx-target="#bench-detail-{{.ID}}" hx-swap="innerHTML">details</a>
+          {{- end -}}
+        </small></td>
+      </tr>
+      <tr class="bench-detail-row"><td colspan="11"><div id="bench-detail-{{.ID}}"></div></td></tr>
+      {{- end}}
+    </tbody>
+    {{- end}}
+  </table>
+</div>
+{{- end}}
+{{- end}}
+
+{{define "run_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>completed</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{define "run_detail" -}}
+<article style="margin:0.5rem 0;">
+  <header><strong>{{.Preset}}</strong> &middot; <small>{{.CreatedAt}}</small></header>
+  {{- if .Error}}
+  <p><del>error:</del> {{.Error}}</p>
+  {{- end}}
+  {{- if .Progress}}
+  <p><em>{{.Progress}}</em></p>
+  {{- end}}
+  <small>
+    <strong>config</strong>:
+    {{.ConfigLine}}
+  </small>
+  {{- if .Hardware}}
+  {{/* Which hardware produced a number is part of the number. Once the
+       machine changes, a run's own record is the only place it survives. */}}
+  <br><small><strong>hardware</strong>: {{.Hardware}}{{if .VLLMVer}} &middot; vLLM {{.VLLMVer}}{{end}}</small>
+  {{- else if .VLLMVer}}
+  <br><small><strong>vLLM</strong>: {{.VLLMVer}}</small>
+  {{- end}}
+
+  {{- if .PerSize}}
+  <p style="margin:0.6rem 0 0.2rem;"><small><strong>Results by prompt size</strong> &mdash; one row per prompt
+    length, mean &plusmn; standard deviation across repetitions. Prompt throughput climbs steeply with prompt
+    length, so the run's overall average matches none of these; this is the form comparable with figures
+    published elsewhere, which are always quoted per length.</small></p>
+  <table role="grid" style="font-size:0.85rem;">
+    <thead><tr>
+      <th title="Prompt length, llama-bench style: pp&lt;prompt tokens&gt;">Test</th>
+      <th title="Prompt processing, mean &plusmn; stddev">PP t/s</th>
+      <th title="Token generation, mean &plusmn; stddev">TG t/s</th>
+      <th title="Time to first token">TTFT</th>
+      <th title="Repetitions at this prompt length">Reps</th>
+    </tr></thead>
+    <tbody>
+    {{- range .PerSize}}
+      <tr>
+        <td><kbd>{{.Label}}</kbd></td>
+        <td><strong>{{printf "%.0f" .PromptMean}}</strong>{{if gt .Count 1}} &plusmn; {{printf "%.0f" .PromptStd}}{{end}}</td>
+        <td><strong>{{printf "%.1f" .GenMean}}</strong>{{if gt .Count 1}} &plusmn; {{printf "%.1f" .GenStd}}{{end}}</td>
+        <td>{{printf "%.0f" .TTFTMean}} ms</td>
+        <td>{{.Count}}</td>
+      </tr>
+    {{- end}}
+    </tbody>
+  </table>
+  {{- end}}
+
+  {{- if .Results}}
+  <details style="margin-top:0.4rem;">
+    <summary><small><strong>Individual requests</strong> ({{len .Results}})</small></summary>
+  <table><thead><tr>
+    <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
+  </tr></thead><tbody>
+  {{- range .Results}}
+    <tr>
+      <td>{{.N}}</td><td>{{.PromptTokens}}</td><td>{{.GenTokens}}</td><td>{{printf "%.0f" .TTFTMs}}</td><td>{{printf "%.0f" .TotalMs}}</td><td>{{printf "%.1f" .PromptTokPerSec}}</td><td>{{printf "%.1f" .GenTokPerSec}}</td>
+    </tr>
+  {{- end}}
+  </tbody></table>
+  </details>
+  {{- end}}
+  {{- if .Summary}}
+  <p><strong>summary</strong>: {{.Summary}}</p>
+  {{- end}}
+  {{- if .Warnings}}
+  <small><strong>warnings</strong>:<ul>
+  {{- range .Warnings}}
+    <li>{{.}}</li>
+  {{- end}}
+  </ul></small>
+  {{- end}}
+</article>
+{{- end}}
+
+{{define "benchmark_form" -}}
+{{if not .LoadedID -}}
+<article><em>Start a model on the <a href="/service">Service</a> page before running benchmarks.</em></article>
+{{- else -}}
+<article>
+  <header><strong>New benchmark</strong> &middot; <small>running against <code>{{.LoadedName}}</code></small></header>
+  <form hx-post="/api/benchmarks/" hx-target="#bench-start-result" hx-swap="innerHTML">
+    <input type="hidden" name="model_id" value="{{.LoadedID}}">
+    <label>Preset
+      <select name="preset" required>
+      {{- range .Presets}}<option value="{{.Name}}">{{.Label}}</option>{{end}}
+      </select>
+    </label>
+    <button type="submit">Start run</button>
+  </form>
+  <div id="bench-start-result"></div>
+</article>
+{{- end}}
+{{- end}}
+
+{{/* Swapped out-of-band into the notice above the jobs list, for the same
+     reason the batch confirmation is: the form closes on success, so anything
+     rendered inside it would be hidden by the event that signals success. */}}
+{{define "run_started"}}<div id="bench-notice" hx-swap-oob="true">
+  <p><ins>Started an ad-hoc run</ins> <small style="opacity:0.7;">&mdash; <code>{{.}}</code>, under Ad-Hoc Runs below.</small></p>
+</div>{{end}}
+
+{{/* The passive timing table: what real traffic through the proxy measured. */}}
+{{define "timings_list" -}}
+{{if not . -}}
+<p style="opacity:0.6;"><small>No active inference traffic captured yet. Recent /v1/chat/completions activity will populate this.</small></p>
+{{- else -}}
+<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
+{{- range .}}
+  <tr>
+    <td><small>{{.ModelID}}</small></td>
+    <td>{{printf "%.1f" .AvgGenTPS}} t/s</td>
+    <td>{{.Count}}</td>
+    <td><small>{{.LastSeen}}</small></td>
+  </tr>
+{{- end}}
+</tbody></table>
+{{- end}}
+{{- end}}

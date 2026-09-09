@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderJobList(w, s, jobs)
+	s.renderJobList(w, jobs)
 }
 
 // handleGetJob returns one job with its cells. Dual-mode.
@@ -36,45 +37,97 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderJobDetail(w, s, job)
+	// The ad-hoc job is a container for individually-started runs, not a cell
+	// matrix, and the questions asked of it are different: which model, when,
+	// and how did these compare — not which cell of a sweep failed. So it gets
+	// the grouped run list rather than the cell table.
+	if job.ID == benchmark.AdhocJobID {
+		s.renderRunList(w, s.bench.RunsForJob(benchmark.AdhocJobID))
+		return
+	}
+	s.renderJobDetail(w, job)
 }
 
 // createJobRequest is the POST body for new jobs.
 type createJobRequest struct {
-	Name        string                       `json:"name"`
-	Description string                       `json:"description,omitempty"`
-	ModelIDs    []string                     `json:"model_ids"`
-	Presets     []string                     `json:"presets"`
-	Overrides   *benchmark.ConfigOverrides   `json:"overrides,omitempty"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	ModelIDs    []string                   `json:"model_ids"`
+	Presets     []string                   `json:"presets"`
+	Overrides   *benchmark.ConfigOverrides `json:"overrides,omitempty"`
+	Sweeps      []benchmark.SweepAxis      `json:"sweeps,omitempty"`
 }
 
 // handleCreateJob persists a new batch job and dispatches it.
-func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+// jobFail reports a rejected job submission. htmx does not swap a non-2xx
+// response, so an htmx caller given http.Error sees nothing at all — the
+// button clicks, the form sits there, and the reason is only in the network
+// tab. It gets 200 and the error partial instead; everything else keeps real
+// status codes.
+func (s *Server) jobFail(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if isHTMX(r) {
+		respondHTML(w)
+		s.renderPartial(w, "error_message", msg)
+		return
+	}
+	http.Error(w, msg, status)
+}
+
+// parseJobRequest reads a job definition from JSON or the form. Shared by
+// create and update so the two cannot drift on what a field means.
+func (s *Server) parseJobRequest(w http.ResponseWriter, r *http.Request) (createJobRequest, bool) {
 	var req createJobRequest
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "json") {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
+			s.jobFail(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return req, false
 		}
 	} else {
 		if err := r.ParseForm(); err != nil {
-			http.Error(w, "invalid form", http.StatusBadRequest)
-			return
+			s.jobFail(w, r, http.StatusBadRequest, "invalid form")
+			return req, false
 		}
 		req.Name = r.FormValue("name")
 		req.Description = r.FormValue("description")
 		req.ModelIDs = r.Form["model_ids"]
 		req.Presets = r.Form["presets"]
+
+		// One field per sweepable parameter, named sweep_<field>. The form
+		// submits it once per ticked checkbox, so the value arrives as a
+		// repeated field; a single comma-separated string is still accepted,
+		// which is what a hand-rolled request or an older client sends.
+		// ParseSweepValues handles both and drops duplicates, so the two
+		// shapes cannot disagree.
+		for _, f := range benchmark.SweepFields() {
+			raw := strings.Join(r.Form["sweep_"+f.Name], ",")
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			values, err := benchmark.ParseSweepValues(f, raw)
+			if err != nil {
+				s.jobFail(w, r, http.StatusBadRequest, err.Error())
+				return req, false
+			}
+			if len(values) > 0 {
+				req.Sweeps = append(req.Sweeps, benchmark.SweepAxis{Field: f.Name, Values: values})
+			}
+		}
 	}
 
+	return req, true
+}
+
+// validateJobRequest checks a definition is runnable, reporting the first
+// problem. Shared by create and update for the same reason as the parse.
+func (s *Server) validateJobRequest(w http.ResponseWriter, r *http.Request, req createJobRequest) bool {
 	if len(req.ModelIDs) == 0 {
-		http.Error(w, "at least one model is required", http.StatusBadRequest)
-		return
+		s.jobFail(w, r, http.StatusBadRequest, "at least one model is required")
+		return false
 	}
 	if len(req.Presets) == 0 {
-		http.Error(w, "at least one preset is required", http.StatusBadRequest)
-		return
+		s.jobFail(w, r, http.StatusBadRequest, "at least one preset is required")
+		return false
 	}
 	if req.Name == "" {
 		req.Name = fmt.Sprintf("Batch %s", time.Now().Format("2006-01-02 15:04"))
@@ -82,9 +135,13 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	for _, m := range req.ModelIDs {
 		if _, ok := s.registry.Get(m); !ok {
-			http.Error(w, "model not registered: "+m, http.StatusBadRequest)
-			return
+			s.jobFail(w, r, http.StatusBadRequest, "model not registered: "+m)
+			return false
 		}
+	}
+	if err := benchmark.ValidateSweeps(req.Sweeps); err != nil {
+		s.jobFail(w, r, http.StatusBadRequest, err.Error())
+		return false
 	}
 	presetSet := map[string]bool{}
 	for _, p := range benchmark.Presets() {
@@ -92,9 +149,24 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range req.Presets {
 		if !presetSet[p] {
-			http.Error(w, "unknown preset: "+p, http.StatusBadRequest)
-			return
+			s.jobFail(w, r, http.StatusBadRequest, "unknown preset: "+p)
+			return false
 		}
+	}
+
+	return true
+}
+
+func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	req, ok := s.parseJobRequest(w, r)
+	if !ok {
+		return
+	}
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("Batch %s", time.Now().Format("2006-01-02 15:04"))
+	}
+	if !s.validateJobRequest(w, r, req) {
+		return
 	}
 
 	job := benchmark.BenchmarkJob{
@@ -107,11 +179,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		ModelIDs:    req.ModelIDs,
 		Presets:     req.Presets,
 		Overrides:   req.Overrides,
-		Cells:       benchmark.ExpandCells(req.ModelIDs, req.Presets),
+		Sweeps:      req.Sweeps,
+		Cells:       benchmark.ExpandCells(req.ModelIDs, req.Presets, req.Sweeps),
 	}
 
 	if err := s.bench.SaveJob(job); err != nil {
-		http.Error(w, "save job: "+err.Error(), http.StatusInternalServerError)
+		s.jobFail(w, r, http.StatusInternalServerError, "save job: "+err.Error())
 		return
 	}
 
@@ -120,10 +193,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		job.Status = benchmark.JobStatusFailed
 		_ = s.bench.SaveJob(job)
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.jobFail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -133,8 +206,73 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
+	// Tells the page the submission took, so it can close the form. Without
+	// it the editor stays open over a confirmation it is hiding, which reads
+	// as nothing having happened.
+	w.Header().Set("HX-Trigger", "jobSubmitted")
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started job <code>%s</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs">Refresh</a></p>`, esc(job.ID))
+	s.renderPartial(w, "job_started", struct {
+		ID   string
+		Name string
+	}{job.ID, job.Name})
+}
+
+// handleUpdateJob rewrites a job's definition and runs it again. This is what
+// the form's Edit & re-run submits to.
+//
+// The job keeps its id, so editing and re-running does not accumulate
+// near-duplicate jobs. Cells that survive the edit and had completed keep
+// their results — the point of an edit is usually to change one thing, and
+// re-measuring the rest costs an engine load each.
+func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == benchmark.AdhocJobID {
+		s.jobFail(w, r, http.StatusBadRequest, "the Ad-Hoc Runs list is not a job that can be edited")
+		return
+	}
+
+	req, ok := s.parseJobRequest(w, r)
+	if !ok {
+		return
+	}
+	if !s.validateJobRequest(w, r, req) {
+		return
+	}
+
+	updated, err := s.bench.UpdateJobDefinition(id, benchmark.JobDefinition{
+		Name:        req.Name,
+		Description: req.Description,
+		ModelIDs:    req.ModelIDs,
+		Presets:     req.Presets,
+		Overrides:   req.Overrides,
+		Sweeps:      req.Sweeps,
+	})
+	if err != nil {
+		s.jobFail(w, r, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if err := s.benchSvc.SubmitJob(*updated); err != nil {
+		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
+			s.jobFail(w, r, http.StatusConflict, err.Error())
+			return
+		}
+		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if !isHTMX(r) {
+		w.WriteHeader(http.StatusAccepted)
+		respondJSON(w, map[string]any{"id": updated.ID, "status": updated.Status})
+		return
+	}
+	respondHTML(w)
+	w.Header().Set("HX-Trigger", "jobSubmitted")
+	w.WriteHeader(http.StatusAccepted)
+	s.renderPartial(w, "job_started", struct {
+		ID   string
+		Name string
+	}{updated.ID, updated.Name})
 }
 
 // handleCancelJob cancels the in-flight job with the given id.
@@ -211,183 +349,391 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleJobForm renders the new-job form partial.
-func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
-	respondHTML(w)
-	allModels := s.registry.List()
+// jobFormChoice is one checkbox in the job form.
+type jobFormChoice struct {
+	ID          string
+	Name        string
+	Description string
+	Checked     bool
+}
 
-	fmt.Fprint(w, `<article>
-  <header><strong>New batch job</strong></header>
-  <form hx-post="/api/benchmark-jobs/" hx-encoding="application/x-www-form-urlencoded" hx-target="#bench-job-result" hx-swap="innerHTML">
-    <label>Name <input type="text" name="name" placeholder="Quant compare"></label>
-    <label>Description <input type="text" name="description" placeholder="optional"></label>
+// jobFormSweep is one sweep input, pre-filled when re-running a job.
+// jobFormSweep is one parameter's row in the job form: the curated choices,
+// each marked with whether this job has it ticked.
+type jobFormSweep struct {
+	Name    string
+	Label   string
+	Help    string
+	Example string
+	Options []sweepOption
+	// Selected counts the ticked options and Summary is the text the closed
+	// menu shows. Both are rendered server-side so a form re-opened from an
+	// existing job is already correct: the browser syncs these on load too,
+	// but only after a swap, and a summary that says "use the saved value"
+	// over three ticked boxes is wrong for as long as it is on screen.
+	Selected int
+	Summary  string
+}
 
-    <label>Models</label>
-    <div>`)
+// sweepOption is one value a parameter can take.
+type sweepOption struct {
+	Value   string
+	Checked bool
+	// Custom marks a value that is not in the curated list — one a previous
+	// job set by hand. It is rendered as a ticked checkbox like any other, so
+	// re-running a job cannot silently drop a value the list does not cover.
+	Custom bool
+}
 
-	if len(allModels) == 0 {
-		fmt.Fprint(w, `<small style="opacity:0.7;">No models in the registry. <a href="/models/browse">Browse HuggingFace</a> first.</small>`)
+// sweepSummary is the one-line description of a parameter's selection shown on
+// its closed menu. It has to agree exactly with what the browser writes when
+// the selection changes — see syncParamRow in benchmarks.html — or re-opening
+// a job would show one thing until the first click and another after it.
+func sweepSummary(values []string) string {
+	switch len(values) {
+	case 0:
+		return "Use model's saved value"
+	case 1:
+		return values[0]
+	default:
+		return strings.Join(values, ", ") + " \u2014 sweep"
 	}
-	for _, m := range allModels {
+}
+
+// handleJobForm renders the batch-job form. With ?from=<id> it comes back
+// pre-filled from an existing job, which is what Edit & Re-run opens: a job
+// worth repeating is usually worth repeating with one thing changed.
+func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
+	var from *benchmark.BenchmarkJob
+	if id := r.URL.Query().Get("from"); id != "" {
+		if job, err := s.bench.GetJob(id); err == nil {
+			from = job
+		}
+	}
+
+	chosenModels := map[string]bool{}
+	chosenPresets := map[string]bool{}
+	sweepValues := map[string][]string{}
+	name, description, fromName, fromID := "", "", "", ""
+	if from != nil {
+		fromName = from.Name
+		fromID = from.ID
+		// The name is kept as-is: an edit re-runs this job rather than
+		// creating another, so there is nothing to disambiguate it from.
+		// Appending a marker here is what produced names like
+		// "test run (re-run) (re-run)".
+		name = from.Name
+		description = from.Description
+		for _, m := range from.ModelIDs {
+			chosenModels[m] = true
+		}
+		for _, p := range from.Presets {
+			chosenPresets[p] = true
+		}
+		for _, axis := range from.Sweeps {
+			sweepValues[axis.Field] = axis.Values
+		}
+	}
+
+	var models []jobFormChoice
+	for _, m := range s.registry.List() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
-		fmt.Fprintf(w, `<label><input type="checkbox" name="model_ids" value="%s"> %s <small style="opacity:0.6;">(%s)</small></label>`,
-			esc(m.ID), esc(displayNameOf(m)), esc(m.ID))
+		models = append(models, jobFormChoice{
+			ID: m.ID, Name: displayNameOf(m), Checked: chosenModels[m.ID],
+		})
 	}
 
-	fmt.Fprint(w, `</div>
-
-    <label>Presets</label>
-    <div>`)
+	var presets []jobFormChoice
 	for _, p := range benchmark.Presets() {
-		fmt.Fprintf(w, `<label><input type="checkbox" name="presets" value="%s"> <code>%s</code> <small style="opacity:0.7;">— %s</small></label>`,
-			esc(p.Name), esc(p.Name), esc(p.Description))
+		presets = append(presets, jobFormChoice{
+			Name: p.Name, Description: p.Description, Checked: chosenPresets[p.Name],
+		})
 	}
-	fmt.Fprint(w, `</div>
 
-    <button type="submit">Submit job</button>
-  </form>
-  <div id="bench-job-result"></div>
-</article>`)
+	var sweeps []jobFormSweep
+	for _, f := range benchmark.SweepFields() {
+		chosen := map[string]bool{}
+		for _, v := range sweepValues[f.Name] {
+			chosen[v] = true
+		}
+		row := jobFormSweep{Name: f.Name, Label: f.Label, Help: f.Help, Example: f.Example}
+		for _, c := range f.Choices {
+			row.Options = append(row.Options, sweepOption{Value: c, Checked: chosen[c]})
+			delete(chosen, c)
+		}
+		// Whatever is left was set by hand on the job being re-run. Appending
+		// it keeps the value visible and ticked; dropping it would silently
+		// change what the re-run measures.
+		for _, v := range sweepValues[f.Name] {
+			if chosen[v] {
+				row.Options = append(row.Options, sweepOption{Value: v, Checked: true, Custom: true})
+				delete(chosen, v)
+			}
+		}
+		var picked []string
+		for _, o := range row.Options {
+			if o.Checked {
+				row.Selected++
+				picked = append(picked, o.Value)
+			}
+		}
+		row.Summary = sweepSummary(picked)
+		sweeps = append(sweeps, row)
+	}
+
+	respondHTML(w)
+	s.renderPartial(w, "job_form", struct {
+		FromJob     string
+		FromID      string
+		Name        string
+		Description string
+		Models      []jobFormChoice
+		Presets     []jobFormChoice
+		SweepFields []jobFormSweep
+		HasSweeps   bool
+		MaxCells    int
+	}{
+		FromJob:     fromName,
+		FromID:      fromID,
+		Name:        name,
+		Description: description,
+		Models:      models,
+		Presets:     presets,
+		SweepFields: sweeps,
+		HasSweeps:   len(sweepValues) > 0,
+		MaxCells:    benchmark.MaxSweepCombinations,
+	})
 }
 
-// renderJobList renders the job-grouped table for the benchmarks page.
-func renderJobList(w http.ResponseWriter, s *Server, jobs []benchmark.BenchmarkJob) {
-	if len(jobs) == 0 {
-		fmt.Fprint(w, `<p style="opacity:0.7;">No benchmark jobs yet.</p>`)
-		return
-	}
-
-	for _, job := range jobs {
-		runs := s.bench.RunsForJob(job.ID)
-
-		cellSummary := fmt.Sprintf("%d cell(s)", len(job.Cells))
-		if len(job.Cells) > 0 {
-			done := 0
-			failed := 0
-			for _, c := range job.Cells {
-				switch c.Status {
-				case benchmark.CellStatusCompleted:
-					done++
-				case benchmark.CellStatusFailed:
-					failed++
-				}
-			}
-			cellSummary = fmt.Sprintf("%d/%d done, %d failed", done, len(job.Cells), failed)
-		}
-
-		actions := ""
-		switch job.Status {
-		case benchmark.JobStatusRunning:
-			actions = fmt.Sprintf(`<a href="#" hx-post="/api/benchmark-jobs/%s/cancel" hx-confirm="Cancel this job?">cancel</a>`, job.ID)
-		case benchmark.JobStatusFailed, benchmark.JobStatusCanceled:
-			actions = fmt.Sprintf(`<a href="#" hx-post="/api/benchmark-jobs/%s/retry-failed" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">retry failed</a>`, job.ID)
-		}
-		if job.ID != benchmark.AdhocJobID {
-			if actions != "" {
-				actions += " &middot; "
-			}
-			actions += fmt.Sprintf(
-				`<a href="#" hx-delete="/api/benchmark-jobs/%s?runs=orphan" hx-confirm="Delete job (orphan runs to ad-hoc)?" hx-target="#bench-jobs" hx-swap="none" hx-on::after-request="htmx.ajax('GET','/api/benchmark-jobs/','#bench-jobs')">delete</a>`,
-				job.ID,
-			)
-		}
-
-		fmt.Fprintf(w, `<article style="margin-bottom:1rem;">
-  <header>
-    <strong>%s</strong>
-    <small style="opacity:0.7;">&middot; %s &middot; %s &middot; %s &middot; %s</small>
-    <span style="float:right;font-size:0.85em;">%s</span>
-  </header>`,
-			esc(job.Name),
-			job.Kind,
-			statusBadgeJob(job.Status),
-			cellSummary,
-			job.CreatedAt.Format("Jan 2 15:04"),
-			actions,
-		)
-
-		if len(runs) > 0 {
-			fmt.Fprint(w, `<table style="margin-top:0.5rem;"><thead><tr>
-  <th>Model</th><th>Preset</th><th>Avg gen TPS</th><th>Avg TTFT</th><th>Status</th><th></th>
-</tr></thead><tbody>`)
-			for _, run := range runs {
-				var avgGen, avgTTFT string
-				if run.Summary != nil {
-					avgGen = fmt.Sprintf("%.1f t/s", run.Summary.AvgGenTokPerSec)
-					avgTTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
-				} else {
-					avgGen = "—"
-					avgTTFT = "—"
-				}
-				fmt.Fprintf(w, `<tr>
-  <td><small>%s</small></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
-  <td><small>
-    <a href="#" hx-get="/api/benchmarks/%s" hx-target="#bench-detail-%s" hx-swap="innerHTML">details</a>
-  </small></td>
-</tr>
-<tr><td colspan="6"><div id="bench-detail-%s"></div></td></tr>`,
-					esc(run.ModelName), run.Preset, avgGen, avgTTFT, statusBadge(run.Status),
-					run.ID, run.ID, run.ID)
-			}
-			fmt.Fprint(w, `</tbody></table>`)
-		}
-
-		fmt.Fprint(w, `</article>`)
-	}
+// jobRow is one job's collapsed summary line.
+type jobRow struct {
+	ID          string
+	Name        string
+	Description string
+	Status      string
+	IsAdhoc     bool
+	Done        int
+	Total       int
+	Failed      int
+	RunCount    int
+	CreatedAt   string
+	FinishedAt  string
 }
 
-func renderJobDetail(w http.ResponseWriter, s *Server, job *benchmark.BenchmarkJob) {
-	fmt.Fprintf(w, `<article>
-  <header><strong>%s</strong> &middot; %s &middot; %s</header>
-  <p><small>%s</small></p>
-  <table><thead><tr><th>Model</th><th>Preset</th><th>Status</th><th>Attempt</th><th>Run</th></tr></thead><tbody>`,
-		esc(job.Name), esc(job.Kind), statusBadgeJob(job.Status), esc(job.Description))
+// jobSummary counts a job's cells. The ad-hoc pseudo-job has no cells — its
+// runs arrived one at a time — so it counts runs instead.
+func (s *Server) jobSummary(job benchmark.BenchmarkJob) jobRow {
+	row := jobRow{
+		ID:          job.ID,
+		Name:        job.Name,
+		Description: job.Description,
+		Status:      job.Status,
+		IsAdhoc:     job.ID == benchmark.AdhocJobID,
+		Total:       len(job.Cells),
+	}
+	if !job.CreatedAt.IsZero() {
+		row.CreatedAt = job.CreatedAt.Format("Jan 2 15:04")
+	}
+	if !job.FinishedAt.IsZero() {
+		row.FinishedAt = job.FinishedAt.Format("Jan 2 15:04")
+	}
 	for _, c := range job.Cells {
-		runLink := "—"
-		if c.BenchmarkRunID != "" {
-			runLink = fmt.Sprintf(`<a href="#" hx-get="/api/benchmarks/%s">view</a>`, c.BenchmarkRunID)
+		switch c.Status {
+		case benchmark.CellStatusCompleted:
+			row.Done++
+		case benchmark.CellStatusFailed:
+			row.Failed++
 		}
-		errText := ""
-		if c.Error != "" {
-			errText = fmt.Sprintf(`<br><small><del>%s</del></small>`, esc(c.Error))
-		}
-		fmt.Fprintf(w, `<tr>
-  <td><small>%s</small></td><td>%s</td><td>%s%s</td><td>%d</td><td><small>%s</small></td>
-</tr>`,
-			esc(c.ModelID), c.Preset, statusBadgeCell(c.Status), errText, c.Attempt, runLink)
 	}
-	fmt.Fprint(w, `</tbody></table></article>`)
+	if row.IsAdhoc {
+		// The ad-hoc entry is synthesized with a fixed "completed" status —
+		// it is a container for individually-started runs, not something that
+		// runs. Left alone it claims completed while a run inside it is still
+		// going, which is exactly as confusing as it sounds when the row is
+		// expanded. Derive it from what it holds instead.
+		runs := s.bench.RunsForJob(job.ID)
+		row.RunCount = len(runs)
+		row.Status = benchmark.JobStatusCompleted
+		for _, r := range runs {
+			if r.Status == benchmark.StatusRunning {
+				row.Status = benchmark.JobStatusRunning
+				break
+			}
+		}
+	}
+	return row
 }
 
-func statusBadgeJob(s string) string {
-	switch s {
-	case benchmark.JobStatusRunning:
-		return `<mark>running</mark>`
-	case benchmark.JobStatusCompleted:
-		return `<ins>completed</ins>`
-	case benchmark.JobStatusFailed:
-		return `<del>failed</del>`
-	case benchmark.JobStatusCanceled:
-		return `<small>canceled</small>`
-	case benchmark.JobStatusPending:
-		return `<small>pending</small>`
-	default:
-		return s
+// renderJobList renders the collapsed job rows. Each one loads its own cells
+// on first open.
+func (s *Server) renderJobList(w http.ResponseWriter, jobs []benchmark.BenchmarkJob) {
+	rows := make([]jobRow, 0, len(jobs))
+	for _, job := range jobs {
+		rows = append(rows, s.jobSummary(job))
 	}
+	s.renderPartial(w, "job_list", rows)
 }
 
-func statusBadgeCell(s string) string {
-	switch s {
-	case benchmark.CellStatusRunning:
-		return `<mark>running</mark>`
-	case benchmark.CellStatusCompleted:
-		return `<ins>done</ins>`
-	case benchmark.CellStatusFailed:
-		return `<del>failed</del>`
-	case benchmark.CellStatusSkipped:
-		return `<small>skipped</small>`
-	default:
-		return s
+// jobCellRow is one cell of a job's matrix, joined with whatever its run
+// measured.
+type jobCellRow struct {
+	Idx        int
+	ModelName  string
+	Quant      string
+	Preset     string
+	SweepText  string
+	Status     string
+	Error      string
+	ErrorShort string
+	TGTPS      string
+	PPTPS      string
+	TTFT       string
+	Attempt    int
+	RunID      string
+}
+
+// errorSummary is the first line of an error, for a table cell. The full text
+// stays in the title attribute — a vLLM traceback is hundreds of lines and
+// would otherwise be the whole page.
+func errorSummary(err string) string {
+	if err == "" {
+		return ""
 	}
+	line := err
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	const max = 60
+	if len(line) > max {
+		line = line[:max-1] + "\u2026"
+	}
+	return line
+}
+
+func (s *Server) renderJobDetail(w http.ResponseWriter, job *benchmark.BenchmarkJob) {
+	// Runs indexed by id, so each cell can show what its attempt measured
+	// without a lookup per row.
+	runs := make(map[string]benchmark.BenchmarkRun)
+	for _, r := range s.bench.RunsForJob(job.ID) {
+		runs[r.ID] = r
+	}
+
+	summary := s.jobSummary(*job)
+	cells := job.Cells
+
+	hasSweeps := false
+	rows := make([]jobCellRow, 0, len(cells))
+	for i, c := range cells {
+		row := jobCellRow{
+			Idx:        i,
+			ModelName:  c.ModelID,
+			Preset:     c.Preset,
+			Status:     c.Status,
+			Error:      c.Error,
+			ErrorShort: errorSummary(c.Error),
+			Attempt:    c.Attempt,
+			RunID:      c.BenchmarkRunID,
+			TGTPS:      "\u2014",
+			PPTPS:      "\u2014",
+			TTFT:       "\u2014",
+		}
+		if m, ok := s.registry.Get(c.ModelID); ok {
+			row.ModelName = displayNameOf(m)
+		}
+		if run, ok := runs[c.BenchmarkRunID]; ok {
+			row.Quant = run.Quant
+			if run.Summary != nil {
+				row.TGTPS = fmt.Sprintf("%.1f", run.Summary.AvgGenTokPerSec)
+				row.PPTPS = fmt.Sprintf("%.0f", run.Summary.AvgPromptTokPerSec)
+				row.TTFT = fmt.Sprintf("%.0f ms", run.Summary.AvgTTFTMs)
+			}
+		}
+		if len(c.SweepValues) > 0 {
+			row.SweepText = sweepValuesText(c.SweepValues)
+			hasSweeps = true
+		}
+		rows = append(rows, row)
+	}
+
+	// Checkbox, model, quant, preset, status, TG, PP, TTFT, attempt, detail —
+	// plus the sweep column when there is one.
+	colSpan := 10
+	if hasSweeps {
+		colSpan++
+	}
+
+	s.renderPartial(w, "job_detail", struct {
+		jobRow
+		Running      bool
+		HasSweeps    bool
+		ColSpan      int
+		OverrideText string
+		Rows         []jobCellRow
+	}{
+		jobRow:       summary,
+		Running:      job.Status == benchmark.JobStatusRunning,
+		HasSweeps:    hasSweeps,
+		ColSpan:      colSpan,
+		OverrideText: overridesText(job.Overrides),
+		Rows:         rows,
+	})
+}
+
+// cellStatusForRun maps a run's status onto the cell vocabulary, for the
+// synthesized ad-hoc rows.
+func cellStatusForRun(status string) string {
+	switch status {
+	case benchmark.StatusCompleted:
+		return benchmark.CellStatusCompleted
+	case benchmark.StatusFailed:
+		return benchmark.CellStatusFailed
+	case benchmark.StatusRunning:
+		return benchmark.CellStatusRunning
+	}
+	return benchmark.CellStatusPending
+}
+
+// overridesText renders the config overrides a job applied on top of each
+// model's saved settings, so a surprising number has somewhere to come from.
+func overridesText(o *benchmark.ConfigOverrides) string {
+	if o == nil {
+		return ""
+	}
+	var parts []string
+	if o.MaxModelLen != nil {
+		parts = append(parts, fmt.Sprintf("max_model_len=%d", *o.MaxModelLen))
+	}
+	if o.TensorParallelSize != nil {
+		parts = append(parts, fmt.Sprintf("tensor_parallel_size=%d", *o.TensorParallelSize))
+	}
+	if o.GPUMemoryUtilization != nil {
+		parts = append(parts, fmt.Sprintf("gpu_memory_utilization=%.2f", *o.GPUMemoryUtilization))
+	}
+	if o.KVCacheDtype != nil {
+		parts = append(parts, "kv_cache_dtype="+*o.KVCacheDtype)
+	}
+	if o.EnforceEager != nil {
+		parts = append(parts, fmt.Sprintf("enforce_eager=%v", *o.EnforceEager))
+	}
+	if o.Dtype != nil {
+		parts = append(parts, "dtype="+*o.Dtype)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// sweepValuesText renders a cell's swept values in a stable order — a map
+// would otherwise reorder them on every poll.
+func sweepValuesText(values map[string]string) string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+values[k])
+	}
+	return strings.Join(parts, " ")
 }

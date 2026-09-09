@@ -66,7 +66,7 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 	// otherwise reproduce the real serve: a backend or speculative config the
 	// model needs changes how much VRAM it takes, so a probe without them
 	// measures a configuration that is never actually served.
-	cfg := m.VLLMConfig.StartConfig()
+	cfg := m.StartConfig()
 	cfg.MaxModelLen = attempt.MaxModelLen
 	cfg.TensorParallelSize = attempt.TensorParallelSize
 	cfg.GPUMemoryUtilization = attempt.GPUMemoryUtilization
@@ -80,7 +80,7 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 		[]string{"--host", e.probeHost, "--port", fmt.Sprintf("%d", e.probePort)},
 		process.BuildArgs(cfg)...,
 	))
-	env := process.BuildEnv(m.Quantization.Method, e.s.cfg.Radiance.Env()...)
+	env := e.s.launchEnv(m.Quantization.Method)
 
 	cmdCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -33,16 +33,26 @@ func (c *Client) SetToken(token string) {
 
 // ModelSearchResult is a single model from a HF Hub search.
 type ModelSearchResult struct {
-	ID           string   `json:"id"`
-	Author       string   `json:"author"`
-	Downloads    int      `json:"downloads"`
-	Likes        int      `json:"likes"`
-	Tags         []string `json:"tags"`
-	License      string   `json:"license,omitempty"`
+	ID           string     `json:"id"`
+	Author       string     `json:"author"`
+	Downloads    int        `json:"downloads"`
+	Likes        int        `json:"likes"`
+	Tags         []string   `json:"tags"`
+	License      string     `json:"license,omitempty"`
 	Private      bool       `json:"private"`
 	Gated        GatedField `json:"gated"`
 	LastModified string     `json:"lastModified,omitempty"`
 	QuantFormat  string     `json:"quant_format,omitempty"`
+
+	// Config is the repo's config.json as the Hub reports it, requested with
+	// &config=true. It carries quantization_config, which is what vLLM reads
+	// and therefore the only trustworthy answer to "what format is this?".
+	Config *ModelConfigMeta `json:"config,omitempty"`
+}
+
+// ModelConfigMeta is the part of a repo's config.json the search needs.
+type ModelConfigMeta struct {
+	QuantizationConfig *QuantConfig `json:"quantization_config,omitempty"`
 }
 
 // GatedField handles HF's gated field which can be bool (false) or string ("auto"/"manual").
@@ -83,9 +93,64 @@ type ModelGroup struct {
 // We don't filter by pipeline_tag because models may be tagged as
 // text-generation, image-text-to-text, or other tags that vLLM supports.
 // Instead we filter by the transformers library tag and sort by downloads.
-func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult, error) {
-	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50",
+// Search queries HuggingFace for models compatible with vLLM.
+//
+// quantFilter is one of QuantFilterOptions' values, or "". When it names tags,
+// they go into the query so the Hub does the filtering. That is the difference
+// between a filter and a sieve: without it the caller can only narrow whatever
+// 50 repos a broad query returned by download count, and searching "qwen" for
+// MXFP4 found nothing — not because there are none, but because none of them
+// are popular enough to reach that page.
+//
+// We don't filter by pipeline_tag because models may be tagged as
+// text-generation, image-text-to-text, or other tags that vLLM supports.
+// Instead we filter by the transformers library tag and sort by downloads.
+func (c *Client) Search(ctx context.Context, query, quantFilter string) ([]ModelSearchResult, error) {
+	tags := QuantFilterTags(quantFilter)
+	if len(tags) == 0 {
+		return c.search(ctx, query, "")
+	}
+
+	// The Hub ANDs repeated filter parameters, so a bucket covering more than
+	// one tag needs one request per tag, merged. First occurrence wins, which
+	// keeps each request's download ordering.
+	seen := make(map[string]bool)
+	var merged []ModelSearchResult
+	var firstErr error
+	for _, tag := range tags {
+		batch, err := c.search(ctx, query, tag)
+		if err != nil {
+			// One tag failing should not empty the whole bucket.
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, r := range batch {
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			merged = append(merged, r)
+		}
+	}
+	if len(merged) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return merged, nil
+}
+
+// search runs one Hub query, optionally narrowed to a tag.
+func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchResult, error) {
+	// config=true returns each repo's config.json inline. Without it the only
+	// clues to a model's format are its tags and its name, and the name is
+	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
+	// compressed-tensors, and were being labelled AWQ.
+	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50&config=true",
 		apiURL, url.QueryEscape(query))
+	if tag != "" {
+		u += "&filter=" + url.QueryEscape(tag)
+	}
 
 	var raw []ModelSearchResult
 	if err := c.getJSON(ctx, u, &raw); err != nil {
@@ -98,7 +163,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]ModelSearchResult,
 		if isGGUFOnly(r.ID, r.Tags) {
 			continue
 		}
-		r.QuantFormat = detectQuantFormat(r.ID, r.Tags)
+		r.QuantFormat = DetectQuantFormat(r.ID, r.Tags, r.Config)
 		results = append(results, r)
 	}
 
@@ -141,19 +206,19 @@ func GroupResults(results []ModelSearchResult) []ModelGroup {
 
 // ModelDetail holds detailed info about a specific model repo.
 type ModelDetail struct {
-	ID             string           `json:"id"`
-	Author         string           `json:"author"`
-	Tags           []string         `json:"tags"`
-	Gated          GatedField       `json:"gated"`
-	Files          []ModelFile      `json:"files"`
-	TotalSize      int64            `json:"total_size"`
-	Architecture   string           `json:"architecture,omitempty"`
-	QuantFormat    string           `json:"quant_format,omitempty"`
+	ID             string            `json:"id"`
+	Author         string            `json:"author"`
+	Tags           []string          `json:"tags"`
+	Gated          GatedField        `json:"gated"`
+	Files          []ModelFile       `json:"files"`
+	TotalSize      int64             `json:"total_size"`
+	Architecture   string            `json:"architecture,omitempty"`
+	QuantFormat    string            `json:"quant_format,omitempty"`
 	QuantConfig    *QuantizationInfo `json:"quant_config,omitempty"`
-	ParameterCount int64            `json:"parameter_count,omitempty"`
-	VRAMEstGB      float64          `json:"vram_est_gb,omitempty"`
-	MaxContext     int              `json:"max_context,omitempty"`
-	IsGGUFRepo     bool            `json:"is_gguf_repo"`
+	ParameterCount int64             `json:"parameter_count,omitempty"`
+	VRAMEstGB      float64           `json:"vram_est_gb,omitempty"`
+	MaxContext     int               `json:"max_context,omitempty"`
+	IsGGUFRepo     bool              `json:"is_gguf_repo"`
 }
 
 type ModelFile struct {
@@ -175,9 +240,9 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 
 	// Fetch model metadata
 	var meta struct {
-		ID     string   `json:"id"`
-		Author string   `json:"author"`
-		Tags   []string `json:"tags"`
+		ID     string     `json:"id"`
+		Author string     `json:"author"`
+		Tags   []string   `json:"tags"`
 		Gated  GatedField `json:"gated"`
 	}
 	metaURL := fmt.Sprintf("%s/models/%s", apiURL, modelID)
@@ -239,13 +304,14 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 				Bits:      cfg.QuantizationConfig.Bits,
 				GroupSize: cfg.QuantizationConfig.GroupSize,
 			}
-			detail.QuantFormat = strings.ToUpper(cfg.QuantizationConfig.QuantMethod)
 		}
 		detail.ParameterCount = estimateParamCount(cfg)
-	}
-
-	if detail.QuantFormat == "" {
-		detail.QuantFormat = detectQuantFormat(modelID, detail.Tags)
+		// Same mapping as the search row, so a model does not change format
+		// between the list and the panel that opens under it.
+		detail.QuantFormat = DetectQuantFormat(modelID, detail.Tags,
+			&ModelConfigMeta{QuantizationConfig: cfg.QuantizationConfig})
+	} else {
+		detail.QuantFormat = DetectQuantFormat(modelID, detail.Tags, nil)
 	}
 
 	// VRAM estimation
@@ -300,13 +366,7 @@ type modelConfig struct {
 	IntermediateSize      int          `json:"intermediate_size"`
 	VocabSize             int          `json:"vocab_size"`
 	MaxPositionEmbeddings int          `json:"max_position_embeddings"`
-	QuantizationConfig    *quantConfig `json:"quantization_config,omitempty"`
-}
-
-type quantConfig struct {
-	QuantMethod string `json:"quant_method"`
-	Bits        int    `json:"bits"`
-	GroupSize   int    `json:"group_size"`
+	QuantizationConfig    *QuantConfig `json:"quantization_config,omitempty"`
 }
 
 func (c *Client) fetchConfig(ctx context.Context, modelID string) (*modelConfig, error) {
@@ -387,38 +447,6 @@ func isGGUFOnly(modelID string, tags []string) bool {
 	return false
 }
 
-// detectQuantFormat detects quantization format from model ID and tags.
-func detectQuantFormat(modelID string, tags []string) string {
-	// Check tags first
-	for _, t := range tags {
-		switch strings.ToLower(t) {
-		case "gptq":
-			return "GPTQ"
-		case "awq":
-			return "AWQ"
-		case "gguf":
-			return "GGUF"
-		}
-	}
-	// Check model ID suffix
-	name := strings.ToLower(path.Base(modelID))
-	switch {
-	case strings.Contains(name, "-awq"):
-		return "AWQ"
-	case strings.Contains(name, "-gptq"):
-		return "GPTQ"
-	case strings.Contains(name, "-gguf"):
-		return "GGUF"
-	case strings.Contains(name, "-fp8"):
-		return "FP8"
-	case strings.Contains(name, "-bnb-4bit"):
-		return "BnB-4bit"
-	case strings.Contains(name, "-bnb-8bit"):
-		return "BnB-8bit"
-	}
-	return ""
-}
-
 // normalizeBaseName strips quantization suffixes for grouping.
 func normalizeBaseName(modelID string) string {
 	name := path.Base(modelID)
@@ -426,6 +454,10 @@ func normalizeBaseName(modelID string) string {
 		"-AWQ", "-awq", "-GPTQ", "-gptq", "-GGUF", "-gguf",
 		"-FP8", "-fp8", "-bnb-4bit", "-bnb-8bit", "-4bit", "-8bit",
 		"-Marlin", "-marlin",
+		"-MXFP4", "-mxfp4", "-NVFP4", "-nvfp4",
+		"-W4A16", "-w4a16", "-W8A8", "-w8a8", "-W8A16", "-w8a16",
+		"-INT4", "-int4", "-INT8", "-int8",
+		"-Quark", "-quark", "-AutoRound", "-autoround", "-auto-round",
 	}
 	for _, s := range suffixes {
 		name = strings.TrimSuffix(name, s)
@@ -503,7 +535,7 @@ func estimateParamCount(cfg *modelConfig) int64 {
 
 	// Rough formula: embedding + (attn + mlp) * layers + lm_head
 	embedding := v * h
-	attnPerLayer := 4 * h * h // Q, K, V, O projections
+	attnPerLayer := 4 * h * h    // Q, K, V, O projections
 	mlpPerLayer := 3 * h * inter // gate, up, down
 	lmHead := v * h
 

@@ -1,0 +1,12 @@
+<article>
+  <header><strong>New benchmark</strong> &middot; <small>running against <code>Qwen3.8-27B-FP8</code></small></header>
+  <form hx-post="/api/benchmarks/" hx-target="#bench-start-result" hx-swap="innerHTML">
+    <input type="hidden" name="model_id" value="unsloth/Qwen3.8-27B-FP8">
+    <label>Preset
+      <select name="preset" required><option value="internal-quick">internal-quick — 1 rep, 256-token prompt</option><option value="benchy-thorough">benchy-thorough — 3 reps</option>
+      </select>
+    </label>
+    <button type="submit">Start run</button>
+  </form>
+  <div id="bench-start-result"></div>
+</article>

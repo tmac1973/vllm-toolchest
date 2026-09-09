@@ -42,6 +42,11 @@ type BenchmarkRun struct {
 	PromptTokens []int  `json:"prompt_tokens"`
 	GenTokens    int    `json:"gen_tokens"`
 
+	// SweepValues are the swept parameters this run was measured at. A run
+	// records its own conditions so a number never has to be traced back
+	// through the job that produced it.
+	SweepValues map[string]string `json:"sweep_values,omitempty"`
+
 	Results     []BenchmarkResult   `json:"results,omitempty"`
 	Summary     *BenchmarkSummary   `json:"summary,omitempty"`
 	LlamaBenchy []LlamaBenchyResult `json:"llama_benchy,omitempty"`
@@ -68,6 +73,7 @@ type ConfigSnapshot struct {
 	EnforceEager         bool    `json:"enforce_eager"`
 	Dtype                string  `json:"dtype"`
 	QuantMethod          string  `json:"quant_method,omitempty"`
+	MaxNumSeqs           int     `json:"max_num_seqs,omitempty"`
 }
 
 // GPUSnapshot captures GPU identity at run time. VRAM-used isn't recorded

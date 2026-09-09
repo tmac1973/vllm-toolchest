@@ -12,6 +12,10 @@ services:
         ROCM_VERSION: "${ROCM_VERSION:-7.2.3}"
         GPU_ARCH: "${GPU_ARCH:-gfx1201}"
         VLLM_VERSION: "${VLLM_VERSION:-main}"
+        # Compile jobs for the two source-building stages. Empty means the
+        # builder works it out: one per core, capped by RAM. Set it in .env
+        # to pin it — lower to leave the machine usable during a build.
+        MAX_JOBS: "${MAX_JOBS:-}"
     container_name: vllm-toolchest
     ports:
       - "${VLLMCTL_PORT:-3000}:3000"

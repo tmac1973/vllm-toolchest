@@ -3,11 +3,13 @@ package api
 import (
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 )
 
@@ -16,9 +18,10 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 	dir := t.TempDir()
 	s := &Server{
 		cfg:      &config.Config{DataDir: dir, VLLMPort: 8000},
-		registry: models.NewRegistry(dir),
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		vllmEnv:  env,
 	}
+	s.initTemplates()
 
 	m := &models.Model{
 		ID:        "org/model",
@@ -46,8 +49,10 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 	return s, m
 }
 
-// The config panel is built with hand-written Printf'd HTML, where a mismatched
-// verb count silently renders "%!d(MISSING)" into the page instead of failing.
+// html/template resolves field names when it executes, not when it parses, so
+// a field renamed on the Go side renders as empty rather than failing — and the
+// control it fed silently loses its value. Execute the panel and look for the
+// fields.
 func TestModelConfigPanelRenders(t *testing.T) {
 	s, m := configTestServer(t, vllmenv.Env{
 		Variant: vllmenv.VariantRadiance, Launcher: []string{"/opt/radiance_entrypoint.sh"},
@@ -198,7 +203,12 @@ func TestConfigPanelEscapesJSONValues(t *testing.T) {
 // -influenced and reach both attributes and text in the model list.
 func TestModelListEscapesHostileNames(t *testing.T) {
 	dir := t.TempDir()
-	s := &Server{cfg: &config.Config{DataDir: dir}, registry: models.NewRegistry(dir)}
+	s := &Server{
+		cfg:      &config.Config{DataDir: dir},
+		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
+		process:  process.NewManager("127.0.0.1", 8000),
+	}
+	s.initTemplates()
 	if err := s.registry.Register(&models.Model{
 		ID:          `evil"><script>alert(1)</script>`,
 		DisplayName: `<img src=x onerror=alert(2)>`,
@@ -230,5 +240,85 @@ func TestModelListEscapesHostileNames(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %q in the escaped output", want)
 		}
+	}
+}
+
+// BitsAndBytes is not on every image: the ROCm one dropped it when its only
+// ROCm fork stopped compiling for wave32, and radiance has never carried it.
+// vLLM discovers that at load, so an option offered where it is absent turns
+// a two-second choice into a launch that dies on an import minutes later.
+func TestCompatibleQuantOptionsGateBitsAndBytes(t *testing.T) {
+	labels := func(opts []quantOption) []string {
+		var out []string
+		for _, o := range opts {
+			out = append(out, o.val+"|"+o.label)
+		}
+		return out
+	}
+	has := func(opts []quantOption, val string) bool {
+		for _, o := range opts {
+			if o.val == val {
+				return true
+			}
+		}
+		return false
+	}
+
+	// An unquantized model can be quantized at load, so BitsAndBytes is one
+	// option among several — and simply absent on an image without it.
+	withBNB := compatibleQuantOptions("none", false, 0, true)
+	if !has(withBNB, "bitsandbytes") {
+		t.Errorf("with bitsandbytes installed, it should be offered: %q", labels(withBNB))
+	}
+	withoutBNB := compatibleQuantOptions("none", false, 0, false)
+	if has(withoutBNB, "bitsandbytes") {
+		t.Errorf("without bitsandbytes, it must not be offered: %q", labels(withoutBNB))
+	}
+	// The other choices survive the gate.
+	if !has(withoutBNB, "fp8") || !has(withoutBNB, "") {
+		t.Errorf("gating removed more than BitsAndBytes: %q", labels(withoutBNB))
+	}
+
+	// A model already stored in that format is a different case: it cannot be
+	// served at all, and hiding the option would hide the reason.
+	stored := compatibleQuantOptions("bitsandbytes", false, 4, false)
+	if !has(stored, "bitsandbytes") {
+		t.Fatalf("a bnb-quantized model must still list its own format: %q", labels(stored))
+	}
+	for _, o := range stored {
+		if !strings.Contains(o.label, "not installed in this image") {
+			t.Errorf("option %q should say the image lacks it", o.label)
+		}
+	}
+	// And says nothing of the sort when it is there.
+	for _, o := range compatibleQuantOptions("bitsandbytes", false, 4, true) {
+		if strings.Contains(o.label, "not installed") {
+			t.Errorf("option %q should not warn when bitsandbytes is installed", o.label)
+		}
+	}
+}
+
+// Marlin is offered for 4-bit AWQ and for 4-bit symmetric GPTQ, and the gate
+// must not disturb either.
+func TestCompatibleQuantOptionsMarlin(t *testing.T) {
+	has := func(opts []quantOption, val string) bool {
+		for _, o := range opts {
+			if o.val == val {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(compatibleQuantOptions("awq", true, 4, false), "marlin") {
+		t.Error("4-bit AWQ should offer Marlin")
+	}
+	if has(compatibleQuantOptions("awq", true, 8, false), "marlin") {
+		t.Error("8-bit AWQ should not offer Marlin")
+	}
+	if !has(compatibleQuantOptions("gptq", true, 4, false), "marlin") {
+		t.Error("4-bit symmetric GPTQ should offer Marlin")
+	}
+	if has(compatibleQuantOptions("gptq", false, 4, false), "marlin") {
+		t.Error("asymmetric GPTQ should not offer Marlin")
 	}
 }

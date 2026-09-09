@@ -12,11 +12,11 @@ import (
 // Probe constants. The 256-token granularity matches vLLM's KV-cache block
 // size: smaller increments produce identical OOM outcomes.
 const (
-	defaultProbeMinContext   = 1024
-	defaultProbeMaxContext   = 131072 // 128K; long enough for any realistic deployment
-	probeContextGranularity  = 256
-	defaultProbeTestTimeout  = 3 * time.Minute
-	defaultProbeTestPort     = 8001
+	defaultProbeMinContext  = 1024
+	defaultProbeMaxContext  = 131072 // 128K; long enough for any realistic deployment
+	probeContextGranularity = 256
+	defaultProbeTestTimeout = 3 * time.Minute
+	defaultProbeTestPort    = 8001
 )
 
 // Default sweeps when the caller doesn't override.
@@ -47,9 +47,9 @@ type ProbeAttempt struct {
 // ProbeAttemptResult bundles the outcome and any suggested upper bound
 // vLLM hinted at (e.g. "Try reducing max_model_len to N").
 type ProbeAttemptResult struct {
-	Outcome           ProbeAttemptOutcome
-	SuggestedMaxLen   int    // 0 when vLLM didn't suggest one
-	Detail            string // short human-readable
+	Outcome         ProbeAttemptOutcome
+	SuggestedMaxLen int    // 0 when vLLM didn't suggest one
+	Detail          string // short human-readable
 }
 
 // ProbeEnv abstracts everything the probe needs from the outside world.
@@ -69,33 +69,33 @@ type ProbeEnv interface {
 
 // ProbeConfig is the input to a probe run.
 type ProbeConfig struct {
-	ModelID            string
-	TPSize             int
-	UtilizationLevels  []float64
-	ConcurrencyLevels  []int
-	MinContext         int
-	MaxContext         int
-	TimeoutPerTest     time.Duration
+	ModelID           string
+	TPSize            int
+	UtilizationLevels []float64
+	ConcurrencyLevels []int
+	MinContext        int
+	MaxContext        int
+	TimeoutPerTest    time.Duration
 }
 
 // ProbeResult is the final aggregated outcome of a probe.
 type ProbeResult struct {
-	ModelID            string             `json:"model_id"`
-	TPSize             int                `json:"tp_size"`
-	UtilizationResults map[string]int     `json:"utilization_results"` // util-string → max context
-	ConcurrencyResults map[int]int        `json:"concurrency_results"` // max_num_seqs → max context
-	Timestamp          time.Time          `json:"timestamp"`
-	Warnings           []string           `json:"warnings,omitempty"`
+	ModelID            string         `json:"model_id"`
+	TPSize             int            `json:"tp_size"`
+	UtilizationResults map[string]int `json:"utilization_results"` // util-string → max context
+	ConcurrencyResults map[int]int    `json:"concurrency_results"` // max_num_seqs → max context
+	Timestamp          time.Time      `json:"timestamp"`
+	Warnings           []string       `json:"warnings,omitempty"`
 }
 
 // ProbeProgress is one SSE event during a probe run.
 type ProbeProgress struct {
-	Phase          string  `json:"phase"`           // "exponential" | "binary_search" | "phase_done" | "complete"
+	Phase          string  `json:"phase"` // "exponential" | "binary_search" | "phase_done" | "complete"
 	Utilization    float64 `json:"utilization,omitempty"`
 	Concurrency    int     `json:"concurrency,omitempty"`
 	TestingContext int     `json:"testing_context"`
-	Outcome        string  `json:"outcome,omitempty"`        // ProbeAttemptOutcome values
-	Best           int     `json:"best,omitempty"`           // largest known-good context so far
+	Outcome        string  `json:"outcome,omitempty"` // ProbeAttemptOutcome values
+	Best           int     `json:"best,omitempty"`    // largest known-good context so far
 	ElapsedSec     float64 `json:"elapsed_sec,omitempty"`
 	Detail         string  `json:"detail,omitempty"`
 }

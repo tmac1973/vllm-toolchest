@@ -1,0 +1,97 @@
+
+<span id="job-status-adhoc" hx-swap-oob="true" class="job-status status-running">running</span>
+<span id="job-progress-adhoc" hx-swap-oob="true" class="job-progress">3 runs</span>
+
+<div class="bench-runs-container"
+     hx-get="/api/benchmark-jobs/adhoc" hx-trigger="every 2s" hx-swap="outerHTML">
+  <div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by model, quant, preset, sweep&hellip;"
+           oninput="filterBenchRuns(this)" autocomplete="off">
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, false)">Collapse all</button>
+    <button type="button" class="outline secondary" onclick="setAllBenchGroups(this, true)">Expand all</button>
+    <button type="button" class="outline secondary" onclick="compareSelectedRuns(this)">Compare</button>
+    <button type="button" class="outline secondary"
+            title="Open charts of the selected runs — scatter, heatmap and 3D views of a sweep."
+            onclick="visualizeSelectedRuns(this)">Visualize</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'csv')">Export CSV</button>
+    <button type="button" class="outline secondary" onclick="exportSelectedRuns(this, 'json')">Export JSON</button>
+    <button type="button" class="outline secondary" onclick="deleteSelectedRuns(this)">Delete selected</button>
+  </div>
+  <table role="grid" class="bench-runs-table">
+    <thead><tr>
+      <th style="width:2rem;"><input type="checkbox" style="margin:0;" title="Select all"
+          onchange="selectAllBenchRuns(this)"></th>
+      <th>Model</th>
+      <th>Quant</th>
+      <th>Preset</th>
+      <th>Sweep</th>
+      <th title="Prompt processing tokens/sec — higher is better.">PP t/s</th>
+      <th title="Token generation tokens/sec — the speed you feel during chat.">TG t/s</th>
+      <th title="Time to first token — lower is better.">TTFT</th>
+      <th>Status</th>
+      <th>When</th>
+      <th></th>
+    </tr></thead>
+    
+    <tbody class="bench-group-header" data-group="Qwen3.8-27B-FP8">
+      <tr onclick="toggleBenchGroup(this.closest('tbody'))">
+        <td colspan="11"><span class="caret">&#9662;</span> <strong>Qwen3.8-27B-FP8</strong> <small>(2)</small></td>
+      </tr>
+    </tbody>
+    <tbody class="bench-group-rows" data-group="Qwen3.8-27B-FP8">
+      <tr data-search="qwen3.8-27b-fp8 fp8 internal-thorough">
+        <td><input type="checkbox" class="bench-check" value="r1" style="margin:0;"
+                   ></td>
+        <td><small style="opacity:0.6;">unsloth/Qwen3.8-27B-FP8</small></td>
+        <td><kbd>fp8</kbd></td>
+        <td><small>internal-thorough</small></td>
+        <td><small>max_model_len=32768</small></td>
+        <td>928</td>
+        <td><strong>102.2</strong></td>
+        <td>928 ms</td>
+        <td><ins>completed</ins></td>
+        <td><small>Sep 7 19:31</small></td>
+        <td><small><a href="#" hx-get="/api/benchmarks/r1" hx-target="#bench-detail-r1" hx-swap="innerHTML">details</a></small></td>
+      </tr>
+      <tr class="bench-detail-row"><td colspan="11"><div id="bench-detail-r1"></div></td></tr>
+      <tr data-search="qwen3.8-27b-fp8 fp8 internal-quick">
+        <td><input type="checkbox" class="bench-check" value="r3" style="margin:0;"
+                   title="Running — select to delete anyway"></td>
+        <td><small style="opacity:0.6;">unsloth/Qwen3.8-27B-FP8</small></td>
+        <td><kbd>fp8</kbd></td>
+        <td><small>internal-quick</small></td>
+        <td><small>&mdash;</small></td>
+        <td>—</td>
+        <td><strong>—</strong></td>
+        <td>—</td>
+        <td><mark>running</mark></td>
+        <td><small>Sep 8 09:10</small></td>
+        <td><small><a href="#" hx-post="/api/benchmarks/r3/cancel" hx-confirm="Cancel this run?">cancel</a></small></td>
+      </tr>
+      <tr class="bench-detail-row"><td colspan="11"><div id="bench-detail-r3"></div></td></tr>
+    </tbody>
+    
+    <tbody class="bench-group-header" data-group="Mixtral-8x7B-AWQ">
+      <tr onclick="toggleBenchGroup(this.closest('tbody'))">
+        <td colspan="11"><span class="caret">&#9662;</span> <strong>Mixtral-8x7B-AWQ</strong> <small>(1)</small></td>
+      </tr>
+    </tbody>
+    <tbody class="bench-group-rows" data-group="Mixtral-8x7B-AWQ">
+      <tr data-search="mixtral-8x7b-awq awq internal-quick">
+        <td><input type="checkbox" class="bench-check" value="r2" style="margin:0;"
+                   ></td>
+        <td><small style="opacity:0.6;">TheBloke/Mixtral-8x7B-AWQ</small></td>
+        <td><kbd>awq</kbd></td>
+        <td><small>internal-quick</small></td>
+        <td><small>&mdash;</small></td>
+        <td>612</td>
+        <td><strong>44.0</strong></td>
+        <td>1204 ms</td>
+        <td><ins>completed</ins></td>
+        <td><small>Sep 8 09:02</small></td>
+        <td><small><a href="#" hx-get="/api/benchmarks/r2" hx-target="#bench-detail-r2" hx-swap="innerHTML">details</a></small></td>
+      </tr>
+      <tr class="bench-detail-row"><td colspan="11"><div id="bench-detail-r2"></div></td></tr>
+    </tbody>
+  </table>
+</div>

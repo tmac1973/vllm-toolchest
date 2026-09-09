@@ -1,6 +1,6 @@
 .PHONY: build run dev docker docker-cuda docker-rocm docker-radiance docker-rebuild \
 	up down up-cuda down-cuda up-rocm down-rocm up-radiance down-radiance \
-	logs shell test reload clean
+	logs shell test js-test reload clean
 
 # ─── Variant + GPU auto-detection ───────────────────────────────────
 # setup.sh records the chosen image variant in .env; honour it here so `make
@@ -26,15 +26,21 @@ endif
 
 COMPOSE_FILE := docker-compose.$(IMAGE_KEY).yml
 
+# ─── Version ────────────────────────────────────────────────────────
+# Stamped into the binary and shown under the sidebar brand, so a running
+# instance can say which build it is. Falls back to "dev" outside a checkout.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
+
 # ─── Local development ──────────────────────────────────────────────
 build:
-	go build -o bin/vllmctl ./cmd/vllmctl
+	go build -ldflags "$(LDFLAGS)" -o bin/vllmctl ./cmd/vllmctl
 
 run: build
 	./bin/vllmctl --config config.yaml
 
 dev:
-	go run ./cmd/vllmctl --config config.yaml
+	go run -ldflags "$(LDFLAGS)" ./cmd/vllmctl --config config.yaml
 
 # ─── Container (auto-detect GPU) ────────────────────────────────────
 docker:
@@ -88,8 +94,15 @@ logs:
 shell:
 	docker exec -it vllm-toolchest bash
 
-test:
+test: js-test
 	go test ./...
+
+# The visualize page's chart logic runs against a node harness rather than a
+# browser — the parts worth testing are decisions about the data, not drawing.
+# Skipped where node is absent so `make test` still works on a bare box.
+js-test:
+	@command -v node >/dev/null 2>&1 || { echo "js-test: node not installed, skipping"; exit 0; }
+	@node web/jstest/viz_test.js
 
 # ─── Dev: rebuild Go binary and inject into running container ───────
 # Compiles on host, copies into container, restarts the process.

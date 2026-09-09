@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 type Server struct {
 	cfg        *config.Config
 	pages      map[string]*template.Template
+	partials   *template.Template
 	router     chi.Router
 	monitor    *monitor.Monitor
 	hfClient   *huggingface.Client
@@ -37,20 +39,22 @@ type Server struct {
 	probe      *probeManager
 	tuner      *tuning.Manager
 	vllmEnv    vllmenv.Env
+	version    string
 }
 
 func NewServer(cfg *config.Config) *Server {
-	return NewServerWithEnv(cfg, vllmenv.Detect())
+	return NewServerWithEnv(cfg, vllmenv.Detect(), "dev")
 }
 
 // NewServerWithEnv builds the server against an already-detected vLLM
-// environment, so main can log and reuse the same detection.
-func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
+// environment, so main can log and reuse the same detection. version is the
+// build stamp shown under the sidebar brand.
+func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Server {
 	mon := monitor.New(3 * time.Second)
 	mon.Start()
 
-	reg := models.NewRegistry(cfg.DataDir)
-	dl := huggingface.NewDownloader(cfg.DataDir, cfg.HFToken)
+	reg := models.NewRegistry(cfg.DataDir, cfg.ModelsPath())
+	dl := huggingface.NewDownloader(cfg.DataDir, cfg.ModelsPath(), cfg.HFToken)
 	dl.SetOnComplete(func(downloadID, modelID, modelDir string) {
 		reg.RegisterFromDownload(modelID, modelDir)
 	})
@@ -63,6 +67,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
 		registry:   reg,
 		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
 		vllmEnv:    env,
+		version:    version,
 	}
 	// Radiance's entrypoint takes the same arguments `vllm serve` does, so
 	// launching through it keeps its startup banner and topology sweep in the
@@ -79,13 +84,13 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env) *Server {
 	s.tuner.SetConfigsDir(env.BlockFP8ConfigsDir)
 
 	reg.Maintenance()
-	s.pages = s.parseTemplates()
+	s.initTemplates()
 	s.router = s.buildRouter()
 	return s
 }
 
-func (s *Server) parseTemplates() map[string]*template.Template {
-	funcMap := template.FuncMap{
+func (s *Server) templateFuncs() template.FuncMap {
+	return template.FuncMap{
 		"divf": func(a, b interface{}) float64 {
 			af, bf := toFloat64(a), toFloat64(b)
 			if bf == 0 {
@@ -100,28 +105,84 @@ func (s *Server) parseTemplates() map[string]*template.Template {
 			return (value / max) * 100
 		},
 		"formatBytes": huggingface.FormatBytes,
-	}
 
-	base := template.Must(template.New("").Funcs(funcMap).ParseFS(web.Templates,
+		// cssID makes a model ID usable as an element id and as the tail of a
+		// querySelector — model IDs carry slashes and dots, which are selector
+		// syntax.
+		"cssID": safeID,
+		// divGB renders a byte count in GiB.
+		"divGB": func(bytes int64) float64 { return float64(bytes) / (1024 * 1024 * 1024) },
+		// hfModelURL is the HuggingFace page for a model, or "" when the ID is
+		// not a linkable owner/name pair — which is how the templates decide
+		// whether to render a link at all.
+		"hfModelURL": hfModelURL,
+		"add":        func(a, b int) int { return a + b },
+
+		// version is the build stamp under the sidebar brand.
+		"version": s.versionLabel,
+		// themeDefault is the saved theme a browser with no choice of its own
+		// starts from.
+		"themeDefault": func() string { return s.cfg.Theme },
+	}
+}
+
+// versionLabel renders the build stamp for display. Released versions
+// (e.g. "1.2.3") get a "v" prefix; anything git describe produced for an
+// untagged or dirty tree already carries its own marker and reads fine
+// without one.
+func (s *Server) versionLabel() string {
+	v := s.version
+	if v == "" || v == "dev" {
+		return "dev"
+	}
+	if strings.HasPrefix(v, "v") || strings.HasPrefix(v, "dev") {
+		return v
+	}
+	if _, err := strconv.Atoi(strings.SplitN(v, ".", 2)[0]); err == nil {
+		return "v" + v
+	}
+	return v
+}
+
+// initTemplates parses the layout and partials once, then clones that base per
+// page so each page's {{define "content"}} does not collide with the others.
+//
+// The partials are kept as their own handle as well: fragment handlers render
+// them directly, and looking one up by walking the pages map (which is what
+// this used to do) picked whichever page Go's map iteration reached first.
+func (s *Server) initTemplates() {
+	base := template.Must(template.New("").Funcs(s.templateFuncs()).ParseFS(web.Templates,
 		"templates/layout.html",
 		"templates/partials/*.html",
 	))
+	s.partials = template.Must(base.Clone())
 
 	pages := map[string]*template.Template{}
 	pageFiles := []string{
-		"index.html",
 		"models.html",
 		"models_browse.html",
-		"service.html",
+		"server.html",
 		"benchmarks.html",
+		"visualize.html",
 		"tuning.html",
 		"settings.html",
+		"help.html",
 	}
 	for _, pf := range pageFiles {
 		clone := template.Must(base.Clone())
 		pages[pf] = template.Must(clone.ParseFS(web.Templates, "templates/"+pf))
 	}
-	return pages
+	s.pages = pages
+}
+
+// hfModelURL returns the HuggingFace page for an owner/name model ID, or ""
+// for anything that is not one.
+func hfModelURL(modelID string) string {
+	parts := strings.Split(modelID, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return "https://huggingface.co/" + modelID
 }
 
 func (s *Server) Router() http.Handler {
@@ -142,10 +203,12 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/", s.handleIndex)
 	r.Get("/models", s.handleModelsPage)
 	r.Get("/models/browse", s.handleModelsBrowsePage)
-	r.Get("/server", s.handleServicePage)
+	r.Get("/server", s.handleServerPage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
+	r.Get("/benchmarks/visualize", s.handleVisualizePage)
 	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
+	r.Get("/help", s.handleHelpPage)
 
 	// Health check
 	r.Get("/healthz", s.handleHealthCheck)
@@ -153,12 +216,14 @@ func (s *Server) buildRouter() chi.Router {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/dashboard", s.handleDashboard)
+		r.Get("/gpu-map", s.handleGPUMap)
 
 		r.Route("/models", func(r chi.Router) {
 			r.Get("/", s.handleListModels)
 			r.Post("/scan", s.handleScanModels)
 			r.Get("/get", s.handleGetModel)
 			r.Get("/config-panel", s.handleModelConfigPanel)
+			r.Put("/activate", s.handleActivateModel)
 			r.Put("/config", s.handleUpdateModelConfig)
 			r.Delete("/delete", s.handleDeleteModel)
 		})
@@ -166,7 +231,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/search", s.handleHFSearch)
 			r.Get("/model", s.handleHFModel)
 			r.Post("/download", s.handleHFDownload)
-			r.Get("/downloads", s.handleHFActiveDownloads)
+			r.Get("/downloads", s.handleHFDownloads)
+			r.Delete("/incomplete", s.handleHFDiscardIncomplete)
 			r.Get("/download/{id}/progress", s.handleHFDownloadProgress)
 			r.Delete("/download/{id}", s.handleHFDownloadCancel)
 		})
@@ -185,6 +251,10 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/", s.handleStartBenchmark)
 			r.Get("/form", s.handleBenchmarkForm)
 			r.Get("/about", s.handleBenchmarksAbout)
+			r.Get("/compare", s.handleCompareBenchmarks)
+			r.Get("/export", s.handleExportRuns)
+			r.Get("/visualize", s.handleVisualizeData)
+			r.Delete("/batch-delete", s.handleBatchDeleteBenchmarks)
 			r.Get("/timings", s.handleTimingsList)
 			r.Get("/timings/*", s.handleTimingsForModel)
 			r.Get("/probe-context/form", s.handleProbeForm)
@@ -202,6 +272,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/", s.handleCreateJob)
 			r.Get("/form", s.handleJobForm)
 			r.Get("/{id}", s.handleGetJob)
+			r.Put("/{id}", s.handleUpdateJob)
+			r.Get("/{id}/export", s.handleExportJob)
 			r.Delete("/{id}", s.handleDeleteJob)
 			r.Post("/{id}/cancel", s.handleCancelJob)
 			r.Post("/{id}/retry-failed", s.handleRetryFailedCells)
@@ -211,6 +283,9 @@ func (s *Server) buildRouter() chi.Router {
 			r.Put("/", s.handleUpdateSettings)
 			r.Post("/test-connection", s.handleTestConnection)
 		})
+		r.Get("/backup", s.handleBackupExport)
+		r.Post("/restore", s.handleRestore)
+		r.Post("/pending-configs/discard", s.handleDiscardPending)
 		r.Route("/monitor", func(r chi.Router) {
 			r.Get("/", s.handleMonitorStatus)
 			r.Get("/stream", s.handleMonitorStream)
@@ -239,20 +314,71 @@ type pageData struct {
 	Nav   string
 }
 
+// handleIndex redirects to the server page, which is where the dashboard now
+// lives — status, controls and logs on one screen rather than a read-only
+// summary linking to a separate Service tab.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "index.html", pageData{Nav: "home"})
+	http.Redirect(w, r, "/server", http.StatusFound)
 }
 
 func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", pageData{Title: "Models", Nav: "models"})
 }
 
-func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "models_browse.html", pageData{Title: "Search HuggingFace", Nav: "browse"})
+func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "help.html", struct {
+		pageData
+		// IsRadiance gates the sections that only make sense on the RDNA4
+		// image — the all-reduce ceiling in particular, which is a property of
+		// a kernel library the generic image does not ship.
+		IsRadiance bool
+	}{
+		pageData:   pageData{Title: "Help", Nav: "help"},
+		IsRadiance: s.vllmEnv.IsRadiance(),
+	})
 }
 
-func (s *Server) handleServicePage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "service.html", pageData{Title: "Service", Nav: "service"})
+func (s *Server) handleModelsBrowsePage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "models_browse.html", struct {
+		pageData
+		QuantFilters []huggingface.QuantFilterOption
+		// Query prefills the search box from ?q=, so a link can point at a
+		// particular model — the restore report's "Find" button does.
+		Query string
+	}{
+		pageData:     pageData{Title: "Search HuggingFace", Nav: "browse"},
+		QuantFilters: huggingface.QuantFilterOptions(),
+		Query:        r.URL.Query().Get("q"),
+	})
+}
+
+// modelChoice is one entry of the server page's model picker.
+type modelChoice struct {
+	ID     string
+	Name   string
+	Active bool
+}
+
+func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
+	var choices []modelChoice
+	for _, m := range s.registry.List() {
+		if m.Orphaned {
+			continue
+		}
+		choices = append(choices, modelChoice{
+			ID:     m.ID,
+			Name:   displayNameOf(m),
+			Active: m.ID == s.cfg.ActiveModel,
+		})
+	}
+
+	s.render(w, "server.html", struct {
+		pageData
+		Models []modelChoice
+	}{
+		pageData: pageData{Title: "Server", Nav: "server"},
+		Models:   choices,
+	})
 }
 
 func (s *Server) handleBenchmarksPage(w http.ResponseWriter, r *http.Request) {
@@ -263,22 +389,23 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg
 	data := struct {
 		pageData
-		ExternalURL        string
-		VLLMPort           int
-		HasAPIKey          bool
-		HasHFToken         bool
-		DefaultDtype       string
-		GPUMemoryUtil      float64
-		MaxNumSeqs         int
-		AttentionBackend   string
-		EnforceEager       bool
-		EnablePrefixCache  bool
-		ToolUseEnabled     bool
-		DefaultToolParser  string
-		PreferMarlin       bool
+		ExternalURL         string
+		VLLMPort            int
+		HasAPIKey           bool
+		HasHFToken          bool
+		DefaultDtype        string
+		GPUMemoryUtil       float64
+		MaxNumSeqs          int
+		AttentionBackend    string
+		EnforceEager        bool
+		EnablePrefixCache   bool
+		ToolUseEnabled      bool
+		DefaultToolParser   string
+		PreferMarlin        bool
 		DefaultKVCacheDtype string
-		AutoRestart        bool
-		Theme              string
+		AutoRestart         bool
+		AutoStart           bool
+		Theme               string
 
 		Variant           string
 		RadianceVersion   string
@@ -287,24 +414,34 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VenvRoot          string
 		AttentionBackends []backendOption
 		Radiance          config.RadianceConfig
+
+		RuntimeEnvRows  []runtimeEnvRow
+		RuntimeEnvExtra string
+		EnvWarnings     []string
+		EffectiveEnv    []envLine
+
+		DataDir          string
+		ModelsDir        string
+		DefaultModelsDir string
 	}{
-		pageData:           pageData{Title: "Settings", Nav: "settings"},
-		ExternalURL:        c.ExternalURL,
-		VLLMPort:           c.VLLMPort,
-		HasAPIKey:          c.APIKey != "",
-		HasHFToken:         c.HFToken != "",
-		DefaultDtype:       c.DefaultDtype,
-		GPUMemoryUtil:      c.GPUMemoryUtil,
-		MaxNumSeqs:         c.MaxNumSeqs,
-		AttentionBackend:   c.AttentionBackend,
-		EnforceEager:       c.EnforceEager,
-		EnablePrefixCache:  c.EnablePrefixCache,
-		ToolUseEnabled:     c.ToolUseEnabled,
-		DefaultToolParser:  c.DefaultToolParser,
-		PreferMarlin:       c.PreferMarlin,
+		pageData:            pageData{Title: "Settings", Nav: "settings"},
+		ExternalURL:         c.ExternalURL,
+		VLLMPort:            c.VLLMPort,
+		HasAPIKey:           c.APIKey != "",
+		HasHFToken:          c.HFToken != "",
+		DefaultDtype:        c.DefaultDtype,
+		GPUMemoryUtil:       c.GPUMemoryUtil,
+		MaxNumSeqs:          c.MaxNumSeqs,
+		AttentionBackend:    c.AttentionBackend,
+		EnforceEager:        c.EnforceEager,
+		EnablePrefixCache:   c.EnablePrefixCache,
+		ToolUseEnabled:      c.ToolUseEnabled,
+		DefaultToolParser:   c.DefaultToolParser,
+		PreferMarlin:        c.PreferMarlin,
 		DefaultKVCacheDtype: c.DefaultKVCacheDtype,
-		AutoRestart:        c.AutoRestart,
-		Theme:              c.Theme,
+		AutoRestart:         c.AutoRestart,
+		AutoStart:           c.AutoStart,
+		Theme:               c.Theme,
 
 		Variant:           s.vllmEnv.Variant,
 		RadianceVersion:   s.vllmEnv.RadianceVersion,
@@ -313,6 +450,15 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VenvRoot:          s.vllmEnv.VenvRoot,
 		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
 		Radiance:          c.Radiance,
+
+		RuntimeEnvRows:  s.runtimeEnvRows(),
+		RuntimeEnvExtra: c.RuntimeEnvExtra,
+		EnvWarnings:     c.EnvSet().Warnings(),
+		EffectiveEnv:    s.effectiveEnvLines(),
+
+		DataDir:          c.DataDir,
+		ModelsDir:        c.ModelDir,
+		DefaultModelsDir: c.DefaultModelsPath(),
 	}
 	s.render(w, "settings.html", data)
 }
@@ -324,94 +470,67 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// dashboardGPU is one GPU's line on the dashboard card.
+type dashboardGPU struct {
+	Name    string
+	UsedGB  float64
+	TotalGB float64
+	// Versions is the driver and ROCm line, already joined, or "" when
+	// neither is known.
+	Versions string
+}
+
+// dashboardTiming is one model's row in the live-activity table.
+type dashboardTiming struct {
+	ModelID   string
+	AvgGenTPS float64
+	Count     int
+	LastSeen  string
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	metrics := s.monitor.Current()
-	apiURL := strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1"
 
-	// GPU card
-	gpuHTML := "<p>No GPU detected</p>"
-	if len(metrics.GPU) > 0 {
-		var buf strings.Builder
-		for _, g := range metrics.GPU {
-			buf.WriteString(fmt.Sprintf(`<p><strong>%s</strong></p>`, g.Name))
-			buf.WriteString(fmt.Sprintf(`<p>VRAM: %.1f / %.1f GB</p>`,
-				float64(g.VRAMUsedMB)/1024, float64(g.VRAMTotalMB)/1024))
-			if g.ROCmVersion != "" || g.DriverVersion != "" {
-				buf.WriteString("<p>")
-				if g.DriverVersion != "" {
-					buf.WriteString(fmt.Sprintf("Driver: %s", g.DriverVersion))
-				}
-				if g.ROCmVersion != "" {
-					if g.DriverVersion != "" {
-						buf.WriteString(" &middot; ")
-					}
-					buf.WriteString(fmt.Sprintf("ROCm: %s", g.ROCmVersion))
-				}
-				buf.WriteString("</p>")
-			}
+	gpus := make([]dashboardGPU, 0, len(metrics.GPU))
+	for _, g := range metrics.GPU {
+		var versions string
+		switch {
+		case g.DriverVersion != "" && g.ROCmVersion != "":
+			versions = fmt.Sprintf("Driver: %s \u00b7 ROCm: %s", g.DriverVersion, g.ROCmVersion)
+		case g.DriverVersion != "":
+			versions = "Driver: " + g.DriverVersion
+		case g.ROCmVersion != "":
+			versions = "ROCm: " + g.ROCmVersion
 		}
-		gpuHTML = buf.String()
+		gpus = append(gpus, dashboardGPU{
+			Name:     g.Name,
+			UsedGB:   float64(g.VRAMUsedMB) / 1024,
+			TotalGB:  float64(g.VRAMTotalMB) / 1024,
+			Versions: versions,
+		})
 	}
 
-	// Tool use indicator
-	toolUseLabel := "disabled"
-	if s.cfg.ToolUseEnabled {
-		toolUseLabel = "<ins>enabled</ins>"
-	}
-
-	// Service status
-	svcStatus := s.process.GetStatus()
-	var svcBadge, svcModel string
-	switch svcStatus.State {
-	case "running":
-		svcBadge = "<ins>Running</ins>"
-	case "starting":
-		svcBadge = "<mark>Starting...</mark>"
-	case "error":
-		svcBadge = "<del>Error</del>"
-	default:
-		svcBadge = "Stopped"
-	}
-	if svcStatus.ModelID != "" {
-		svcModel = fmt.Sprintf(`<p>Model: <strong>%s</strong></p>`, svcStatus.ModelID)
+	// The name clients pass in the "model" field, which is only meaningful
+	// while something is actually being served.
+	served := ""
+	if st := s.process.GetStatus(); st.State == process.StateRunning {
+		served = st.ModelID
 	}
 
 	respondHTML(w)
-	fmt.Fprintf(w, `<div class="grid">
-    <article>
-        <header>vLLM Service</header>
-        <p>%s</p>
-        %s
-        <p><a href="/service">Manage &rarr;</a></p>
-    </article>
-    <article>
-        <header>GPU</header>
-        %s
-    </article>
-    <article>
-        <header>Models</header>
-        <p><strong>%d</strong> models registered</p>
-        <p><a href="/models">Manage &rarr;</a> &middot; <a href="/models/browse">Get New &rarr;</a></p>
-    </article>
-    <article>
-        <header>API Endpoint</header>
-        <pre style="user-select: all; cursor: pointer;">%s</pre>
-        <p>Tool use: %s</p>
-        <p><a href="/settings">Settings &rarr;</a></p>
-    </article>
-</div>`, svcBadge, svcModel, gpuHTML, len(s.registry.List()), apiURL, toolUseLabel)
-
-	if avgs := s.bench.RunningAverages(); len(avgs) > 0 {
-		fmt.Fprint(w, `<article style="margin-top:1rem;">
-    <header>Live inference activity <small style="opacity:0.6;">(passive timing from the OpenAI proxy)</small></header>
-    <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>`)
-		for _, a := range avgs {
-			fmt.Fprintf(w, `<tr><td><small>%s</small></td><td>%.1f t/s</td><td>%d</td><td><small>%s</small></td></tr>`,
-				esc(a.ModelID), a.AvgGenTPS, a.Count, a.LastUpdated.Format("Jan 2 15:04"))
-		}
-		fmt.Fprint(w, `</tbody></table>
-</article>`)
-	}
+	s.renderPartial(w, "dashboard_cards", struct {
+		GPUs           []dashboardGPU
+		ModelCount     int
+		APIURL         string
+		ServedModel    string
+		ToolUseEnabled bool
+	}{
+		GPUs:           gpus,
+		ModelCount:     len(s.registry.List()),
+		APIURL:         strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1",
+		ServedModel:    served,
+		ToolUseEnabled: s.cfg.ToolUseEnabled,
+	})
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -430,18 +549,24 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	}
 }
 
-func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
-	// Look for the partial in any of the parsed page templates
-	for _, tmpl := range s.pages {
-		if t := tmpl.Lookup(name); t != nil {
-			if err := t.Execute(w, data); err != nil {
-				slog.Error("partial render error", "name", name, "error", err)
-			}
-			return
-		}
+// renderPartial writes one partial to w. Callers are fragment handlers
+// responding to htmx, so there is no page around the output to carry an error:
+// a failure is logged and left as an HTML comment, which is visible in the
+// swapped-in markup without breaking the surrounding page.
+func (s *Server) renderPartial(w io.Writer, name string, data any) {
+	t := s.partials.Lookup(name)
+	if t == nil {
+		slog.Error("partial not found", "name", name)
+		io.WriteString(w, "<!-- partial not found: "+name+" -->")
+		return
 	}
-	slog.Error("partial not found", "name", name)
-	io.WriteString(w, "<!-- partial not found: "+name+" -->")
+	if err := t.Execute(w, data); err != nil {
+		// html/template writes what it rendered before the error, so the
+		// response is already partly written by this point; the comment marks
+		// where it stopped.
+		slog.Error("partial render error", "name", name, "error", err)
+		io.WriteString(w, "<!-- render error: "+name+" -->")
+	}
 }
 
 // SetDeviceName updates the GPU device name tuned kernel configs are keyed by,

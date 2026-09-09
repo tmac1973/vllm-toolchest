@@ -89,6 +89,9 @@ func applyOverrides(base ConfigSnapshot, ov *ConfigOverrides) ConfigSnapshot {
 	if ov.Dtype != nil {
 		out.Dtype = *ov.Dtype
 	}
+	if ov.MaxNumSeqs != nil {
+		out.MaxNumSeqs = *ov.MaxNumSeqs
+	}
 	return out
 }
 
@@ -97,16 +100,26 @@ func applyOverrides(base ConfigSnapshot, ov *ConfigOverrides) ConfigSnapshot {
 // for the second, etc. Stable preset order within each group. Called by
 // the api layer when persisting a new job; the runner re-checks the
 // order at execution time but expects this layout.
-func ExpandCells(modelIDs, presets []string) []JobCell {
-	cells := make([]JobCell, 0, len(modelIDs)*len(presets))
+func ExpandCells(modelIDs, presets []string, sweeps []SweepAxis) []JobCell {
+	combos := SweepCombinations(sweeps)
+	cells := make([]JobCell, 0, len(modelIDs)*len(presets)*len(combos))
 	for _, m := range modelIDs {
-		for _, p := range presets {
-			cells = append(cells, JobCell{
-				ModelID: m,
-				Preset:  p,
-				Status:  CellStatusPending,
-				Attempt: 0,
-			})
+		// Sweep values before presets: a sweep value change costs an engine
+		// reload and a preset change does not, so this ordering loads the
+		// engine once per (model, combination) instead of once per cell.
+		for _, combo := range combos {
+			for _, p := range presets {
+				cell := JobCell{
+					ModelID: m,
+					Preset:  p,
+					Status:  CellStatusPending,
+					Attempt: 0,
+				}
+				if len(combo) > 0 {
+					cell.SweepValues = combo
+				}
+				cells = append(cells, cell)
+			}
 		}
 	}
 	return cells
@@ -114,7 +127,7 @@ func ExpandCells(modelIDs, presets []string) []JobCell {
 
 // runJob executes one job. Cells are walked in their stored order; the
 // runner relies on ExpandCells (or retry-failed's cell ordering) to have
-// grouped cells by model so each model loads exactly once per job.
+// grouped cells so each engine configuration loads exactly once per job.
 //
 // The function blocks until the job finishes or ctx is cancelled. It
 // updates the job in the store after every cell so a crash leaves a
@@ -124,47 +137,68 @@ func (s *Service) runJob(ctx context.Context, job *BenchmarkJob) {
 	job.StartedAt = time.Now()
 	_ = s.store.SaveJob(*job)
 
-	// Group cell indices by model in stored order — this is the model-
-	// grouping pass. We don't sort cells in-place because the user-facing
-	// matrix display assumes the original order.
-	groupOrder := []string{}
-	groups := map[string][]int{}
+	// Group cell indices by (model, sweep values) in stored order.
+	//
+	// Grouping by model alone was enough when every cell of a model shared one
+	// engine configuration. Sweeps break that: each axis is a launch
+	// parameter — context length, tensor-parallel size, KV cache dtype — that
+	// vLLM cannot change without a reload. Cells sharing a key share a
+	// configuration and are measured on one load.
+	type group struct {
+		modelID string
+		sweep   map[string]string
+		indices []int
+	}
+	var groupOrder []string
+	groups := map[string]*group{}
 	for i, cell := range job.Cells {
 		// Skip cells already completed (retry-failed leaves them).
 		if cell.Status == CellStatusCompleted {
 			continue
 		}
-		if _, seen := groups[cell.ModelID]; !seen {
-			groupOrder = append(groupOrder, cell.ModelID)
+		key := cell.ModelID + "\x00" + SweepKey(cell.SweepValues)
+		g, seen := groups[key]
+		if !seen {
+			g = &group{modelID: cell.ModelID, sweep: cell.SweepValues}
+			groups[key] = g
+			groupOrder = append(groupOrder, key)
 		}
-		groups[cell.ModelID] = append(groups[cell.ModelID], i)
+		g.indices = append(g.indices, i)
 	}
 
-	for _, modelID := range groupOrder {
+	for _, key := range groupOrder {
+		g := groups[key]
 		if ctx.Err() != nil {
 			s.markPendingCells(job, JobStatusCanceled)
 			break
 		}
 
-		info, err := s.env.ResolveModel(modelID)
+		info, err := s.env.ResolveModel(g.modelID)
 		if err != nil {
-			s.failCells(job, groups[modelID], "resolve model: "+err.Error())
+			s.failCells(job, g.indices, "resolve model: "+err.Error())
 			_ = s.store.SaveJob(*job)
 			continue
 		}
-		cfg := applyOverrides(info.Config, job.Overrides)
 
-		// Load model (no-op if already serving it).
+		overrides, err := ApplySweep(job.Overrides, g.sweep)
+		if err != nil {
+			s.failCells(job, g.indices, "sweep values: "+err.Error())
+			_ = s.store.SaveJob(*job)
+			continue
+		}
+		cfg := applyOverrides(info.Config, overrides)
+
+		// Load model (no-op if already serving it with this configuration).
 		loadCtx, loadCancel := context.WithTimeout(ctx, 15*time.Minute)
-		err = s.env.EnsureModelLoaded(loadCtx, modelID, cfg)
+		err = s.env.EnsureModelLoaded(loadCtx, g.modelID, cfg)
 		loadCancel()
 		if err != nil {
-			s.failCells(job, groups[modelID], "load model: "+err.Error())
+			s.failCells(job, g.indices, "load model: "+err.Error())
 			_ = s.store.SaveJob(*job)
 			continue
 		}
 
-		for _, idx := range groups[modelID] {
+		for _, idx := range g.indices {
 			if ctx.Err() != nil {
 				job.Cells[idx].Status = CellStatusSkipped
 				continue
@@ -209,6 +243,7 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 		GPUs:        GPUSnapshotsFromMetrics(s.env.CurrentMetrics()),
 
 		Preset:       preset.Name,
+		SweepValues:  cell.SweepValues,
 		PromptTokens: preset.PromptTokens,
 		GenTokens:    preset.GenTokens,
 	}

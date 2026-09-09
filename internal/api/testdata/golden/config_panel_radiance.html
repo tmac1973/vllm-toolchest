@@ -1,0 +1,106 @@
+<article>
+  <div class="model-config-header">
+    <span>Configure <span class="mc-owner">&mdash; Qwen3.8-27B-FP8</span></span>
+    <span class="mc-restart">Restart required</span>
+  </div>
+  <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
+    <strong>VRAM Estimate:</strong> 28.8 GB weights + 1.0 GB overhead = <strong>29.8 GB</strong> &mdash; Needs TP=2
+  </div>
+  
+  <form hx-put="/api/models/config?id=unsloth/Qwen3.8-27B-FP8" hx-trigger="change delay:500ms" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML" hx-include="closest form"
+        hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
+        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
+        hx-on::response-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: '+(event.detail.xhr.responseText.trim()||('server returned '+event.detail.xhr.status)); e.style.display='block';}"
+        hx-on::send-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: could not reach the server.'; e.style.display='block';}">
+
+    <fieldset><legend>Core</legend>
+      <div class="grid">
+        <label title="Data type for model weights. 'auto' uses the model's native dtype (usually bfloat16). Use float16 for older GPUs that don't support bfloat16.">dtype <select name="dtype"><option value="auto" selected>auto</option><option value="float16">float16</option><option value="bfloat16">bfloat16</option><option value="float32">float32</option></select></label>
+        
+        <label title="Maps to vLLM's --max-model-len. Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache and let the engine warm up faster. Model max is 262144.">Context length <small>(--max-model-len, max: 262144)</small><select name="max_model_len" id="ctx-sel-unsloth--Qwen3-8-27B-FP8" onchange="var c=document.getElementById('ctx-cust-unsloth--Qwen3-8-27B-FP8');if(this.value==='custom'){c.style.display='';c.name='max_model_len';this.name='';}else{c.style.display='none';c.name='';this.name='max_model_len';}"><option value="2048">2K</option><option value="4096">4K</option><option value="8192">8K</option><option value="16384">16K</option><option value="32768" selected>32K</option><option value="65536">64K</option><option value="131072">128K</option><option value="262144">256K (max)</option><option value="custom">Custom...</option>
+        </select><input type="number" id="ctx-cust-unsloth--Qwen3-8-27B-FP8" name="" value="32768" min="256" max="262144" style="display:none;margin-top:0.25rem;" placeholder="Custom context length"></label>
+      </div>
+      <div class="grid">
+        <label title="Split the model across multiple GPUs. TP must evenly divide the model's attention heads. Higher TP reduces per-GPU memory but adds inter-GPU communication overhead.">Tensor parallel <select name="tensor_parallel_size"><option value="1">1 GPU</option><option value="2" selected>2 GPUs</option><option value="4">4 GPUs</option><option value="8">8 GPUs</option></select></label>
+        <label title="Fraction of GPU memory vLLM is allowed to use (0.1-0.99). Higher = more KV cache (longer contexts) but risk OOM. 0.90 is a safe default.">GPU memory utilization<input type="range" name="gpu_memory_utilization" min="0.1" max="0.99" step="0.01" value="0.90" oninput="this.nextElementSibling.textContent=this.value"><small>0.90</small></label>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>Performance</legend>
+      <div class="grid">
+        <label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"> Enforce eager mode</label>
+        <label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"> Prefix caching</label>
+      </div>
+      <label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs"><option value="1">1</option><option value="4">4</option><option value="8">8</option><option value="16" selected>16</option><option value="32">32</option><option value="64">64</option><option value="128">128</option><option value="256">256</option></select></label>
+      
+      <label title="Prefill in chunks so a long prompt does not monopolise a step. Normally leave on; vLLM V1 enables it by default."><input type="checkbox" name="enable_chunked_prefill" role="switch" checked> Enable chunked prefill</label>
+      <label title="Tokens per prefill chunk. 0 lets vLLM choose.">Max batched tokens <input type="number" name="max_num_batched_tokens" value="0" min="0" step="256" placeholder="0 = auto"></label>
+      <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Keep at or below 4915 for this model (hidden size 5120): above that a prefill chunk&#39;s all-reduce exceeds 48 MiB and silently falls back to RCCL, about 2.3x slower.</small>
+      
+    </fieldset>
+
+    <fieldset><legend>Quantization <a href="#" onclick="document.getElementById('quant-help-unsloth--Qwen3-8-27B-FP8').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend>
+      <div class="grid">
+        <label title="Quantization method for inference. Options are filtered to what this model supports based on its format.">Method <select name="quantization"><option value="" selected>auto-detect (FP8)</option><option value="fp8">FP8</option></select></label>
+        <label title="Data type for KV cache. 'auto' uses FP16. FP8 halves cache memory for longer contexts, with minimal quality tradeoff.">KV cache dtype <select name="kv_cache_dtype"><option value="auto">auto</option><option value="fp8" selected>fp8</option><option value="fp8_e5m2">fp8_e5m2</option><option value="fp8_e4m3">fp8_e4m3</option></select></label>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>Tool Use</legend>
+      <p style="margin-bottom:0.5rem;"><small>Detected: <strong>hermes</strong> parser (via chat_template)</small></p>
+      
+      <label title="Enable OpenAI-compatible tool/function calling. Sets both --enable-auto-tool-choice and --tool-call-parser. The parser is auto-detected from the model's chat template."><input type="checkbox" name="enable_auto_tool_choice" role="switch" checked onchange="var ps=this.closest('form').querySelector('[name=tool_call_parser]');if(this.checked){ps.value='hermes';}else{ps.value='';}"> Enable tool use</label>
+      <details style="margin-top:0.5rem;"><summary style="font-size:0.85rem;cursor:pointer;">Parser override</summary>
+        <label title="Override the auto-detected parser. Only change this if auto-detection got it wrong. Using the wrong parser will break tool calling."><select name="tool_call_parser"><option value="" selected>(auto: hermes)</option><optgroup label="Common"><option value="hermes">hermes — Hermes, NousResearch, Qwen 2.5, plain Qwen 3</option><option value="qwen3_xml">qwen3_xml — Qwen 3.5&#43;, Qwen thinking variants, MiMo</option><option value="qwen3_coder">qwen3_coder — Qwen 3 Coder</option><option value="llama3_json">llama3_json — Llama 3.1 / 3.2 / 3.3</option><option value="llama4_pythonic">llama4_pythonic — Llama 4</option><option value="llama4_json">llama4_json — Llama 4 (json output)</option><option value="mistral">mistral — Mistral, Mixtral</option><option value="pythonic">pythonic — Python-style function calls</option><option value="openai">openai — OpenAI-compatible JSON</option></optgroup><optgroup label="DeepSeek"><option value="deepseek_v3">deepseek_v3 — DeepSeek V3, R1</option><option value="deepseek_v31">deepseek_v31 — DeepSeek V3.1</option><option value="deepseek_v32">deepseek_v32 — DeepSeek V3.2</option><option value="deepseek_v4">deepseek_v4 — DeepSeek V4</option></optgroup><optgroup label="Granite"><option value="granite">granite — IBM Granite</option><option value="granite4">granite4 — IBM Granite 4</option><option value="granite-20b-fc">granite-20b-fc — IBM Granite 20B FC</option></optgroup><optgroup label="GLM"><option value="glm45">glm45 — GLM 4.5 MoE</option><option value="glm47">glm47 — GLM 4.7 MoE</option></optgroup><optgroup label="Cohere"><option value="cohere_command3">cohere_command3 — Command R / R&#43;</option><option value="cohere_command4">cohere_command4 — Command R 4</option></optgroup><optgroup label="Other"><option value="gemma4">gemma4 — Gemma 4</option><option value="functiongemma">functiongemma — FunctionGemma</option><option value="phi4_mini_json">phi4_mini_json — Phi-4 Mini</option><option value="internlm">internlm — InternLM</option><option value="jamba">jamba — Jamba (AI21)</option><option value="kimi_k2">kimi_k2 — Moonshot Kimi K2</option><option value="minimax">minimax — MiniMax</option><option value="minimax_m2">minimax_m2 — MiniMax M2</option><option value="hunyuan_a13b">hunyuan_a13b — Tencent Hunyuan A13B</option><option value="hy_v3">hy_v3 — Tencent Hunyuan V3</option><option value="olmo3">olmo3 — AI2 OLMo 3</option><option value="longcat">longcat — LongCat Flash</option><option value="ernie45">ernie45 — Baidu Ernie 4.5</option><option value="lfm2">lfm2 — Liquid LFM-2</option><option value="xlam">xlam — Salesforce xLAM</option><option value="seed_oss">seed_oss — ByteDance Seed-OSS</option><option value="step3">step3 — StepFun Step3</option><option value="step3p5">step3p5 — StepFun Step3.5</option><option value="mimo">mimo — Xiaomi MiMo (uses Qwen3 XML)</option><option value="apertus">apertus — Apertus</option><option value="gigachat3">gigachat3 — GigaChat 3</option><option value="poolside_v1">poolside_v1 — Poolside V1</option></optgroup></select></label>
+      </details>
+    </fieldset>
+
+    <fieldset><legend>Advanced</legend>
+      <label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"> Trust remote code</label>
+      <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Warning: executes arbitrary code from the model repo</small>
+      <div class="grid">
+        <label title="Override vLLM's attention backend. Leave on auto unless a model or image needs a specific one.">Attention backend <select name="attention_backend"><option value="" selected>(auto — let vLLM choose)</option><option value="TRITON_ATTN">TRITON_ATTN</option><option value="TRITON_FLASH_ATTN">TRITON_FLASH_ATTN</option><option value="FLASH_ATTN">FLASH_ATTN</option><option value="ROCM_FLASH">ROCM_FLASH</option><option value="ROCM_AITER_UNIFIED_ATTN">ROCM_AITER_UNIFIED_ATTN</option><option value="FLASHINFER">FLASHINFER (CUDA)</option><option value="XFORMERS">XFORMERS</option><option value="R4D">R4D — radiance gfx1201 kernels (head_dim 256, GQA 6)</option></select></label>
+        <label title="Parser for models that emit a separate reasoning/thinking channel, e.g. qwen3 or deepseek_r1.">Reasoning parser <input type="text" name="reasoning_parser" value="" placeholder="(none)"></label>
+      </div>
+      <div class="grid">
+        <label title="Required alongside prefix caching on hybrid linear-attention (gated-delta-net / mamba) models. 'align' snapshots the recurrent state at block boundaries so those layers become cacheable too.">Mamba cache mode <select name="mamba_cache_mode"><option value="" selected>(vLLM default)</option><option value="align">align — makes hybrid models prefix-cacheable</option></select></label>
+        <label title="Pin the KV cache pool size in bytes. 0 lets vLLM size it, which under-reports free VRAM on ROCm. Clear this before measuring anything memory-related — while set, the pool stops responding to other memory changes.">KV cache memory (bytes) <input type="number" name="kv_cache_memory" value="0" min="0" step="1048576" placeholder="0 = auto"></label>
+      </div>
+      <label title="Raw JSON for --speculative-config. Lossless: the target model verifies every drafted token.">Speculative config (JSON) <input type="text" name="speculative_config" value="" placeholder='{"method":"mtp","num_speculative_tokens":8}'></label>
+      <label title="Raw JSON for --compilation-config. Most useful for trimming the CUDA-graph capture ladder to sizes this serve can actually reach.">Compilation config (JSON) <input type="text" name="compilation_config" value="" placeholder='{"cudagraph_capture_sizes":[1,2,4,8,16,32]}'></label>
+      <div class="grid">
+        <label title="Pass --no-async-scheduling. Required when a speculative config sets disable_padded_drafter_batch, which is incompatible with async scheduling."><input type="checkbox" name="disable_async_scheduling" role="switch"> Disable async scheduling</label>
+        <label title="Serve a vision-language checkpoint text-only, skipping its vision tower."><input type="checkbox" name="language_model_only" role="switch"> Language model only</label>
+      </div>
+      <div class="grid">
+        <label title="Path to a Jinja chat template that overrides the one in the model repo.">Chat template <input type="text" name="chat_template" value="" placeholder="(use the model's own)"></label>
+        <label title="Load the tokenizer from a different path or HF repo than the model.">Tokenizer <input type="text" name="tokenizer" value="" placeholder="(use the model's own)"></label>
+      </div>
+      <label title="Raw CLI flags appended to vllm serve. Quoted values are kept together, so JSON with spaces survives. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="" placeholder="--disable-log-requests --swap-space 4"></label>
+    </fieldset>
+
+    <fieldset><legend>Effective Command</legend>
+      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">vllm serve /models/unsloth/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --served-model-name unsloth/Qwen3.8-27B-FP8 --max-model-len 32768 --tensor-parallel-size 2 --kv-cache-dtype fp8 --enable-chunked-prefill --enable-auto-tool-choice --tool-call-parser hermes</pre>
+    </fieldset>
+    <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
+    <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>
+  </form>
+
+  <dialog id="quant-help-unsloth--Qwen3-8-27B-FP8"><article style="max-width:600px;">
+    <header><button aria-label="Close" rel="prev" onclick="this.closest('dialog').close();"></button><strong>Quantization Methods</strong></header>
+    <table style="font-size:0.85rem;">
+      <thead><tr><th>Method</th><th>Bits</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>FP16/BF16</strong></td><td>16</td><td>Full precision. Best quality, highest VRAM. BF16 preferred for newer GPUs.</td></tr>
+        <tr><td><strong>AWQ</strong></td><td>4</td><td>Activation-aware Weight Quantization. Good quality/size tradeoff. Pre-quantized models on HF.</td></tr>
+        <tr><td><strong>GPTQ</strong></td><td>4</td><td>Post-Training Quantization. Similar to AWQ, depends on calibration data.</td></tr>
+        <tr><td><strong>Marlin</strong></td><td>4</td><td>Optimized kernel for compatible GPTQ/AWQ. Faster inference, same model files. Needs symmetric quant.</td></tr>
+        <tr><td><strong>FP8</strong></td><td>8</td><td>8-bit float. Half VRAM of FP16, minimal quality loss. Native on Ada/RDNA4.</td></tr>
+        <tr><td><strong>BitsAndBytes</strong></td><td>4/8</td><td>Dynamic quantization at load. No pre-quantized model needed. Slower load, requires eager mode.</td></tr>
+        <tr><td><strong>SqueezeLLM</strong></td><td>4</td><td>Older method. Rarely used with newer models.</td></tr>
+        <tr><td><strong>compressed_tensors</strong></td><td>mixed</td><td>vLLM native format. Mixed precision across layers.</td></tr>
+      </tbody>
+    </table>
+    <footer><button onclick="this.closest('dialog').close();">Close</button></footer>
+  </article></dialog>
+</article>

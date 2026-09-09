@@ -1,4 +1,118 @@
 {{define "content"}}
+<style>
+/* ── Job rows ── */
+.job-list .job-row {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--pico-card-background-color);
+}
+.job-list .job-row > summary { list-style: none; cursor: pointer; }
+.job-list .job-row > summary::marker,
+.job-list .job-row > summary::-webkit-details-marker { display: none; }
+.job-list .job-row > summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 1rem;
+    color: var(--pico-muted-color);
+}
+.job-list .job-row[open] > summary::before { content: "▾"; }
+.job-row-line1 { display: inline-flex; gap: 0.6rem; align-items: baseline; }
+.job-row-line2 { display: block; margin-left: 1rem; margin-top: 0.1rem; color: var(--pico-muted-color); }
+
+/* ── Status pills ── */
+.job-status, .cell-status {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.4;
+    background: var(--pico-muted-border-color);
+    color: var(--pico-color);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+/* Translucent fill plus on-tone text, so the pills read at a glance without
+   fighting whichever theme is active. */
+.status-running   { background: rgba(154, 166, 212, .16); color: var(--pico-primary); }
+.status-completed { background: rgba(127, 180, 144, .16); color: var(--pico-ins-color); }
+.status-failed    { background: rgba(217, 138, 138, .16); color: var(--pico-del-color); }
+.status-canceled, .status-skipped {
+    background: var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+}
+.status-pending {
+    background: transparent;
+    border: 1px solid var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+}
+.cell-failed-tag { color: var(--pico-del-color); font-size: 0.75rem; }
+.job-progress    { font-size: 0.8rem; color: var(--pico-muted-color); }
+.job-detail-slot { padding: 0.5rem 0 0; }
+.job-meta, .job-desc { font-size: 0.75rem; }
+/* Its own line: a description and a timestamp side by side read as one
+   run-on sentence. */
+.job-desc { display: block; }
+
+/* ── Comparison ── */
+.bench-compare-bars { display: block; margin-bottom: 0.75rem; }
+.bench-compare-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+}
+.bench-compare-label {
+    width: 380px;
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: help;
+}
+.bench-compare-bartrack {
+    flex: 1;
+    background: var(--pico-muted-border-color);
+    border-radius: 4px;
+    height: 1.2rem;
+}
+.bench-compare-barfill { display: block; border-radius: 4px; height: 100%; min-width: 2px; }
+.bench-compare-value { width: 60px; font-size: 0.85rem; }
+.bench-compare-rank  { width: 60px; font-size: 0.75rem; text-align: right; color: var(--pico-muted-color); }
+.bench-compare-rank mark { padding: 0 0.3rem; font-size: 0.7rem; }
+
+/* The table is wider than the page whenever a comparison varies on much.
+   Overlay scrollbars draw nothing until the pointer moves, so the table looks
+   truncated rather than scrollable — ask for a bar that stays. */
+.bench-compare-scroll {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--pico-muted-border-color) transparent;
+}
+.bench-compare-scroll::-webkit-scrollbar { height: 10px; }
+.bench-compare-scroll::-webkit-scrollbar-track {
+    background: var(--pico-background-color);
+    border-radius: 5px;
+}
+.bench-compare-scroll::-webkit-scrollbar-thumb {
+    background: var(--pico-muted-border-color);
+    border-radius: 5px;
+}
+.bench-compare-scroll::-webkit-scrollbar-thumb:hover { background: var(--pico-muted-color); }
+
+/* The row of actions under a job's cells. */
+.job-action {
+    margin: 0;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.8rem;
+    width: auto;
+    text-decoration: none;
+}
+</style>
+
 <h1>Benchmarks <a href="#" style="font-size:0.6em;" onclick="event.preventDefault();document.getElementById('bench-about').showModal();">[?]</a></h1>
 
 <p style="opacity:0.7;">
@@ -42,24 +156,381 @@ Benchmark inference performance with structured results, multi-run comparison, a
 </details>
 
 <h2 style="margin-top:1.5rem;">Jobs &amp; runs</h2>
+{{/* Where a submission confirmation lands, out-of-band, so it survives the
+     form closing. */}}
+<div id="bench-notice"></div>
+<div id="comparison-view"></div>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"
-         hx-trigger="load, benchStarted from:body"
+         hx-trigger="load, benchStarted from:body, jobSubmitted from:body, runSubmitted from:body, jobChanged from:body"
          hx-swap="innerHTML">
   <p style="opacity:0.6;">Loading…</p>
 </section>
 
 <script>
-  // Refresh the job list when a new run or job starts.
-  document.body.addEventListener('htmx:afterRequest', function(evt) {
-    if (evt.detail && evt.detail.xhr &&
-        evt.detail.xhr.status === 202 &&
-        evt.detail.requestConfig &&
-        (evt.detail.requestConfig.path === '/api/benchmarks/' ||
-         evt.detail.requestConfig.path === '/api/benchmark-jobs/') &&
-        evt.detail.requestConfig.verb === 'post') {
-      htmx.trigger('body', 'benchStarted');
+/* Refresh the list when an ad-hoc run starts. Batch jobs signal themselves
+   with HX-Trigger jobSubmitted, which covers both creating one and editing an
+   existing one — matching on path and verb here would have missed the PUT an
+   edit sends. */
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+  if (evt.detail && evt.detail.xhr &&
+      evt.detail.xhr.status === 202 &&
+      evt.detail.requestConfig &&
+      evt.detail.requestConfig.path === '/api/benchmarks/' &&
+      evt.detail.requestConfig.verb === 'post') {
+    htmx.trigger('body', 'benchStarted');
+  }
+});
+
+/* Close a submission form once its work is away, and put the list it landed in
+   where the eye already is. The server sends these only on success, so a
+   rejected submission leaves its form open with the error showing. */
+function closeSubmitForm(formID, resultID) {
+  var form = document.getElementById(formID);
+  if (!form) return;
+  var d = form.closest('details');
+  if (d) d.open = false;
+  var result = document.getElementById(resultID);
+  if (result) result.innerHTML = '';
+  var notice = document.getElementById('bench-notice');
+  if (notice) notice.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+document.body.addEventListener('jobSubmitted', function () {
+  closeSubmitForm('bench-job-form', 'bench-job-result');
+});
+document.body.addEventListener('runSubmitted', function () {
+  closeSubmitForm('bench-form', 'bench-start-result');
+});
+
+// --- Cell selection ---------------------------------------------------
+// The checkboxes live inside whichever job detail is open; the actions below
+// read them from the button's own table so two open jobs cannot mix.
+/* Selection lives in two places — a job's cell table and the ad-hoc runs
+   list — and the actions on it are the same either way, so the scope is
+   resolved from whichever container the button sits in rather than
+   duplicating compare/visualize/export/delete per context. */
+function selectedRunIDs(btn) {
+  var root = btn.closest('.job-detail') || btn.closest('.bench-runs-container');
+  if (!root) return [];
+  return Array.prototype.slice
+    .call(root.querySelectorAll('.cell-check:checked, .bench-check:checked'))
+    .map(function(c) { return c.value; });
+}
+
+function requireSelection(btn, min, what) {
+  var ids = selectedRunIDs(btn);
+  if (ids.length < min) {
+    alert('Select at least ' + min + ' ' + what + '.');
+    return null;
+  }
+  return ids;
+}
+
+function compareSelectedCells(btn) {
+  var ids = requireSelection(btn, 2, 'runs to compare');
+  if (!ids) return;
+  htmx.ajax('GET', '/api/benchmarks/compare?ids=' + encodeURIComponent(ids.join(',')),
+            {target: '#comparison-view', swap: 'innerHTML'});
+  document.getElementById('comparison-view').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function visualizeSelectedCells(btn) {
+  var ids = requireSelection(btn, 2, 'runs to visualize');
+  if (!ids) return;
+  // Same tab: a chart is where the work continues, not a side trip.
+  window.location.href = '/benchmarks/visualize?ids=' + encodeURIComponent(ids.join(','));
+}
+
+function deleteSelectedRuns(btn) {
+  var ids = requireSelection(btn, 1, 'run to delete');
+  if (!ids) return;
+  jobAction('/api/benchmarks/batch-delete?ids=' + encodeURIComponent(ids.join(',')), 'DELETE',
+            'Delete ' + ids.length + ' run' + (ids.length === 1 ? '' : 's') + '? This cannot be undone.');
+}
+
+function compareSelectedRuns(btn) { compareSelectedCells(btn); }
+function visualizeSelectedRuns(btn) { visualizeSelectedCells(btn); }
+
+function exportSelectedRuns(btn, format) {
+  var ids = requireSelection(btn, 1, 'run to export');
+  if (!ids) return;
+  /* A plain navigation rather than fetch: the response is a download, and
+     letting the browser handle it keeps the filename the server sets. */
+  window.location.href = '/api/benchmarks/export?format=' + format +
+    '&ids=' + encodeURIComponent(ids.join(','));
+}
+
+// --- Ad-hoc runs list -------------------------------------------------
+
+function benchGroupRows(header) {
+  return header.parentElement.querySelector(
+    '.bench-group-rows[data-group="' + CSS.escape(header.getAttribute('data-group')) + '"]');
+}
+
+function toggleBenchGroup(header) {
+  var rows = benchGroupRows(header);
+  if (!rows) return;
+  var collapsed = header.classList.toggle('collapsed');
+  rows.hidden = collapsed;
+  var caret = header.querySelector('.caret');
+  if (caret) caret.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+}
+
+function setAllBenchGroups(btn, open) {
+  var root = btn.closest('.bench-runs-container');
+  if (!root) return;
+  root.querySelectorAll('.bench-group-header').forEach(function (h) {
+    if (h.classList.contains('collapsed') === !open) return;
+    toggleBenchGroup(h);
+  });
+}
+
+/* Filters rows by the haystack the server put on each one, and hides a group
+   whose rows all filtered out — a header claiming five runs above nothing is
+   worse than no header. An expanded detail row follows its own run. */
+function filterBenchRuns(input) {
+  var root = input.closest('.bench-runs-container');
+  if (!root) return;
+  var q = (input.value || '').trim().toLowerCase();
+
+  root.querySelectorAll('.bench-group-rows').forEach(function (body) {
+    var shown = 0;
+    body.querySelectorAll('tr[data-search]').forEach(function (tr) {
+      var match = !q || tr.getAttribute('data-search').indexOf(q) !== -1;
+      tr.hidden = !match;
+      var detail = tr.nextElementSibling;
+      if (detail && detail.classList.contains('bench-detail-row')) detail.hidden = !match;
+      if (match) shown++;
+    });
+    var header = root.querySelector(
+      '.bench-group-header[data-group="' + CSS.escape(body.getAttribute('data-group')) + '"]');
+    if (header) header.hidden = shown === 0;
+    /* A search should reveal what it matched, so matching rows in a collapsed
+       group are shown; clearing the box restores the collapse. */
+    if (q && shown > 0 && header && header.classList.contains('collapsed')) {
+      toggleBenchGroup(header);
+      header.dataset.autoOpened = '1';
+    } else if (!q && header && header.dataset.autoOpened) {
+      delete header.dataset.autoOpened;
+      if (!header.classList.contains('collapsed')) toggleBenchGroup(header);
     }
   });
+}
+
+/* Select-all covers what is visible: after filtering, ticking the header box
+   and pressing Delete should not take rows the filter is hiding. */
+function selectAllBenchRuns(box) {
+  var root = box.closest('.bench-runs-container');
+  if (!root) return;
+  root.querySelectorAll('.bench-group-rows tr[data-search]').forEach(function (tr) {
+    if (tr.hidden) return;
+    var c = tr.querySelector('.bench-check');
+    if (c) c.checked = box.checked;
+  });
+}
+
+// --- Job lifecycle ----------------------------------------------------
+function jobAction(url, method, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  fetch(url, {method: method, headers: {'HX-Request': 'true'}})
+    .then(function(r) {
+      if (!r.ok) { return r.text().then(function(t) { throw new Error(t || r.status); }); }
+      htmx.trigger(document.body, 'jobChanged');
+    })
+    .catch(function(e) { alert(String(e.message || e)); });
+}
+
+function cancelJob(id) {
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '/cancel', 'POST',
+            'Cancel this job? Cells that have not run yet will be skipped.');
+}
+
+function retryFailed(id) {
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '/retry-failed', 'POST', null);
+}
+
+function deleteJob(id, disposition) {
+  var msg = disposition === 'cascade'
+    ? 'Delete this job and every run it produced? This cannot be undone.'
+    : 'Delete this job but keep its runs? They move to Ad-Hoc Runs.';
+  jobAction('/api/benchmark-jobs/' + encodeURIComponent(id) + '?runs=' + disposition, 'DELETE', msg);
+}
+
+function openJobEditForm(id) {
+  htmx.ajax('GET', '/api/benchmark-jobs/form?from=' + encodeURIComponent(id),
+            {target: '#bench-job-form', swap: 'innerHTML'});
+  var d = document.getElementById('bench-job-form').closest('details');
+  if (d) { d.open = true; d.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+}
+
+/* ── Batch-job parameter menus ──────────────────────────────────────
+   Each sweepable parameter is a dropdown of checkboxes: tick one value to
+   fix it for the whole job, tick several to sweep it. The checkboxes carry
+   the form field name directly, so htmx serializes a repeated
+   sweep_<field> without any of this JS running — everything below is
+   about keeping the closed summary and the cell count honest. */
+
+function paramRows() {
+  var form = document.getElementById('new-job-form');
+  return form ? Array.from(form.querySelectorAll('.param-row')) : [];
+}
+
+/* The values a row contributes. "Use model's saved value" wins when it is
+   ticked, so a row can never ask for the default and an override at once. */
+function paramValues(row) {
+  var inherit = row.querySelector('.param-inherit');
+  if (inherit && inherit.checked) return [];
+  return Array.from(row.querySelectorAll('.param-value:checked')).map(function (c) { return c.value; });
+}
+
+/* Inheriting and choosing are mutually exclusive in both directions. */
+function onParamInheritToggle(cb) {
+  var row = cb.closest('.param-row');
+  if (cb.checked) {
+    row.querySelectorAll('.param-value').forEach(function (c) { c.checked = false; });
+  }
+  syncParamRow(row);
+}
+
+function onParamValueToggle(cb) {
+  var row = cb.closest('.param-row');
+  var inherit = row.querySelector('.param-inherit');
+  if (cb.checked && inherit) inherit.checked = false;
+  syncParamRow(row);
+}
+
+/* Numeric equality that requires the whole string to be a number, so
+   adding "8192" twice does not create a second checkbox, while "0.9" and
+   "0.90" are recognised as the same point. parseFloat would accept a
+   prefix and match "8192" against "81". */
+function sameParamValue(a, b) {
+  if (a === b) return true;
+  if (a === '' || b === '') return false;
+  var na = Number(a), nb = Number(b);
+  return !isNaN(na) && !isNaN(nb) && na === nb;
+}
+
+/* Adds a value the curated list does not offer. The server validates it —
+   an out-of-range or malformed one is rejected at submit with a message
+   naming the parameter — so this deliberately does not second-guess it. */
+function addParamCustom(el) {
+  var row = el.closest('.param-row');
+  var input = row.querySelector('.param-custom-input');
+  var raw = (input.value || '').trim();
+  if (!raw) return;
+
+  var existing = Array.from(row.querySelectorAll('.param-value')).find(function (c) {
+    return sameParamValue(c.value, raw);
+  });
+  if (existing) {
+    existing.checked = true;
+  } else {
+    var name = row.querySelector('.param-value')
+      ? row.querySelector('.param-value').getAttribute('name')
+      : 'sweep_' + row.getAttribute('data-param');
+    var label = document.createElement('label');
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'param-value';
+    box.name = name;
+    box.value = raw;
+    box.checked = true;
+    box.addEventListener('change', function () { onParamValueToggle(box); });
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' ' + raw + ' '));
+    var tag = document.createElement('small');
+    tag.style.opacity = '0.6';
+    tag.textContent = '(custom)';
+    label.appendChild(tag);
+    row.querySelector('.param-custom').insertAdjacentElement('beforebegin', label);
+  }
+
+  var inherit = row.querySelector('.param-inherit');
+  if (inherit) inherit.checked = false;
+  input.value = '';
+  syncParamRow(row);
+}
+
+/* Keeps the closed summary current: a set parameter should be readable
+   without opening its menu, and a swept one should look different from a
+   fixed one at a glance. */
+function syncParamRow(row) {
+  var summary = row.querySelector('.param-summary');
+  if (summary) {
+    var values = paramValues(row);
+    if (!values.length) {
+      summary.textContent = "Use model's saved value";
+      summary.removeAttribute('data-active');
+    } else if (values.length === 1) {
+      summary.textContent = values[0];
+      summary.setAttribute('data-active', 'fixed');
+    } else {
+      summary.textContent = values.join(', ') + ' \u2014 sweep';
+      summary.setAttribute('data-active', 'sweep');
+    }
+  }
+  updateMatrixCount();
+}
+
+/* The cell count, live. Worth showing while the job is being built rather
+   than at submit: every combination is a separate engine load, so the
+   difference between a job that takes minutes and one that takes a day is
+   a couple of extra ticks. */
+function updateMatrixCount() {
+  var form = document.getElementById('new-job-form');
+  if (!form) return;
+  var preview = document.getElementById('job-matrix-preview');
+  var btn = document.getElementById('job-submit-btn');
+  if (!preview || !btn) return;
+
+  var models = form.querySelectorAll('input[name=model_ids]:checked').length;
+  var presets = form.querySelectorAll('input[name=presets]:checked').length;
+  if (!models || !presets) {
+    preview.textContent = 'Select models and presets to compute the matrix size.';
+    preview.removeAttribute('data-over');
+    btn.disabled = true;
+    return;
+  }
+
+  var combos = 1, desc = '';
+  paramRows().forEach(function (row) {
+    var n = paramValues(row).length;
+    if (n < 2) return;              // one value fixes the parameter; it adds no cells
+    combos *= n;
+    desc += ' \u00d7 ' + n + ' ' + row.getAttribute('data-param');
+  });
+
+  var cells = models * presets * combos;
+  var text = models + ' model' + (models === 1 ? '' : 's') +
+             ' \u00d7 ' + presets + ' preset' + (presets === 1 ? '' : 's') +
+             desc + ' = ' + cells + ' cell' + (cells === 1 ? '' : 's');
+
+  /* Loads, not cells, are what make a job slow: presets of the same model
+     and configuration share one load. This matches how the runner groups
+     its work, so the estimate cannot flatter the job. */
+  var loads = models * combos;
+  text += ' \u00b7 ~' + loads + ' engine load' + (loads === 1 ? '' : 's');
+
+  var max = parseInt(form.getAttribute('data-max-cells'), 10);
+  if (max && combos > max) {
+    preview.textContent = text + ' \u2014 over the ' + max + '-combination limit';
+    preview.setAttribute('data-over', '1');
+    btn.disabled = true;
+    return;
+  }
+  preview.textContent = text;
+  preview.removeAttribute('data-over');
+  btn.disabled = false;
+}
+
+/* The form arrives by htmx, including pre-ticked values when re-running a
+   job, so the summaries and the count have to be built after each swap
+   rather than once on page load. */
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.target && e.target.querySelector && e.target.querySelector('#new-job-form')) {
+    paramRows().forEach(syncParamRow);
+    updateMatrixCount();
+  }
+});
 </script>
 {{end}}

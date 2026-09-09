@@ -1,0 +1,156 @@
+{{define "model_config" -}}
+<article>
+  <div class="model-config-header">
+    <span>Configure <span class="mc-owner">&mdash; {{.DisplayName}}</span></span>
+    <span class="mc-restart">Restart required</span>
+  </div>
+  <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
+    <strong>VRAM Estimate:</strong> {{printf "%.1f" .WeightGB}} GB weights + {{printf "%.1f" .OverheadGB}} GB overhead = <strong>{{printf "%.1f" .TotalGB}} GB</strong> &mdash; {{.FitLabel}}
+  </div>
+  {{/* A rejected save leaves the form unswapped and htmx says nothing about
+       it, so the panel just looks frozen — including for changes whose
+       re-render would reveal new fields. Surface the response text, and put
+       the scroll position back afterwards: the panel is halfway down a long
+       page and every auto-save jumped it. */}}
+  <form hx-put="/api/models/config?id={{.ID}}" hx-trigger="change delay:500ms" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML" hx-include="closest form"
+        hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
+        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
+        hx-on::response-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: '+(event.detail.xhr.responseText.trim()||('server returned '+event.detail.xhr.status)); e.style.display='block';}"
+        hx-on::send-error="var e=this.querySelector('.cfg-save-error'); if(e){e.textContent='Not saved: could not reach the server.'; e.style.display='block';}">
+
+    <fieldset><legend>Core</legend>
+      <div class="grid">
+        <label title="Data type for model weights. 'auto' uses the model's native dtype (usually bfloat16). Use float16 for older GPUs that don't support bfloat16.">dtype <select name="dtype">
+          {{- range .DtypeOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+        {{/* The picker and the custom box are one form field between them, so
+             exactly one carries the name at a time — which is what the onchange
+             handler maintains from then on.
+
+             The picker used to be rendered with the name unconditionally. On a
+             model whose context was already custom, that meant both controls
+             submitted max_model_len, the picker's "custom" went first, and
+             FormValue returned the string "custom" — which parsed to 0, and
+             silently reset the operator's context length to the model default
+             the next time anything on this form was touched. */}}
+        <label title="Maps to vLLM's --max-model-len. Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache and let the engine warm up faster. Model max is {{.MaxCtx}}.">Context length <small>(--max-model-len, max: {{.MaxCtx}})</small><select name="{{if not .CtxIsCustom}}max_model_len{{end}}" id="ctx-sel-{{.SafeID}}" onchange="var c=document.getElementById('ctx-cust-{{.SafeID}}');if(this.value==='custom'){c.style.display='';c.name='max_model_len';this.name='';}else{c.style.display='none';c.name='';this.name='max_model_len';}">
+          {{- range .CtxOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+          <option value="custom"{{if .CtxIsCustom}} selected{{end}}>Custom...</option>
+        </select><input type="number" id="ctx-cust-{{.SafeID}}" name="{{.CtxCustomName}}" value="{{.ModelLen}}" min="256" max="{{.MaxCtx}}" style="{{if not .CtxIsCustom}}display:none;{{end}}margin-top:0.25rem;" placeholder="Custom context length"></label>
+      </div>
+      <div class="grid">
+        <label title="Split the model across multiple GPUs. TP must evenly divide the model's attention heads. Higher TP reduces per-GPU memory but adds inter-GPU communication overhead.">Tensor parallel <select name="tensor_parallel_size">
+          {{- range .TPOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+        <label title="Fraction of GPU memory vLLM is allowed to use (0.1-0.99). Higher = more KV cache (longer contexts) but risk OOM. 0.90 is a safe default.">GPU memory utilization<input type="range" name="gpu_memory_utilization" min="0.1" max="0.99" step="0.01" value="{{printf "%.2f" .GPUMemUtil}}" oninput="this.nextElementSibling.textContent=this.value"><small>{{printf "%.2f" .GPUMemUtil}}</small></label>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>Performance</legend>
+      <div class="grid">
+        <label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}> Enforce eager mode</label>
+        <label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"{{if .EnablePrefixCaching}} checked{{end}}> Prefix caching</label>
+      </div>
+      <label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs">
+        {{- range .MaxNumSeqsOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+      </select></label>
+      {{/* Both of these existed in the config and in BuildArgs but had no form
+           field, so every save through this panel wiped them: the batched-token
+           budget was reset to 0, and chunked prefill — read from a checkbox that
+           was never rendered — was forced off. */}}
+      <label title="Prefill in chunks so a long prompt does not monopolise a step. Normally leave on; vLLM V1 enables it by default."><input type="checkbox" name="enable_chunked_prefill" role="switch"{{if .EnableChunkedPrefill}} checked{{end}}> Enable chunked prefill</label>
+      <label title="Tokens per prefill chunk. 0 lets vLLM choose.">Max batched tokens <input type="number" name="max_num_batched_tokens" value="{{.MaxNumBatchedTokens}}" min="0" step="256" placeholder="0 = auto"></label>
+      {{if .BatchedAdvice}}
+      {{- if .BatchedAdviceWarn -}}
+      <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;color:var(--pico-del-color);"><strong>Warning:</strong> {{.BatchedAdvice}}</small>
+      {{- else -}}
+      <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">{{.BatchedAdvice}}</small>
+      {{- end}}
+      {{end}}
+    </fieldset>
+
+    <fieldset><legend>Quantization <a href="#" onclick="document.getElementById('quant-help-{{.SafeID}}').showModal();return false;" style="font-size:0.75rem;text-decoration:none;" title="What are quantization methods?">&#9432;</a></legend>
+      <div class="grid">
+        <label title="Quantization method for inference. Options are filtered to what this model supports based on its format.">Method <select name="quantization">
+          {{- range .QuantOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+        <label title="Data type for KV cache. 'auto' uses FP16. FP8 halves cache memory for longer contexts, with minimal quality tradeoff.">KV cache dtype <select name="kv_cache_dtype">
+          {{- range .KVCacheOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>Tool Use</legend>
+      {{if .HasToolSupport -}}
+      <p style="margin-bottom:0.5rem;"><small>Detected: <strong>{{.DetectedParser}}</strong> parser (via {{.DetectionMethod}})</small></p>
+      {{- else -}}
+      <p style="margin-bottom:0.5rem;"><small style="opacity:0.6;">No tool use support detected in this model's chat template.</small></p>
+      {{- end}}
+      {{/* Toggling the switch on fills the parser from detection, and off
+           clears it: vLLM rejects --enable-auto-tool-choice without a parser. */}}
+      <label title="Enable OpenAI-compatible tool/function calling. Sets both --enable-auto-tool-choice and --tool-call-parser. The parser is auto-detected from the model's chat template."><input type="checkbox" name="enable_auto_tool_choice" role="switch"{{if .ToolEnabled}} checked{{end}} onchange="var ps=this.closest('form').querySelector('[name=tool_call_parser]');if(this.checked){ps.value='{{.DetectedParser}}';}else{ps.value='';}"> Enable tool use</label>
+      <details style="margin-top:0.5rem;"><summary style="font-size:0.85rem;cursor:pointer;">Parser override</summary>
+        <label title="Override the auto-detected parser. Only change this if auto-detection got it wrong. Using the wrong parser will break tool calling."><select name="tool_call_parser">
+          {{- /* The auto entry sits outside every optgroup so it stays at the top. */ -}}
+          <option value=""{{if .ParserAutoSelected}} selected{{end}}>(auto: {{.DetectedParser}})</option>
+          {{- range .ParserGroups}}<optgroup label="{{.Label}}">
+            {{- range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+          </optgroup>{{end -}}
+        </select></label>
+      </details>
+    </fieldset>
+
+    <fieldset><legend>Advanced</legend>
+      <label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"{{if .TrustRemoteCode}} checked{{end}}> Trust remote code</label>
+      <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Warning: executes arbitrary code from the model repo</small>
+      <div class="grid">
+        <label title="Override vLLM's attention backend. Leave on auto unless a model or image needs a specific one.">Attention backend <select name="attention_backend">
+          {{- range .BackendOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+        <label title="Parser for models that emit a separate reasoning/thinking channel, e.g. qwen3 or deepseek_r1.">Reasoning parser <input type="text" name="reasoning_parser" value="{{.ReasoningParser}}" placeholder="(none)"></label>
+      </div>
+      <div class="grid">
+        <label title="Required alongside prefix caching on hybrid linear-attention (gated-delta-net / mamba) models. 'align' snapshots the recurrent state at block boundaries so those layers become cacheable too.">Mamba cache mode <select name="mamba_cache_mode">
+          {{- range .MambaOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+        <label title="Pin the KV cache pool size in bytes. 0 lets vLLM size it, which under-reports free VRAM on ROCm. Clear this before measuring anything memory-related — while set, the pool stops responding to other memory changes.">KV cache memory (bytes) <input type="number" name="kv_cache_memory" value="{{.KVCacheMemory}}" min="0" step="1048576" placeholder="0 = auto"></label>
+      </div>
+      <label title="Raw JSON for --speculative-config. Lossless: the target model verifies every drafted token.">Speculative config (JSON) <input type="text" name="speculative_config" value="{{.SpeculativeConfig}}" placeholder='{"method":"mtp","num_speculative_tokens":8}'></label>
+      <label title="Raw JSON for --compilation-config. Most useful for trimming the CUDA-graph capture ladder to sizes this serve can actually reach.">Compilation config (JSON) <input type="text" name="compilation_config" value="{{.CompilationConfig}}" placeholder='{"cudagraph_capture_sizes":[1,2,4,8,16,32]}'></label>
+      <div class="grid">
+        <label title="Pass --no-async-scheduling. Required when a speculative config sets disable_padded_drafter_batch, which is incompatible with async scheduling."><input type="checkbox" name="disable_async_scheduling" role="switch"{{if .DisableAsyncScheduling}} checked{{end}}> Disable async scheduling</label>
+        <label title="Serve a vision-language checkpoint text-only, skipping its vision tower."><input type="checkbox" name="language_model_only" role="switch"{{if .LanguageModelOnly}} checked{{end}}> Language model only</label>
+      </div>
+      <div class="grid">
+        <label title="Path to a Jinja chat template that overrides the one in the model repo.">Chat template <input type="text" name="chat_template" value="{{.ChatTemplate}}" placeholder="(use the model's own)"></label>
+        <label title="Load the tokenizer from a different path or HF repo than the model.">Tokenizer <input type="text" name="tokenizer" value="{{.Tokenizer}}" placeholder="(use the model's own)"></label>
+      </div>
+      <label title="Raw CLI flags appended to vllm serve. Quoted values are kept together, so JSON with spaces survives. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="{{.ExtraFlags}}" placeholder="--disable-log-requests --swap-space 4"></label>
+    </fieldset>
+
+    <fieldset><legend>Effective Command</legend>
+      <pre style="font-size:0.75rem;white-space:pre-wrap;word-break:break-all;padding:0.5rem;background:var(--pico-code-background-color);border-radius:0.25rem;user-select:all;cursor:pointer;" title="Click to select all">{{.EffectiveCommand}}</pre>
+    </fieldset>
+    <small class="cfg-save-error" style="display:none;color:var(--pico-del-color);font-weight:600;"></small>
+    <small style="color:var(--pico-muted-color);">Changes save automatically. Launch parameters apply on the next restart.</small>
+  </form>
+
+  <dialog id="quant-help-{{.SafeID}}"><article style="max-width:600px;">
+    <header><button aria-label="Close" rel="prev" onclick="this.closest('dialog').close();"></button><strong>Quantization Methods</strong></header>
+    <table style="font-size:0.85rem;">
+      <thead><tr><th>Method</th><th>Bits</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>FP16/BF16</strong></td><td>16</td><td>Full precision. Best quality, highest VRAM. BF16 preferred for newer GPUs.</td></tr>
+        <tr><td><strong>AWQ</strong></td><td>4</td><td>Activation-aware Weight Quantization. Good quality/size tradeoff. Pre-quantized models on HF.</td></tr>
+        <tr><td><strong>GPTQ</strong></td><td>4</td><td>Post-Training Quantization. Similar to AWQ, depends on calibration data.</td></tr>
+        <tr><td><strong>Marlin</strong></td><td>4</td><td>Optimized kernel for compatible GPTQ/AWQ. Faster inference, same model files. Needs symmetric quant.</td></tr>
+        <tr><td><strong>FP8</strong></td><td>8</td><td>8-bit float. Half VRAM of FP16, minimal quality loss. Native on Ada/RDNA4.</td></tr>
+        <tr><td><strong>BitsAndBytes</strong></td><td>4/8</td><td>Dynamic quantization at load. No pre-quantized model needed. Slower load, requires eager mode.</td></tr>
+        <tr><td><strong>SqueezeLLM</strong></td><td>4</td><td>Older method. Rarely used with newer models.</td></tr>
+        <tr><td><strong>compressed_tensors</strong></td><td>mixed</td><td>vLLM native format. Mixed precision across layers.</td></tr>
+      </tbody>
+    </table>
+    <footer><button onclick="this.closest('dialog').close();">Close</button></footer>
+  </article></dialog>
+</article>
+{{- end}}

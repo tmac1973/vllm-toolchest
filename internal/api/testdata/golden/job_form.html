@@ -1,0 +1,311 @@
+<article>
+  <header><strong>New batch job</strong></header>
+  
+  <form id="new-job-form" data-max-cells="64"
+        hx-post="/api/benchmark-jobs/"
+        hx-encoding="application/x-www-form-urlencoded"
+        hx-target="#bench-job-result" hx-swap="innerHTML">
+    <label>Name <input type="text" name="name" value="" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" value="" placeholder="optional"></label>
+
+    <label>Models</label>
+    <div><label><input type="checkbox" name="model_ids" value="TheBloke/Mixtral-8x7B-AWQ" onchange="updateMatrixCount()"> Mixtral-8x7B-AWQ <small style="opacity:0.6;">(TheBloke/Mixtral-8x7B-AWQ)</small></label><label><input type="checkbox" name="model_ids" value="unsloth/Qwen3.8-27B-FP8" onchange="updateMatrixCount()"> Qwen3.8-27B-FP8 <small style="opacity:0.6;">(unsloth/Qwen3.8-27B-FP8)</small></label>
+    </div>
+
+    <label>Presets</label>
+    <div><label><input type="checkbox" name="presets" value="internal-quick" onchange="updateMatrixCount()"> <code>internal-quick</code> <small style="opacity:0.7;">— Single streaming chat completion at 512-token prompt / 128 gen tokens. Sanity check after model load.</small></label><label><input type="checkbox" name="presets" value="internal-standard" onchange="updateMatrixCount()"> <code>internal-standard</code> <small style="opacity:0.7;">— Three streaming chat completions at 128 / 512 / 2048-token prompts (128 gen tokens). Captures TTFT and gen-TPS scaling across short contexts.</small></label><label><input type="checkbox" name="presets" value="internal-thorough" onchange="updateMatrixCount()"> <code>internal-thorough</code> <small style="opacity:0.7;">— Five repetitions at 128 / 512 / 2048 / 8192-token prompts with 256 generated tokens. Stresses long-context prefill.</small></label><label><input type="checkbox" name="presets" value="internal-long-ctx" onchange="updateMatrixCount()"> <code>internal-long-ctx</code> <small style="opacity:0.7;">— Single 32768-token prompt with 512 generated tokens. Stresses KV cache, paged attention, and KV-cache dtype on long contexts.</small></label><label><input type="checkbox" name="presets" value="benchy-quick" onchange="updateMatrixCount()"> <code>benchy-quick</code> <small style="opacity:0.7;">— Single-shot llama-benchy run. Smoke test for the engine-agnostic comparison path.</small></label><label><input type="checkbox" name="presets" value="benchy-standard" onchange="updateMatrixCount()"> <code>benchy-standard</code> <small style="opacity:0.7;">— Three-run llama-benchy benchmark at 2048-token prompts. Comparable to llama-toolchest&#39;s benchy-standard.</small></label><label><input type="checkbox" name="presets" value="benchy-concurrency" onchange="updateMatrixCount()"> <code>benchy-concurrency</code> <small style="opacity:0.7;">— Stress vLLM&#39;s continuous batching by sweeping concurrency. Highlights where prefill saturates vs. throughput scales.</small></label>
+    </div>
+
+    <details style="margin:0.5rem 0;">
+      <summary><strong>Parameters</strong> <small style="opacity:0.7;">— pick one value to fix it, several to sweep</small></summary>
+      <p><small style="opacity:0.7;">Every parameter defaults to each model's saved setting. Pick a single value to
+        use it for the whole job; pick several and each becomes its own cell, multiplied against the models and
+        presets above. All of these change how the engine is launched, so <strong>every combination is a separate
+        load</strong> — 3 context lengths × 2 models is six loads, not six requests.</small></p>
+      
+      <div class="param-row" data-param="max_model_len">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">Context length <small style="opacity:0.6;">(max_model_len)</small></span>
+            <span class="param-summary" data-summary-for="max_model_len"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="4096"
+                      onchange="onParamValueToggle(this)">
+              4096
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="8192"
+                      onchange="onParamValueToggle(this)">
+              8192
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="16384"
+                      onchange="onParamValueToggle(this)">
+              16384
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="32768"
+                      onchange="onParamValueToggle(this)">
+              32768
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="65536"
+                      onchange="onParamValueToggle(this)">
+              65536
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_model_len" value="131072"
+                      onchange="onParamValueToggle(this)">
+              131072
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>Maps to --max-model-len. The KV cache is pre-allocated at this size, so it is usually the parameter that decides whether a model fits.</small>
+        </details>
+      </div>
+      
+      <div class="param-row" data-param="tensor_parallel_size">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">Tensor parallel size <small style="opacity:0.6;">(tensor_parallel_size)</small></span>
+            <span class="param-summary" data-summary-for="tensor_parallel_size"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_tensor_parallel_size" value="1"
+                      onchange="onParamValueToggle(this)">
+              1
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_tensor_parallel_size" value="2"
+                      onchange="onParamValueToggle(this)">
+              2
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_tensor_parallel_size" value="4"
+                      onchange="onParamValueToggle(this)">
+              4
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_tensor_parallel_size" value="8"
+                      onchange="onParamValueToggle(this)">
+              8
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>How many GPUs the model is split across. Must divide the model&#39;s attention head count.</small>
+        </details>
+      </div>
+      
+      <div class="param-row" data-param="gpu_memory_utilization">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">GPU memory utilization <small style="opacity:0.6;">(gpu_memory_utilization)</small></span>
+            <span class="param-summary" data-summary-for="gpu_memory_utilization"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_gpu_memory_utilization" value="0.80"
+                      onchange="onParamValueToggle(this)">
+              0.80
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_gpu_memory_utilization" value="0.85"
+                      onchange="onParamValueToggle(this)">
+              0.85
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_gpu_memory_utilization" value="0.90"
+                      onchange="onParamValueToggle(this)">
+              0.90
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_gpu_memory_utilization" value="0.95"
+                      onchange="onParamValueToggle(this)">
+              0.95
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>Fraction of each card vLLM may use. Higher leaves more room for KV cache and less for everything else.</small>
+        </details>
+      </div>
+      
+      <div class="param-row" data-param="max_num_seqs">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">Max concurrent sequences <small style="opacity:0.6;">(max_num_seqs)</small></span>
+            <span class="param-summary" data-summary-for="max_num_seqs"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="1"
+                      onchange="onParamValueToggle(this)">
+              1
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="4"
+                      onchange="onParamValueToggle(this)">
+              4
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="16"
+                      onchange="onParamValueToggle(this)">
+              16
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="32"
+                      onchange="onParamValueToggle(this)">
+              32
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="64"
+                      onchange="onParamValueToggle(this)">
+              64
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="128"
+                      onchange="onParamValueToggle(this)">
+              128
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_max_num_seqs" value="256"
+                      onchange="onParamValueToggle(this)">
+              256
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>How many requests the engine will batch. Raising it trades latency for throughput.</small>
+        </details>
+      </div>
+      
+      <div class="param-row" data-param="kv_cache_dtype">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">KV cache dtype <small style="opacity:0.6;">(kv_cache_dtype)</small></span>
+            <span class="param-summary" data-summary-for="kv_cache_dtype"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_kv_cache_dtype" value="auto"
+                      onchange="onParamValueToggle(this)">
+              auto
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_kv_cache_dtype" value="fp8"
+                      onchange="onParamValueToggle(this)">
+              fp8
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_kv_cache_dtype" value="fp8_e5m2"
+                      onchange="onParamValueToggle(this)">
+              fp8_e5m2
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_kv_cache_dtype" value="fp8_e4m3"
+                      onchange="onParamValueToggle(this)">
+              fp8_e4m3
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>FP8 halves the KV cache, which buys context length at some cost in quality.</small>
+        </details>
+      </div>
+      
+      <div class="param-row" data-param="enforce_eager">
+        <details class="param-menu">
+          <summary>
+            <span class="param-label">Enforce eager mode <small style="opacity:0.6;">(enforce_eager)</small></span>
+            <span class="param-summary" data-summary-for="enforce_eager"
+                  >Use model&#39;s saved value</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" checked
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_enforce_eager" value="false"
+                      onchange="onParamValueToggle(this)">
+              false
+            </label>
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_enforce_eager" value="true"
+                      onchange="onParamValueToggle(this)">
+              true
+            </label>
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>Skips graph capture. Slower steady-state, faster startup — worth measuring rather than assuming.</small>
+        </details>
+      </div>
+    </details>
+
+    <p id="job-matrix-preview" class="job-matrix-preview">Select models and presets to compute the matrix size.</p>
+
+    <button type="submit" id="job-submit-btn">Submit job</button>
+  </form>
+  <div id="bench-job-result"></div>
+</article>

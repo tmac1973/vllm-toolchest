@@ -38,10 +38,15 @@ func (s *SSEWriter) SendData(data string) error {
 	return s.SendEvent("", data)
 }
 
+// SendLine sends one line of streamed output.
+//
+// One data field, not two. A second, empty "data:" used to follow, and the SSE
+// spec joins an event's data fields with a newline — so the browser received
+// "<line>\n" rather than "<line>", and every consumer appends its own newline
+// on top. The result was a blank line between every log line in the server and
+// tuning panes, and doubled blank lines wherever vLLM emitted one.
 func (s *SSEWriter) SendLine(data string) error {
-	fmt.Fprintf(s.w, "data: %s\ndata:\n\n", data)
-	s.flusher.Flush()
-	return nil
+	return s.SendData(data)
 }
 
 // StreamLines streams log lines from a channel, sending each as an SSE line

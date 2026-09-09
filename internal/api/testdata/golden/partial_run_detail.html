@@ -1,0 +1,55 @@
+<article style="margin:0.5rem 0;">
+  <header><strong>internal-thorough</strong> &middot; <small>2026-09-07 19:31:04</small></header>
+  <small>
+    <strong>config</strong>:
+    max_model_len=32768, tp=2, gpu_mem_util=0.90, dtype=auto, kv_cache=fp8, eager=false, quant=fp8
+  </small>
+  
+  <br><small><strong>hardware</strong>: 2 × AMD Radeon AI PRO R9700 (32 GB) &middot; vLLM 0.1.dev1</small>
+  <p style="margin:0.6rem 0 0.2rem;"><small><strong>Results by prompt size</strong> &mdash; one row per prompt
+    length, mean &plusmn; standard deviation across repetitions. Prompt throughput climbs steeply with prompt
+    length, so the run's overall average matches none of these; this is the form comparable with figures
+    published elsewhere, which are always quoted per length.</small></p>
+  <table role="grid" style="font-size:0.85rem;">
+    <thead><tr>
+      <th title="Prompt length, llama-bench style: pp&lt;prompt tokens&gt;">Test</th>
+      <th title="Prompt processing, mean &plusmn; stddev">PP t/s</th>
+      <th title="Token generation, mean &plusmn; stddev">TG t/s</th>
+      <th title="Time to first token">TTFT</th>
+      <th title="Repetitions at this prompt length">Reps</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td><kbd>pp256</kbd></td>
+        <td><strong>278</strong> &plusmn; 3</td>
+        <td><strong>101.0</strong> &plusmn; 1.2</td>
+        <td>934 ms</td>
+        <td>2</td>
+      </tr>
+      <tr>
+        <td><kbd>pp1024</kbd></td>
+        <td><strong>928</strong></td>
+        <td><strong>98.1</strong></td>
+        <td>1104 ms</td>
+        <td>1</td>
+      </tr>
+    </tbody>
+  </table>
+  <details style="margin-top:0.4rem;">
+    <summary><small><strong>Individual requests</strong> (2)</small></summary>
+  <table><thead><tr>
+    <th>#</th><th>prompt tok</th><th>gen tok</th><th>TTFT (ms)</th><th>total (ms)</th><th>prompt tok/s</th><th>gen tok/s</th>
+  </tr></thead><tbody>
+    <tr>
+      <td>1</td><td>256</td><td>128</td><td>928</td><td>2180</td><td>275.8</td><td>102.2</td>
+    </tr>
+    <tr>
+      <td>2</td><td>1024</td><td>128</td><td>1104</td><td>2410</td><td>927.5</td><td>98.1</td>
+    </tr>
+  </tbody></table>
+  </details>
+  <p><strong>summary</strong>: avg gen 100.2 t/s (min 98.1, max 102.2), avg TTFT 1016 ms, avg prompt 601.7 t/s</p>
+  <small><strong>warnings</strong>:<ul>
+    <li>served model name was discovered, not configured</li>
+  </ul></small>
+</article>

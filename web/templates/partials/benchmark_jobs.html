@@ -1,0 +1,249 @@
+{{define "job_list" -}}
+{{if not . -}}
+<p style="opacity:0.7;">No benchmark jobs yet. Start an ad-hoc run or a batch job above.</p>
+{{- else -}}
+<div class="job-list">
+{{- range .}}
+<details class="job-row" data-job-id="{{.ID}}"
+         ontoggle="if(this.open && !this.dataset.loaded){this.dataset.loaded='1';htmx.trigger(this.querySelector('.job-detail-slot'),'showJobDetail');}">
+    <summary>
+        <span class="job-row-line1">
+            <strong>{{.Name}}</strong>
+            <span id="job-status-{{.ID}}" class="job-status status-{{.Status}}" title="status: {{.Status}}">{{.Status}}</span>
+            <span id="job-progress-{{.ID}}" class="job-progress">
+                {{- if .IsAdhoc}}{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}
+                {{- else}}{{.Done}}/{{.Total}} cells
+                {{- if gt .Failed 0}} <span class="cell-failed-tag" title="failed cells">· {{.Failed}} failed</span>{{end}}
+                {{- end}}
+            </span>
+        </span>
+        <span class="job-row-line2">
+            {{- if .Description}}<small class="job-desc">{{.Description}}</small>{{end}}
+            <small class="job-meta">
+                {{- if .CreatedAt}}created {{.CreatedAt}}{{end}}
+                {{- if .FinishedAt}} · finished {{.FinishedAt}}{{end}}
+            </small>
+        </span>
+    </summary>
+    {{/* Loaded on first open rather than with the list: a job's cells are a
+         table each, and rendering every one of them up front makes opening
+         the page proportional to the whole history. */}}
+    <div class="job-detail-slot"
+         hx-get="/api/benchmark-jobs/{{.ID}}"
+         hx-trigger="showJobDetail"
+         hx-swap="innerHTML">
+        Loading…
+    </div>
+</details>
+{{- end}}
+</div>
+{{- end}}
+{{- end}}
+
+{{define "job_detail" -}}
+{{/* These two swap into the summary rendered by job_list, so a running job's
+     collapsed row stays live without re-rendering the list — which would
+     collapse every open row and lose the scroll position. htmx ignores an
+     out-of-band target that is not on the page. */}}
+<span id="job-status-{{.ID}}" hx-swap-oob="true" class="job-status status-{{.Status}}" title="status: {{.Status}}">{{.Status}}</span>
+<span id="job-progress-{{.ID}}" hx-swap-oob="true" class="job-progress">
+    {{- if .IsAdhoc}}{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}
+    {{- else}}{{.Done}}/{{.Total}} cells
+    {{- if gt .Failed 0}} <span class="cell-failed-tag" title="failed cells">· {{.Failed}} failed</span>{{end}}
+    {{- end}}
+</span>
+<div class="job-detail"
+     {{if .Running}}hx-get="/api/benchmark-jobs/{{.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+    {{- if .OverrideText}}
+    <small><strong>Overrides applied:</strong> {{.OverrideText}}</small>
+    {{- end}}
+    <table role="grid" style="font-size:0.85rem;margin-top:0.5rem;">
+        <thead>
+            <tr>
+                <th style="width:2rem;"><input type="checkbox" id="cell-check-all-{{.ID}}" hx-preserve="true" style="margin:0;"
+                    onchange="this.closest('table').querySelectorAll('.cell-check').forEach(function(c){c.checked=this.checked}.bind(this));"></th>
+                <th>Model</th>
+                <th>Quant</th>
+                <th>Preset</th>
+                {{if .HasSweeps}}<th>Sweep</th>{{end}}
+                <th>Status</th>
+                <th title="Token generation tokens/sec">TG t/s</th>
+                <th title="Prompt processing tokens/sec">PP t/s</th>
+                <th title="Time to first token">TTFT</th>
+                <th>Attempt</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {{- range .Rows}}
+            <tr id="cell-row-{{$.ID}}-{{.Idx}}">
+                <td>{{if .RunID}}<input type="checkbox" id="cell-check-{{.RunID}}" hx-preserve="true" class="cell-check" value="{{.RunID}}" style="margin:0;">{{end}}</td>
+                <td>{{.ModelName}}</td>
+                <td>{{if .Quant}}<kbd>{{.Quant}}</kbd>{{else}}&mdash;{{end}}</td>
+                <td><small>{{.Preset}}</small></td>
+                {{if $.HasSweeps}}<td><small>{{if .SweepText}}{{.SweepText}}{{else}}&mdash;{{end}}</small></td>{{end}}
+                <td><span class="cell-status status-{{.Status}}">{{.Status}}</span>
+                    {{- if .ErrorShort}}<br><small style="color:var(--pico-del-color);" title="{{.Error}}">{{.ErrorShort}}</small>{{end}}
+                </td>
+                <td>{{.TGTPS}}</td>
+                <td>{{.PPTPS}}</td>
+                <td>{{.TTFT}}</td>
+                <td><small>{{.Attempt}}</small></td>
+                <td>
+                    {{- if .RunID}}
+                    <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;width:auto;"
+                            hx-get="/api/benchmarks/{{.RunID}}" hx-target="next .bench-detail" hx-swap="innerHTML"
+                            hx-on::before-request="var d=this.closest('tr').nextElementSibling.querySelector('td');if(d.innerHTML.trim()){d.innerHTML='';event.preventDefault();}">Detail</button>
+                    {{- end}}
+                </td>
+            </tr>
+            {{/* hx-preserve keeps an expanded detail across the parent's 2s
+                 poll. The id needs to be stable, which the cell's position in
+                 the immutable Cells slice gives it. */}}
+            <tr id="cell-detail-{{$.ID}}-{{.Idx}}" hx-preserve="true"><td colspan="{{$.ColSpan}}" class="bench-detail"></td></tr>
+        {{- end}}
+        </tbody>
+    </table>
+
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
+        <button type="button" class="outline secondary job-action"
+                onclick="compareSelectedCells(this)">Compare selected</button>
+        <button type="button" class="outline secondary job-action"
+                title="Open charts of the selected cells — scatter, heatmap and 3D views of a sweep."
+                onclick="visualizeSelectedCells(this)">Visualize selected</button>
+        <button type="button" class="outline secondary job-action"
+                onclick="deleteSelectedRuns(this)">Delete selected runs</button>
+        {{- if .Running}}
+        <button type="button" class="outline secondary job-action"
+                onclick="cancelJob('{{.ID}}')">Cancel</button>
+        {{- else if not .IsAdhoc}}
+        <button type="button" class="outline secondary job-action"
+                onclick="retryFailed('{{.ID}}')">Retry failed</button>
+        <button type="button" class="outline secondary job-action"
+                onclick="openJobEditForm('{{.ID}}')">Edit &amp; Re-run</button>
+        {{- end}}
+        <a class="outline secondary job-action" role="button"
+           href="/api/benchmark-jobs/{{.ID}}/export?format=csv&scope=cells" download>CSV (cells)</a>
+        <a class="outline secondary job-action" role="button"
+           href="/api/benchmark-jobs/{{.ID}}/export?format=csv&scope=summary" download>CSV (summary)</a>
+        <a class="outline secondary job-action" role="button"
+           href="/api/benchmark-jobs/{{.ID}}/export?format=json" download>JSON</a>
+        {{- if not .IsAdhoc}}
+        <button type="button" class="outline secondary job-action"
+                onclick="deleteJob('{{.ID}}','cascade')">Delete (with runs)</button>
+        <button type="button" class="outline secondary job-action"
+                onclick="deleteJob('{{.ID}}','orphan')">Delete (keep runs)</button>
+        {{- end}}
+    </div>
+</div>
+{{- end}}
+
+{{define "job_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>completed</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else if eq . "canceled"}}<small>canceled</small>
+{{- else if eq . "pending"}}<small>pending</small>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{define "cell_status"}}
+{{- if eq . "running"}}<mark>running</mark>
+{{- else if eq . "completed"}}<ins>done</ins>
+{{- else if eq . "failed"}}<del>failed</del>
+{{- else if eq . "skipped"}}<small>skipped</small>
+{{- else}}{{.}}
+{{- end}}
+{{- end}}
+
+{{/* Swapped out-of-band into the notice slot above the jobs list rather than
+     into the form's own result area: the form closes on success, so a
+     confirmation rendered inside it would be hidden by the same event that
+     signals success. The body is otherwise empty, which also clears whatever
+     error the previous attempt left in the form. */}}
+{{define "job_started"}}<div id="bench-notice" hx-swap-oob="true">
+  <p><ins>Started <strong>{{.Name}}</strong></ins> <small style="opacity:0.7;">&mdash; job <code>{{.ID}}</code>, listed below.</small></p>
+</div>{{end}}
+
+{{define "job_form" -}}
+<article>
+  <header><strong>{{if .FromJob}}Edit &amp; re-run: {{.FromJob}}{{else}}New batch job{{end}}</strong></header>
+  {{- if .FromJob}}
+  <p><small style="opacity:0.7;">This re-runs the same job rather than making another. Cells that
+    still match and already completed keep their results, so only what changed is measured again;
+    results that no longer belong move to Ad-Hoc Runs rather than being lost.</small></p>
+  {{- end}}
+  {{/* PUT when editing so the job keeps its id, POST otherwise. Two attributes
+       rather than one templated verb: htmx reads the method from which
+       attribute is present. */}}
+  <form id="new-job-form" data-max-cells="{{.MaxCells}}"
+        {{if .FromID}}hx-put="/api/benchmark-jobs/{{.FromID}}"{{else}}hx-post="/api/benchmark-jobs/"{{end}}
+        hx-encoding="application/x-www-form-urlencoded"
+        hx-target="#bench-job-result" hx-swap="innerHTML">
+    <label>Name <input type="text" name="name" value="{{.Name}}" placeholder="Quant compare"></label>
+    <label>Description <input type="text" name="description" value="{{.Description}}" placeholder="optional"></label>
+
+    <label>Models</label>
+    <div>
+      {{- if not .Models}}<small style="opacity:0.7;">No models in the registry. <a href="/models/browse">Browse HuggingFace</a> first.</small>{{end}}
+      {{- range .Models}}<label><input type="checkbox" name="model_ids" value="{{.ID}}"{{if .Checked}} checked{{end}} onchange="updateMatrixCount()"> {{.Name}} <small style="opacity:0.6;">({{.ID}})</small></label>{{end}}
+    </div>
+
+    <label>Presets</label>
+    <div>
+      {{- range .Presets}}<label><input type="checkbox" name="presets" value="{{.Name}}"{{if .Checked}} checked{{end}} onchange="updateMatrixCount()"> <code>{{.Name}}</code> <small style="opacity:0.7;">— {{.Description}}</small></label>{{end}}
+    </div>
+
+    <details{{if .HasSweeps}} open{{end}} style="margin:0.5rem 0;">
+      <summary><strong>Parameters</strong> <small style="opacity:0.7;">— pick one value to fix it, several to sweep</small></summary>
+      <p><small style="opacity:0.7;">Every parameter defaults to each model's saved setting. Pick a single value to
+        use it for the whole job; pick several and each becomes its own cell, multiplied against the models and
+        presets above. All of these change how the engine is launched, so <strong>every combination is a separate
+        load</strong> — 3 context lengths × 2 models is six loads, not six requests.</small></p>
+
+      {{- range .SweepFields}}
+      {{/* $ is the form's own data, whose .Name is the job name — not this
+           parameter's. Bind the field name here so the checkboxes below get
+           sweep_max_model_len rather than a bare sweep_. */}}
+      {{- $field := .Name}}
+      <div class="param-row" data-param="{{.Name}}">
+        <details class="param-menu"{{if .Selected}} open{{end}}>
+          <summary>
+            <span class="param-label">{{.Label}} <small style="opacity:0.6;">({{.Name}})</small></span>
+            <span class="param-summary" data-summary-for="{{.Name}}"
+                  {{if eq .Selected 1}}data-active="fixed"{{else if gt .Selected 1}}data-active="sweep"{{end}}>{{.Summary}}</span>
+          </summary>
+          <div class="param-options">
+            <label class="param-default">
+              <input type="checkbox" class="param-inherit" {{if not .Selected}}checked{{end}}
+                     onchange="onParamInheritToggle(this)">
+              Use model's saved value
+            </label>
+            <hr style="margin:0.4rem 0;">
+            {{- range .Options}}
+            <label>
+              <input type="checkbox" class="param-value" name="sweep_{{$field}}" value="{{.Value}}"
+                     {{if .Checked}}checked{{end}} onchange="onParamValueToggle(this)">
+              {{.Value}}{{if .Custom}} <small style="opacity:0.6;">(custom)</small>{{end}}
+            </label>
+            {{- end}}
+            <div class="param-custom">
+              <input type="text" class="param-custom-input" placeholder="Custom value"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addParamCustom(this);}">
+              <button type="button" class="outline secondary" onclick="addParamCustom(this)">Add</button>
+            </div>
+          </div>
+          <small>{{.Help}}</small>
+        </details>
+      </div>
+      {{- end}}
+    </details>
+
+    <p id="job-matrix-preview" class="job-matrix-preview">Select models and presets to compute the matrix size.</p>
+
+    <button type="submit" id="job-submit-btn">Submit job</button>
+  </form>
+  <div id="bench-job-result"></div>
+</article>
+{{- end}}

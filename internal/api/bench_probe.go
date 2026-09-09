@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
@@ -24,16 +23,16 @@ var ErrProbeAlreadyActive = errors.New("a context probe is already in progress")
 // probeManager tracks the in-flight probe. Lives on Server (added in
 // Server construction).
 type probeManager struct {
-	mu        sync.Mutex
-	store     *probeResultStore
-	env       *probeEnv
-	active    *activeProbe
+	mu     sync.Mutex
+	store  *probeResultStore
+	env    *probeEnv
+	active *activeProbe
 }
 
 type activeProbe struct {
-	id       string
-	modelID  string
-	cancel   context.CancelFunc
+	id      string
+	modelID string
+	cancel  context.CancelFunc
 
 	subMu sync.Mutex
 	subs  map[chan benchmark.ProbeProgress]struct{}
@@ -50,12 +49,12 @@ func newProbeManager(s *Server) *probeManager {
 
 // probeStartRequest is the POST /api/benchmarks/probe-context body.
 type probeStartRequest struct {
-	ModelID            string    `json:"model_id"`
-	TPSize             int       `json:"tp_size"`
-	UtilizationLevels  []float64 `json:"utilization_levels,omitempty"`
-	ConcurrencyLevels  []int     `json:"concurrency_levels,omitempty"`
-	MinContext         int       `json:"min_context,omitempty"`
-	MaxContext         int       `json:"max_context,omitempty"`
+	ModelID           string    `json:"model_id"`
+	TPSize            int       `json:"tp_size"`
+	UtilizationLevels []float64 `json:"utilization_levels,omitempty"`
+	ConcurrencyLevels []int     `json:"concurrency_levels,omitempty"`
+	MinContext        int       `json:"min_context,omitempty"`
+	MaxContext        int       `json:"max_context,omitempty"`
 }
 
 // handleStartContextProbe begins a probe in the background. Returns 409
@@ -165,8 +164,7 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 	}
 	respondHTML(w)
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `<p>Started probe <code>%s</code> for <code>%s</code>. <a href="#" hx-get="/api/benchmarks/probe-context/%s/progress" hx-target="#probe-progress" hx-swap="innerHTML" hx-trigger="every 3s">Refresh progress</a></p>`,
-		esc(probeID), esc(req.ModelID), esc(probeID))
+	s.renderPartial(w, "probe_started", struct{ ProbeID, ModelID string }{probeID, req.ModelID})
 }
 
 // handleContextProbeProgress streams SSE progress events for an in-flight
@@ -248,7 +246,7 @@ func (s *Server) handleGetProbeResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	renderProbeResult(w, modelID, result)
+	s.renderProbeResult(w, modelID, result)
 }
 
 // applyProbeRequest is the POST body for applying a probed value.
@@ -290,74 +288,103 @@ func (s *Server) handleApplyProbe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// renderProbeResult lays out the probe result as a two-column table:
-// utilization sweep on the left, concurrency sweep on the right, each
-// with an "Apply" button.
-func renderProbeResult(w http.ResponseWriter, modelID string, result *benchmark.ProbeResult) {
-	fmt.Fprintf(w, `<article id="probe-progress">
-  <header><strong>Context probe results</strong> &middot; <small>tp=%d</small> &middot; <small>%s</small></header>`,
-		result.TPSize, result.Timestamp.Format("2006-01-02 15:04"))
+// probeRow is one sweep point: the swept value, the largest context that
+// survived at it, and the config write-back the Apply button posts.
+type probeRow struct {
+	Label      string
+	MaxContext int
+	// Vals is the hx-vals JSON. Built here rather than in the template so the
+	// model ID is JSON-escaped by the JSON encoder, not by HTML escaping —
+	// they are not the same thing inside an attribute that holds JSON.
+	Vals string
+}
 
-	// Utilization table.
-	fmt.Fprint(w, `<h4>By GPU memory utilization</h4>
-<table><thead><tr><th>util</th><th>max context</th><th></th></tr></thead><tbody>`)
-	for util, maxCtx := range result.UtilizationResults {
+func probeApplyVals(v map[string]any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// renderProbeResult lays out the probe result as two tables: the utilization
+// sweep and the concurrency sweep, each row offering to apply its finding.
+func (s *Server) renderProbeResult(w http.ResponseWriter, modelID string, result *benchmark.ProbeResult) {
+	// Both result sets are maps, so they need sorting before display —
+	// otherwise the rows come out in a different order on every poll.
+	utilKeys := make([]string, 0, len(result.UtilizationResults))
+	for k := range result.UtilizationResults {
+		utilKeys = append(utilKeys, k)
+	}
+	sort.Slice(utilKeys, func(i, j int) bool {
+		a, _ := strconv.ParseFloat(utilKeys[i], 64)
+		b, _ := strconv.ParseFloat(utilKeys[j], 64)
+		return a < b
+	})
+
+	byUtil := make([]probeRow, 0, len(utilKeys))
+	for _, util := range utilKeys {
+		maxCtx := result.UtilizationResults[util]
 		utilF, _ := strconv.ParseFloat(util, 64)
-		fmt.Fprintf(w, `<tr>
-  <td>%s</td><td>%d</td>
-  <td><button class="secondary outline" style="padding:0.1rem 0.5rem;"
-       hx-post="/api/benchmarks/probe-context/apply"
-       hx-vals='{"model_id":"%s","max_model_len":%d,"gpu_memory_utilization":%.2f}'
-       hx-ext="json-enc">apply</button></td>
-</tr>`, util, maxCtx, esc(modelID), maxCtx, utilF)
+		byUtil = append(byUtil, probeRow{
+			Label:      util,
+			MaxContext: maxCtx,
+			Vals: probeApplyVals(map[string]any{
+				"model_id":               modelID,
+				"max_model_len":          maxCtx,
+				"gpu_memory_utilization": utilF,
+			}),
+		})
 	}
-	fmt.Fprint(w, `</tbody></table>`)
 
-	// Concurrency table.
-	fmt.Fprint(w, `<h4>By max_num_seqs (at highest probed utilization)</h4>
-<table><thead><tr><th>max_num_seqs</th><th>max context</th><th></th></tr></thead><tbody>`)
-	for conc, maxCtx := range result.ConcurrencyResults {
-		fmt.Fprintf(w, `<tr>
-  <td>%d</td><td>%d</td>
-  <td><button class="secondary outline" style="padding:0.1rem 0.5rem;"
-       hx-post="/api/benchmarks/probe-context/apply"
-       hx-vals='{"model_id":"%s","max_model_len":%d,"max_num_seqs":%d}'
-       hx-ext="json-enc">apply</button></td>
-</tr>`, conc, maxCtx, esc(modelID), maxCtx, conc)
+	concKeys := make([]int, 0, len(result.ConcurrencyResults))
+	for k := range result.ConcurrencyResults {
+		concKeys = append(concKeys, k)
 	}
-	fmt.Fprint(w, `</tbody></table></article>`)
+	sort.Ints(concKeys)
+
+	byConc := make([]probeRow, 0, len(concKeys))
+	for _, conc := range concKeys {
+		maxCtx := result.ConcurrencyResults[conc]
+		byConc = append(byConc, probeRow{
+			Label:      strconv.Itoa(conc),
+			MaxContext: maxCtx,
+			Vals: probeApplyVals(map[string]any{
+				"model_id":      modelID,
+				"max_model_len": maxCtx,
+				"max_num_seqs":  conc,
+			}),
+		})
+	}
+
+	s.renderPartial(w, "probe_result", struct {
+		TPSize        int
+		Timestamp     string
+		ByUtilization []probeRow
+		ByConcurrency []probeRow
+	}{result.TPSize, result.Timestamp.Format("2006-01-02 15:04"), byUtil, byConc})
 }
 
 // handleProbeForm renders the probe form partial. Models are restricted
 // to registered ones; main vLLM must be stopped before probing.
 func (s *Server) handleProbeForm(w http.ResponseWriter, r *http.Request) {
-	respondHTML(w)
-	if state := s.process.GetStatus().State; state == process.StateRunning || state == process.StateStarting {
-		fmt.Fprint(w, `<article><em>Stop the main vLLM process before probing. <a href="/service">Service page →</a></em></article>`)
-		return
-	}
-
-	fmt.Fprint(w, `<article>
-  <header><strong>Probe maximum context length</strong></header>
-  <p style="opacity:0.7;"><small>Binary-search the largest <code>--max-model-len</code> the model can serve without OOM, across several GPU-memory-utilization and max_num_seqs levels. Main vLLM must be stopped.</small></p>
-  <form hx-post="/api/benchmarks/probe-context" hx-target="#probe-progress" hx-swap="innerHTML">
-    <label>Model
-      <select name="model_id" required>`)
+	type modelChoice struct{ ID, Name string }
+	var choices []modelChoice
 	for _, m := range s.registry.List() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
-		fmt.Fprintf(w, `<option value="%s">%s</option>`, esc(m.ID), esc(displayNameOf(m)))
+		choices = append(choices, modelChoice{ID: m.ID, Name: displayNameOf(m)})
 	}
-	fmt.Fprint(w, `      </select>
-    </label>
-    <label>Tensor parallel size
-      <select name="tp_size"><option value="1" selected>1</option><option value="2">2</option></select>
-    </label>
-    <button type="submit">Start probe</button>
-  </form>
-  <div id="probe-progress"></div>
-</article>`)
-	// minimal 30-min note
-	_ = time.Now
+
+	// Probing starts its own vLLM processes, so the main one has to be out of
+	// the way first — otherwise the two fight over the same VRAM.
+	state := s.process.GetStatus().State
+	blocked := state == process.StateRunning || state == process.StateStarting
+
+	respondHTML(w)
+	s.renderPartial(w, "probe_form", struct {
+		Blocked bool
+		Models  []modelChoice
+	}{blocked, choices})
 }

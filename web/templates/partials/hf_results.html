@@ -1,0 +1,148 @@
+{{define "hf_results" -}}
+{{if not .Groups -}}
+{{if .QuantFilter}}<p>No {{.QuantFilter}} models found. Try a different format or broaden your search.</p>{{else}}<p>No models found.</p>{{end}}
+{{- else -}}
+{{range .Groups -}}
+{{- /* $ is the whole payload, not this group, so the group's id has to be
+       carried into the inner range by hand. */ -}}
+{{- $sid := .SafeID -}}
+<article style="margin-bottom:0.5rem;">
+  <header style="padding:0.5rem 1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <strong>{{.ID}}</strong>{{if .Gated}} <small style="color:var(--pico-del-color);">[gated]</small>{{end}}
+        <a href="https://huggingface.co/{{.ID}}" target="_blank" rel="noopener" style="font-size:0.75rem;margin-left:0.5rem;text-decoration:none;" title="View on HuggingFace">&#8599;</a>
+        <br><small style="opacity:0.7;">{{with .Author}}{{.}} &middot; {{end}}{{.Downloads}} downloads &middot; {{.Likes}} likes</small>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
+        {{- range .Variants}}
+        <a href="#" hx-get="/api/hf/model?id={{.ID}}" hx-target="#detail-{{$sid}}" hx-swap="innerHTML" title="{{.ID}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:{{.Color}};color:#fff;text-decoration:none;cursor:pointer;">{{.Format}}</a>
+        {{- end}}
+      </div>
+    </div>
+  </header>
+  <div id="detail-{{.SafeID}}" style="padding:0 1rem;"></div>
+</article>
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{define "hf_model_detail" -}}
+{{if .GatedWarning}}<p><mark>This is a gated model. Configure your HF token in <a href="/settings">Settings</a> to download.</mark></p>{{end}}
+{{- if .VRAMWarning}}<p><mark>{{.VRAMWarning}}</mark></p>{{end}}
+<div class="grid" style="margin-bottom:0.5rem;">
+  <div><small>Architecture</small><br><strong>{{.Architecture}}</strong></div>
+  <div><small>Quantization</small><br><strong>{{.QuantInfo}}</strong></div>
+  <div><small>Est. VRAM</small><br><strong>{{.VRAMLabel}}</strong></div>
+  <div><small>Download Size</small><br><strong>{{.SizeLabel}}</strong></div>
+</div>
+<details style="margin-bottom:0.5rem;">
+  <summary>{{len .Files}} files to download</summary>
+  <table style="font-size:0.85rem;">
+    <thead><tr><th>File</th><th>Size</th><th>Type</th></tr></thead>
+    <tbody>
+    {{- range .Files}}
+      <tr><td><code>{{.Filename}}</code></td><td>{{.SizeLabel}}</td><td>{{.Category}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table>
+</details>
+<p style="font-size:0.85rem;color:var(--pico-muted-color);margin-bottom:0.5rem;">
+  {{- if lt .AvailableBytes 0}}
+  <small>Disk space unavailable — downloads are not gated by free space.</small>
+  {{- else}}
+  <strong>{{.AvailableLabel}}</strong> available for new downloads
+  <small>(free: {{.FreeLabel}} &middot; reserved: {{.MarginLabel}} safety margin + in-flight downloads)</small>
+  {{- end}}
+</p>
+<div id="dl-{{.SafeID}}">
+  {{- if .AlreadyHave}}
+  <ins title="Already in your local model registry">Downloaded</ins>
+  <a href="/models" style="margin-left:0.4rem;font-size:0.85rem;">View in Models &rarr;</a>
+  {{- else if not .FitsOnDisk}}
+  {{/* Not disabled-and-silent: the tooltip is the only place the numbers
+       behind the refusal appear. */}}
+  <button type="button" disabled
+          style="margin:0;opacity:0.5;cursor:not-allowed;"
+          title="Not enough free disk space — needs {{.SizeLabel}}, and only {{.AvailableLabel}} is available after the {{.MarginLabel}} safety margin and any in-flight downloads. Free some space and try again.">
+    Won't Fit ({{.SizeLabel}})
+  </button>
+  {{- else if .Partial}}
+  <button hx-post="/api/hf/download?model_id={{.ID}}"
+          hx-target="#dl-{{.SafeID}}"
+          hx-swap="innerHTML"
+          style="margin:0;"{{if .Disabled}} disabled{{end}}
+          title="Continue from the {{.PartialLabel}} already on disk">Resume ({{.PartialLabel}} of {{.SizeLabel}} done)</button>
+  {{- else}}
+  <button hx-post="/api/hf/download?model_id={{.ID}}"
+          hx-target="#dl-{{.SafeID}}"
+          hx-swap="innerHTML"
+          style="margin:0;"{{if .Disabled}} disabled{{end}}>Download ({{.SizeLabel}})</button>
+  {{- end}}
+</div>
+{{- end}}
+
+{{/* One download's progress, polling itself until it settles. */}}
+{{define "download_progress" -}}
+{{if eq .Status "complete"}}<p><ins>Download complete!</ins> <a href="/models">View in Models &rarr;</a></p>
+{{- else if eq .Status "failed"}}<p><del>Download failed: {{.Error}}</del></p>
+{{- else if eq .Status "cancelled"}}<p>Download cancelled.</p>
+{{- else}}
+<div hx-get="/api/hf/download/{{.ID}}/progress" hx-trigger="every 2s" hx-swap="innerHTML">
+  <progress value="{{.Percent}}" max="100" style="margin:0;"></progress>
+  <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files</small>
+</div>
+{{- end}}
+{{- end}}
+
+{{/* Downloads, shown above both the models and browse pages: the ones still
+     running, and the ones that stopped partway and still have bytes on disk.
+     A paused transfer that nothing displayed would just be disk nobody could
+     find. */}}
+{{define "downloads_panel" -}}
+{{if .Rows}}
+<article style="padding:0.5rem 0.75rem;margin:0.5rem 0;">
+    <strong style="font-size:0.9rem;">Downloads</strong>
+    {{- range .Rows}}
+    <div class="dl-row" style="padding:0.25rem 0;font-size:0.85rem;border-top:1px solid var(--pico-muted-border-color);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+            <span>
+                <strong>{{.ModelID}}</strong>
+                {{- if not .Active}} <small>({{.OnDiskLabel}} on disk, {{.PartFiles}} partial file{{if ne .PartFiles 1}}s{{end}})</small>{{end}}
+            </span>
+            {{/* Deliberately not role="group": Pico gives groups width:100% and
+                 stretches their buttons, which overflows this card. */}}
+            <span style="display:inline-flex;gap:0.35rem;margin:0;flex:0 0 auto;">
+                {{- if .Active}}
+                <button type="button" class="outline secondary"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Stop downloading but keep what is already on disk — resume any time"
+                        hx-delete="/api/hf/download/{{.ID}}"
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Pause</button>
+                {{- else}}
+                <button type="button" class="outline"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Continue from the bytes already on disk"
+                        hx-post="/api/hf/download?model_id={{.ModelID}}"
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Resume</button>
+                <button type="button" class="outline secondary"
+                        style="margin:0;padding:0.15rem 0.6rem;font-size:0.8rem;"
+                        title="Delete the partial files from disk"
+                        hx-delete="/api/hf/incomplete?model_id={{.ModelID}}"
+                        hx-confirm="Delete the partial files for {{.ModelID}}? This cannot be undone."
+                        hx-swap="none"
+                        hx-on::after-request="htmx.trigger(document.body,'downloadsChanged')">Discard</button>
+                {{- end}}
+            </span>
+        </div>
+        {{- if .Active}}
+        <progress value="{{.Percent}}" max="100" style="margin:0.25rem 0;"></progress>
+        <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files</small>
+        {{- end}}
+    </div>
+    {{- end}}
+</article>
+{{end}}
+{{- end}}

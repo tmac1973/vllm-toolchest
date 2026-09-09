@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -141,21 +142,31 @@ type registryFile struct {
 	Models        map[string]*Model `json:"models"`
 	SchemaVersion int               `json:"schema_version"`
 	LastScan      time.Time         `json:"last_scan"`
+	// PendingConfigs are launch configs restored from a backup for models
+	// that aren't installed here; see pending.go.
+	PendingConfigs []PendingConfig `json:"pending_configs,omitempty"`
 }
 
 // Registry manages the model inventory.
 type Registry struct {
-	mu       sync.RWMutex
-	models   map[string]*Model
-	dataDir  string
+	mu      sync.RWMutex
+	models  map[string]*Model
+	dataDir string
+	// modelsDir is where model files live; see config.ModelsPath. Kept apart
+	// from dataDir so the files can sit on another disk while models.json
+	// stays with the rest of the registry state.
+	modelsDir string
+	// pending holds configs waiting for their model to arrive.
+	pending  []PendingConfig
 	filePath string
 }
 
-func NewRegistry(dataDir string) *Registry {
+func NewRegistry(dataDir, modelsDir string) *Registry {
 	r := &Registry{
-		models:   make(map[string]*Model),
-		dataDir:  dataDir,
-		filePath: filepath.Join(dataDir, "config", "models.json"),
+		models:    make(map[string]*Model),
+		dataDir:   dataDir,
+		modelsDir: modelsDir,
+		filePath:  filepath.Join(dataDir, "config", "models.json"),
 	}
 	r.load()
 	return r
@@ -179,13 +190,15 @@ func (r *Registry) load() {
 	if rf.Models != nil {
 		r.models = rf.Models
 	}
+	r.pending = rf.PendingConfigs
 }
 
 func (r *Registry) save() error {
 	rf := registryFile{
-		Models:        r.models,
-		SchemaVersion: 2,
-		LastScan:      time.Now(),
+		Models:         r.models,
+		SchemaVersion:  2,
+		LastScan:       time.Now(),
+		PendingConfigs: r.pending,
 	}
 	data, err := json.MarshalIndent(rf, "", "  ")
 	if err != nil {
@@ -196,7 +209,12 @@ func (r *Registry) save() error {
 	return os.WriteFile(r.filePath, data, 0o644)
 }
 
-// List returns all registered models.
+// List returns every registered model, ordered by ID.
+//
+// The order matters: the registry is a map, so without the sort every caller
+// got Go's randomized iteration order. The models table reshuffled its rows on
+// each htmx refresh, and the benchmark and probe model pickers reordered their
+// options between openings.
 func (r *Registry) List() []*Model {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -204,6 +222,7 @@ func (r *Registry) List() []*Model {
 	for _, m := range r.models {
 		out = append(out, m)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -219,6 +238,9 @@ func (r *Registry) Get(id string) (*Model, bool) {
 func (r *Registry) Register(m *Model) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Both the download path and the directory scan land here, which makes it
+	// the one place a restored-but-unmatched config can be claimed.
+	r.claimPendingLocked(m)
 	r.models[m.ID] = m
 	return r.save()
 }
@@ -332,7 +354,7 @@ func (r *Registry) Maintenance() {
 }
 
 func (r *Registry) scanForNewModels() {
-	modelsDir := filepath.Join(r.dataDir, "models")
+	modelsDir := r.modelsDir
 	orgs, _ := os.ReadDir(modelsDir)
 	for _, org := range orgs {
 		if !org.IsDir() {

@@ -41,8 +41,8 @@ type Config struct {
 	DefaultToolParser string `yaml:"default_tool_parser"`
 
 	// Quantization
-	DefaultQuantFormat string `yaml:"default_quant_format"`
-	PreferMarlin       bool   `yaml:"prefer_marlin"`
+	DefaultQuantFormat  string `yaml:"default_quant_format"`
+	PreferMarlin        bool   `yaml:"prefer_marlin"`
 	DefaultKVCacheDtype string `yaml:"default_kv_cache_dtype"`
 
 	// Process management
@@ -50,11 +50,29 @@ type Config struct {
 	StartupTimeoutS  int  `yaml:"startup_timeout_s"`
 	ShutdownTimeoutS int  `yaml:"shutdown_timeout_s"`
 
+	// AutoStart launches the active model when the container starts, without
+	// waiting for someone to press Start. Off by default: a model that fails
+	// to load takes a while to fail, and a container that does nothing until
+	// asked is easier to diagnose than one that is busy on boot.
+	AutoStart bool `yaml:"auto_start"`
+
+	// ActiveModel is the registry ID the Start button launches, and what a
+	// restart brings back. Empty means nothing has been chosen yet.
+	ActiveModel string `yaml:"active_model"`
+
 	// Theme
 	Theme string `yaml:"theme"`
 
 	// Model storage
 	ModelDir string `yaml:"model_dir"`
+
+	// RuntimeEnv holds the curated environment variables applied to the vLLM
+	// process, keyed by variable name. RuntimeEnvExtra is the free-form
+	// KEY=VALUE block for anything outside the curated set. See
+	// runtime_env.go — an unset curated value means "leave the environment
+	// alone", which is not the same as setting it empty.
+	RuntimeEnv      map[string]string `yaml:"runtime_env,omitempty"`
+	RuntimeEnvExtra string            `yaml:"runtime_env_extra,omitempty"`
 
 	// GPU architecture — used to namespace tuned kernel configs and to
 	// construct vLLM's device-name filename suffix (e.g. "AMD-gfx1201").
@@ -195,16 +213,16 @@ func defaults() *Config {
 		DefaultDtype:       "auto",
 		// Empty = let vLLM pick. Only emitted as --attention-backend when
 		// explicitly set, so the default install keeps vLLM's own choice.
-		AttentionBackend:   "",
-		ToolUseEnabled:     true,
-		DefaultToolParser:  "hermes",
-		PreferMarlin:       true,
+		AttentionBackend:    "",
+		ToolUseEnabled:      true,
+		DefaultToolParser:   "hermes",
+		PreferMarlin:        true,
 		DefaultKVCacheDtype: "auto",
-		AutoRestart:        true,
-		StartupTimeoutS:    300,
-		ShutdownTimeoutS:   30,
-		EnablePrefixCache:  false,
-		Theme:              "dark",
+		AutoRestart:         true,
+		StartupTimeoutS:     300,
+		ShutdownTimeoutS:    30,
+		EnablePrefixCache:   false,
+		Theme:               "dark",
 	}
 }
 
@@ -235,6 +253,7 @@ func applyEnvOverrides(cfg *Config) {
 	envBool(&cfg.PreferMarlin, "VLLMCTL_PREFER_MARLIN")
 	envStr(&cfg.DefaultKVCacheDtype, "VLLMCTL_DEFAULT_KV_CACHE_DTYPE")
 	envBool(&cfg.AutoRestart, "VLLMCTL_AUTO_RESTART")
+	envBool(&cfg.AutoStart, "VLLMCTL_AUTO_START")
 	envInt(&cfg.StartupTimeoutS, "VLLMCTL_STARTUP_TIMEOUT_S")
 	envInt(&cfg.ShutdownTimeoutS, "VLLMCTL_SHUTDOWN_TIMEOUT_S")
 	envStr(&cfg.Theme, "VLLMCTL_THEME")
@@ -292,6 +311,23 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// DefaultModelsPath is where model files live when no override is set: a
+// "models" directory under the data directory.
+func (c *Config) DefaultModelsPath() string {
+	return filepath.Join(c.DataDir, "models")
+}
+
+// ModelsPath is the directory model files are downloaded into and scanned
+// from. An override is only honoured when it is an absolute path — a relative
+// one would resolve against the process's working directory, which is not
+// something the operator can see or reason about from the Settings page.
+func (c *Config) ModelsPath() string {
+	if d := strings.TrimSpace(c.ModelDir); d != "" && filepath.IsAbs(d) {
+		return filepath.Clean(d)
+	}
+	return c.DefaultModelsPath()
 }
 
 func (c *Config) ConfigPath() string {

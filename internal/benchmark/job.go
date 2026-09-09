@@ -57,6 +57,9 @@ type BenchmarkJob struct {
 	ModelIDs  []string         `json:"model_ids,omitempty"`
 	Presets   []string         `json:"presets,omitempty"`
 	Overrides *ConfigOverrides `json:"overrides,omitempty"`
+	// Sweeps multiply the matrix: every combination of their values is run
+	// for every model and preset. Each combination is a separate engine load.
+	Sweeps []SweepAxis `json:"sweeps,omitempty"`
 
 	Cells []JobCell `json:"cells,omitempty"`
 }
@@ -70,18 +73,23 @@ type ConfigOverrides struct {
 	KVCacheDtype         *string  `json:"kv_cache_dtype,omitempty"`
 	EnforceEager         *bool    `json:"enforce_eager,omitempty"`
 	Dtype                *string  `json:"dtype,omitempty"`
+	MaxNumSeqs           *int     `json:"max_num_seqs,omitempty"`
 }
 
 // JobCell is one (model, preset) point in the matrix. The cell owns at
 // most one BenchmarkRun at a time; on retry the run ID is rewritten to
 // point at the latest attempt.
 type JobCell struct {
-	ModelID        string `json:"model_id"`
-	Preset         string `json:"preset"`
-	Status         string `json:"status"`
-	Attempt        int    `json:"attempt"`
-	BenchmarkRunID string `json:"benchmark_run_id,omitempty"`
-	Error          string `json:"error,omitempty"`
+	ModelID string `json:"model_id"`
+	Preset  string `json:"preset"`
+	Status  string `json:"status"`
+	Attempt int    `json:"attempt"`
+	// SweepValues are the swept parameters this cell was run at, e.g.
+	// {"max_model_len": "32768"}. Empty on a job with no sweep, which is why
+	// the detail table only grows a Sweep column when some cell has one.
+	SweepValues    map[string]string `json:"sweep_values,omitempty"`
+	BenchmarkRunID string            `json:"benchmark_run_id,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 // newAdhocJob synthesizes the catch-all "Ad-Hoc Runs" pseudo-job that

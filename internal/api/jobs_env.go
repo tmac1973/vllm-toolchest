@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
@@ -74,13 +75,6 @@ func (e *jobEnv) CurrentLoadedModel() string {
 // isn't already serving it. Polls the manager's state until Running or
 // the context is cancelled (or the manager goes to Error).
 func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benchmark.ConfigSnapshot) error {
-	st := e.s.process.GetStatus()
-
-	// Already serving the right model: nothing to do.
-	if st.State == process.StateRunning && st.ModelID == modelID {
-		return nil
-	}
-
 	m, ok := e.s.registry.Get(modelID)
 	if !ok {
 		return fmt.Errorf("model not registered: %s", modelID)
@@ -89,7 +83,22 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 
 	startCfg := vllmStartConfigFor(m, cfg)
 	args := process.BuildArgs(startCfg)
-	env := process.BuildEnv(m.Quantization.Method, e.s.cfg.Radiance.Env()...)
+	env := e.s.launchEnv(m.Quantization.Method)
+
+	// Already serving this model with these exact arguments: nothing to do.
+	//
+	// The comparison has to include the arguments. Every sweep axis is an
+	// engine-launch parameter, so a sweep serves one model several times over
+	// with different flags — and a check on the model id alone reports the
+	// second and every later configuration as already loaded. The job then
+	// measures them all against whatever the first one started, and records
+	// each run with the configuration it asked for rather than the one it got.
+	// That is worse than a crash: the numbers look fine and are attributed to
+	// settings that were never in effect.
+	if st := e.s.process.GetStatus(); st.State == process.StateRunning &&
+		st.ModelID == modelID && slices.Equal(st.Args, args) {
+		return nil
+	}
 
 	// Restart handles the stop-if-running case for us.
 	if err := e.s.process.Restart(modelID, modelPath, args, env); err != nil {
@@ -149,9 +158,10 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	if snap.EnforceEager {
 		eager = true
 	}
-	// Start from the stored config so every flag the model was configured
-	// with survives, then apply the fields this job's snapshot overrides.
-	cfg := v.StartConfig()
+	// Start from the model's own config so every flag it was configured with
+	// survives — including the served name — then apply the fields this job's
+	// snapshot overrides.
+	cfg := m.StartConfig()
 	cfg.Dtype = dt
 	cfg.MaxModelLen = maxLen
 	cfg.TensorParallelSize = tp

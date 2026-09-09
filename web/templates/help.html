@@ -1,0 +1,260 @@
+{{define "content"}}
+<style>
+    .help-page { font-size: 0.9rem; line-height: 1.55; max-width: 62rem; }
+    .help-page h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    .help-page h2 {
+        font-size: 1.1rem;
+        margin-top: 1.5rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--pico-muted-border-color);
+    }
+    .help-page h3 { font-size: 0.95rem; margin-top: 1rem; margin-bottom: 0.35rem; }
+    .help-page p { margin: 0 0 0.5rem 0; }
+    .help-page ul, .help-page ol { margin: 0 0 0.6rem 1.2rem; padding: 0; }
+    .help-page li { margin-bottom: 0.2rem; }
+    .help-page dl { margin: 0.25rem 0 0.75rem 0; }
+    .help-page dt { font-weight: 600; margin-top: 0.35rem; color: var(--pico-color); }
+    .help-page dd { margin: 0 0 0.35rem 1rem; color: var(--pico-muted-color); }
+    .help-page code, .help-page kbd { font-size: 0.82rem; padding: 0.05rem 0.3rem; }
+    .help-page pre {
+        font-size: 0.78rem;
+        padding: 0.6rem 0.8rem;
+        margin: 0.4rem 0 0.75rem 0;
+        background: var(--pico-card-background-color);
+    }
+    .help-toc {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.75rem;
+        font-size: 0.82rem;
+        margin: 0.4rem 0 1rem 0;
+        padding: 0.5rem 0.75rem;
+        background: var(--pico-card-background-color);
+        border-radius: 0.3rem;
+    }
+    .help-toc a { text-decoration: none; }
+    .help-page .callout {
+        border-left: 3px solid var(--pico-primary);
+        padding: 0.35rem 0.75rem;
+        margin: 0.5rem 0 0.75rem 0;
+        background: var(--pico-card-sectioning-background-color);
+        font-size: 0.85rem;
+    }
+    .help-page .callout.warn { border-left-color: var(--pico-del-color); }
+    .help-page table { font-size: 0.85rem; margin: 0.4rem 0 0.75rem 0; }
+    .help-page th, .help-page td { padding: 0.25rem 0.5rem; }
+</style>
+
+<div class="help-page">
+    <h1>vLLM Toolchest — Help</h1>
+    <p style="color: var(--pico-muted-color);">A manual for running local LLMs on the vLLM inference engine, wrapped in a web UI.</p>
+
+    <nav class="help-toc">
+        <a href="#quickstart">Quickstart</a>
+        <a href="#concepts">Core concepts</a>
+        <a href="#server">Server</a>
+        <a href="#models">Models</a>
+        <a href="#model-config">Model config</a>
+        <a href="#download">Download Models</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#tuning">Tuning</a>
+        <a href="#settings">Settings</a>
+        <a href="#api">Using the API</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+    </nav>
+
+    <h2 id="quickstart">Quickstart</h2>
+    <ol>
+        <li><strong>Download a model.</strong> On <a href="/models/browse">Download Models</a>, search HuggingFace and pick a repository. Unlike GGUF tooling you download a whole repo, not one file — an FP8 or AWQ checkpoint is several files that only work together.</li>
+        <li><strong>Make it active.</strong> On <a href="/models">Models</a>, click the radio button beside it. vLLM serves one model per process, so this is a choice among models, not a set of them.</li>
+        <li><strong>Check it fits.</strong> The <em>VRAM est.</em> column estimates the memory that model needs at its configured context length. If it says the model needs more than you have, lower <em>Context length</em> in <em>Configure</em> before you start.</li>
+        <li><strong>Start the engine.</strong> On <a href="/server">Server</a>, click <em>Start</em>. Loading takes anywhere from twenty seconds to several minutes; watch the log panel.</li>
+        <li><strong>Send a request.</strong> Use the OpenAI-compatible endpoint on the Server page, passing the name from <code>/v1/models</code> in the <code>model</code> field.</li>
+    </ol>
+
+    <h2 id="concepts">Core concepts</h2>
+
+    <h3>One model per process</h3>
+    <p>vLLM is not a router. A <code>vllm serve</code> process loads exactly one model, and switching models means stopping that process and starting another. There is no "enabled" set and no on-demand loading: the active model is the one the engine is serving, and everything else is inert on disk.</p>
+    <p>That makes a restart expensive in a way worth planning around. Stopping frees the GPU immediately, but starting again re-reads the weights, re-allocates the KV cache, and re-captures the CUDA/HIP graph ladder. A restart glyph (<span style="color:var(--pico-primary);">&#x21bb;</span>) appears beside a model on the Models page when it is the active one but not the one currently running — that is the UI telling you a restart is owed, not that something is broken.</p>
+    <div class="callout">
+        Every setting in <em>Configure</em> is an engine-launch parameter. None of them can be changed on a running server — they take effect at the next start. The UI never pretends otherwise.
+    </div>
+
+    <h3>gpu_memory_utilization and the pre-allocated KV cache</h3>
+    <p>This is the setting that surprises people coming from llama.cpp. vLLM does not grow its KV cache as requests arrive. At startup it measures free VRAM, multiplies by <code>gpu_memory_utilization</code>, subtracts the model weights and activation overhead, and claims <em>all the rest</em> as one fixed KV-cache pool. That pool is the entire budget for concurrent requests and context for the life of the process.</p>
+    <p>Two consequences:</p>
+    <ul>
+        <li>The fraction is of <em>total</em> GPU memory, not of what is free after your desktop compositor. On a card also driving a display, 0.90 can be more than is actually available.</li>
+        <li>Raising it does not make the model faster; it buys concurrency and context. Lowering it is the first thing to try when a start OOMs.</li>
+    </ul>
+
+    <h3>max_model_len and the context probe</h3>
+    <p><code>--max-model-len</code> sets the longest sequence the engine will accept, and because the KV cache is sized from it, it is usually the parameter that decides whether a model loads at all. A model whose config advertises 262,144 tokens will happily refuse to start at that length on a 24 GB card.</p>
+    <p>Rather than bisecting by hand, use <em>Probe maximum context</em> on the <a href="/benchmarks">Benchmarks</a> page. It binary-searches the largest <code>--max-model-len</code> that actually starts, by starting the engine for real at each candidate and watching for readiness or an out-of-memory failure. Steps are 256-token multiples because that is vLLM's KV-cache block size — finer increments produce identical outcomes. A probe takes a while for the same reason a start does: each trial is a real load.</p>
+
+    <h3>Tensor parallelism</h3>
+    <p><code>--tensor-parallel-size</code> splits a model's weights across several GPUs, so each holds a fraction of the parameters and a fraction of the KV cache. It is how a model larger than one card gets served at all. TP must divide the model's attention head count evenly, and every layer's output has to be summed across the GPUs — an <em>all-reduce</em> — on every forward pass. That communication is the cost: two GPUs do not give you twice the speed, and on consumer boards without fast peer-to-peer links they can be slower than one.</p>
+    {{if .IsRadiance}}
+    <h3>The all-reduce token ceiling (radiance image)</h3>
+    <p>The radiance image replaces the all-reduce with a hand-written peer-to-peer kernel, and that kernel takes a message only up to 48 MiB. A prefill chunk's message is <code>max_num_batched_tokens × hidden_size × 2</code> bytes, so there is a per-model ceiling on the batched-token setting above which the custom kernel stops being used.</p>
+    <div class="callout warn">
+        Exceeding it is <strong>silent</strong>. Nothing errors, nothing is logged; vLLM falls back to RCCL at roughly 2.3&times; the cost and everything keeps working. This is why the model config panel computes the ceiling for the model in front of you and shows it under the batched-token field — it is not information you can recover from the logs afterwards.
+    </div>
+    <p>The ceiling only applies at TP=2, which is the only world size the shipped kernel library handles. At TP=1 there is no all-reduce, and at TP=4 or more RCCL is used regardless, so the panel says so rather than showing a number that does not apply.</p>
+    {{end}}
+
+    <h3>Served model names</h3>
+    <p>The name a client passes in the <code>model</code> field is the model's HuggingFace repo ID &mdash;
+       <code>cyankiwi/Qwen3.5-4B-AWQ-4bit</code> &mdash; the same identifier the Models page shows. Every
+       launch passes it to vLLM explicitly; left to itself vLLM names a model by the path it was loaded
+       from, and a client would have to send a container-local path.</p>
+    <p><code>/v1/models</code> reports the model being served, and nothing else. vLLM serves one model per
+       process, so the list is one entry or none &mdash; an empty list means nothing is loaded, not that
+       nothing is installed. Use the Models page to see what is available to load.</p>
+
+    <h3>Quantization formats</h3>
+    <p>Quantization does two different jobs, and conflating them causes most of the disappointment:</p>
+    <table>
+        <thead><tr><th>Format</th><th>What it does</th><th>On RDNA4 (gfx1201)</th></tr></thead>
+        <tbody>
+        <tr><td><code>fp8</code></td><td>8-bit weights <em>and</em> activations</td><td>Accelerated — the matrix units execute FP8 directly. Halves weight memory and speeds up compute.</td></tr>
+        <tr><td><code>awq</code>, <code>gptq</code></td><td>4-bit weights, 16-bit activations</td><td>Weight-only. Quarters weight memory, but the weights are dequantized before the matmul, so compute runs at bf16 speed. Buys VRAM, not throughput.</td></tr>
+        <tr><td><code>compressed-tensors</code></td><td>A container, not one scheme</td><td>Depends what is inside — it may hold an FP8 w8a8 checkpoint or a 4-bit weight-only one. The Models page shows the detected width beside it.</td></tr>
+        <tr><td><code>mxfp4</code>, <code>nvfp4</code></td><td>4-bit block floating point</td><td>Newer formats with hardware support on some parts. Treat performance as something to measure rather than assume.</td></tr>
+        <tr><td><code>bitsandbytes</code></td><td>4-bit weights, on-the-fly</td><td>Only offered when the library is present in the image. Convenient, consistently the slowest option.</td></tr>
+        </tbody>
+    </table>
+    <p>The short version: <strong>FP8 for speed, 4-bit weight-only for fit.</strong> If a model already fits comfortably, a 4-bit quant of it will not be faster.</p>
+
+    <h2 id="server">Server</h2>
+    <p>The dashboard and the engine controls are one page. It carries:</p>
+    <dl>
+        <dt>Server card</dt><dd>Start, Stop and Restart, the current state, and the model picker. The picker sets the same active model the radio buttons on the Models page do — they are one setting seen from two places.</dd>
+        <dt>GPU</dt><dd>Per-GPU utilization, VRAM, temperature and power, read from the kernel driver rather than a vendor library. On a multi-GPU box each card is listed by its own index.</dd>
+        <dt>Models, API Endpoint</dt><dd>How many models are registered, and the base URL to point an OpenAI-compatible client at.</dd>
+        <dt>Live Performance</dt><dd>Tokens per second and time-to-first-token for requests as they are served, so you can see the engine working without running a benchmark.</dd>
+        <dt>Logs</dt><dd>The engine's stdout and stderr, streamed. This is the only place a failed load explains itself — read it before anything else when a start does not finish.</dd>
+    </dl>
+
+    <h2 id="models">Models</h2>
+    <p>One row per registered model. Columns are the model's name and repo ID, its quantization method and bit width, an estimated VRAM figure, and its size on disk.</p>
+    <dl>
+        <dt>The radio button</dt><dd>Makes a model active — the one <em>Start</em> will launch. Choosing a different one while the engine is running does not switch models; it marks a restart as owed and shows the <span style="color:var(--pico-primary);">&#x21bb;</span> glyph.</dd>
+        <dt>VRAM est.</dt><dd>Weights plus KV cache at the configured context length plus activation overhead, with a verdict — fits one GPU, needs two, or too large. It is an estimate from the model's own config, computed two ways with the larger winning, because the structural formula undercounts hybrid and mixture-of-experts models. Treat it as a planning figure, not a guarantee.</dd>
+        <dt>Configure</dt><dd>Opens the launch config for that model, inline. See below.</dd>
+        <dt>Remove</dt><dd>Unregisters the model, with the option to delete its files. Removing the registry entry alone leaves the files to be found again by the next scan.</dd>
+        <dt><del>missing</del></dt><dd>The registry has an entry whose files are gone. It cannot be served, and the radio is disabled.</dd>
+    </dl>
+
+    <h2 id="model-config">Model config</h2>
+    <p>Every field here becomes a <code>vllm serve</code> flag, shown in full under <em>Effective command</em> at the bottom of the panel — worth reading once, because it makes the mapping between this UI and vLLM's own documentation obvious.</p>
+    <dl>
+        <dt>Core</dt><dd>Data type, context length, tensor parallel size, and GPU memory utilization — the four settings that decide whether the model loads.</dd>
+        <dt>Performance</dt><dd>Eager mode (skips graph capture: faster to start, slower to run), prefix caching, chunked prefill and the batched-token budget, and maximum concurrent sequences.</dd>
+        <dt>Quantization</dt><dd>The detected method and the KV cache data type. Setting the KV cache to <code>fp8</code> roughly halves cache memory, which buys context length at little quality cost.</dd>
+        <dt>Tool Use</dt><dd>OpenAI-style function calling and the parser to use. The parser is auto-detected from the chat template; override it only if detection got it wrong.</dd>
+        <dt>Advanced</dt><dd>Speculative decoding config, compilation config, attention backend override, and a free-text flags box for anything this UI does not model.</dd>
+    </dl>
+    <div class="callout">
+        Context length offers the model's advertised maximum and a custom box. The advertised maximum is what the model was trained for, not what your card can hold — use the context probe to find the second number.
+    </div>
+
+    <h2 id="download">Download Models</h2>
+    <p>Search HuggingFace and download whole repositories. The format filter is worth understanding: it queries the Hub for the format's tags rather than filtering results after the fact, so a filtered search reaches models a plain search would not have returned in its first page.</p>
+    <p>Detected formats are read from each repo's own <code>quantization_config</code> where it has one, falling back to its tags and then its name. That ordering matters — a repository named <code>...-FP8</code> that actually holds a 4-bit compressed-tensors checkpoint is labelled by what is inside it.</p>
+    <dl>
+        <dt>Disk space</dt><dd>Free space is checked against the download size before starting, with a 2 GiB safety margin, and in-flight downloads are counted against it so two downloads started together cannot both "fit".</dd>
+        <dt>Interrupted downloads</dt><dd>Cancelling leaves <code>.part</code> files rather than deleting them, and a resumed download continues from where it stopped. Incomplete downloads are listed with the space they occupy so you can reclaim it deliberately.</dd>
+        <dt>Gated models</dt><dd>Llama, Gemma, Mistral and others need a HuggingFace token, set in <a href="/settings">Settings</a>, plus acceptance of the licence on the model's own page.</dd>
+    </dl>
+
+    <h2 id="benchmarks">Benchmarks</h2>
+    <p>Four things live here: ad-hoc runs, batch jobs, the context probe, and the comparison and visualization views.</p>
+
+    <h3>Presets</h3>
+    <dl>
+        <dt><code>internal-quick</code></dt><dd>One request, 512-token prompt. A sanity check after a load — about 15 seconds.</dd>
+        <dt><code>internal-standard</code></dt><dd>Three repetitions across 128 / 512 / 2048-token prompts. Shows how prompt length affects time-to-first-token.</dd>
+        <dt><code>internal-thorough</code></dt><dd>Five repetitions across four prompt sizes up to 8K. What to use for a number you intend to quote.</dd>
+        <dt><code>internal-long-ctx</code></dt><dd>A single 32K-token prompt. Stresses the KV cache and paged attention rather than raw generation.</dd>
+        <dt><code>benchy-*</code></dt><dd>Runs through <code>llama-benchy</code>, an engine-agnostic harness. Use these when you want a number comparable with a llama.cpp measurement; the concurrency preset sweeps parallel requests to find where continuous batching stops scaling.</dd>
+    </dl>
+
+    <h3>Batch jobs and sweeps</h3>
+    <p>A batch job runs every combination of the models and presets you tick. Cells are grouped by model so each model is loaded once rather than once per preset.</p>
+    <p>Sweep parameters multiply that out: context length, tensor parallel size, GPU memory utilization, concurrent sequences, KV cache dtype and eager mode. Each is an engine-launch parameter, so <strong>every combination is a separate model load</strong> — three context lengths across two models is six loads, not six requests. Jobs are capped at 64 combinations for that reason.</p>
+
+    <h3>What is measured, and comparing runs</h3>
+    <p>Generation tokens per second, prompt (prefill) tokens per second, and time to first token, each averaged across repetitions. Select several runs and <em>Compare</em> shows only the dimensions that actually differ between them, so a table of ten runs that vary in one parameter has one column rather than twenty.</p>
+    <p><em>Visualize</em> plots the same data: scatter, leaderboard, heatmap, faceted heatmaps, a Pareto view of prompt speed against generation speed, parallel coordinates, and two 3D views. Charts that need two varying parameters are offered only when two exist. Where several runs share a configuration their measurements are averaged; a combination never run is left as a gap rather than drawn as zero, because zero is a measurement and would colour as the worst result.</p>
+
+    <h2 id="tuning">Tuning</h2>
+    <p>An autotuner for block-FP8 GEMM kernels. For a chosen model and tensor-parallel size it derives the unique weight-matmul shapes that model's decoder layers will execute, benchmarks kernel configurations for each, and writes the winners as JSON files that vLLM loads at run time.</p>
+    <p>Two things to know:</p>
+    <ul>
+        <li>It only helps models with <strong>block-quantized FP8</strong> weights. Other formats never reach the kernel being tuned.</li>
+        <li>Tuned configs are keyed by <em>the device name vLLM reports</em>, not by the marketing name or the architecture. That name is probed from the running vLLM at startup rather than guessed, because the image variants disagree about it — and a file written under the wrong name is correctly formatted and never read. The name in use is shown in <a href="/settings">Settings</a> under Environment.</li>
+    </ul>
+
+    <h2 id="settings">Settings</h2>
+    <dl>
+        <dt>API &amp; Connection</dt><dd>The external URL shown to clients, an optional API key required as a Bearer token on <code>/v1/*</code>, and the HuggingFace token used for gated downloads.</dd>
+        <dt>vLLM Defaults</dt><dd>Applied to <em>newly downloaded</em> models. Changing them does not touch configs that already exist.</dd>
+        <dt>Process Management</dt><dd>Auto-restart on crash, and auto-start on container startup. Auto-start launches the active model in the background after the web UI is already listening, so a model that fails to load leaves you a log to read rather than an unreachable server.</dd>
+        <dt>Runtime environment</dt><dd>Environment variables applied to the vLLM process, taking effect at the next start. The curated table is short on purpose — vLLM defines nearly 300 variables, most for hardware or topologies this tool never runs on. The <em>Extra environment</em> box takes anything else, one <code>KEY=VALUE</code> per line, and applies last. Variables that fight a mechanism this tool depends on (device-visibility overrides, <code>HSA_OVERRIDE_GFX_VERSION</code>, HuggingFace cache paths) are saved with a warning rather than refused.
+            <div class="callout">These are applied <em>after</em> the container's own environment, so a value set here <strong>replaces</strong> what the image exports — the opposite of how the equivalent works in llama-toolchest. The <em>Effective environment</em> preview marks every line that overrides an image value.</div>
+        </dd>
+        {{if .IsRadiance}}
+        <dt>Radiance</dt><dd>The RDNA4 image's feature switches. Every one defaults to <em>image default</em>, which leaves the image's own value alone rather than pinning one here that would then drift as radiance is updated. These are applied after the runtime environment, so the switch you can see wins over a <code>RADIANCE_*</code> line typed into the extra box.</dd>
+        {{end}}
+        <dt>Backup &amp; Restore</dt><dd>Exports settings, the runtime environment, the Radiance switches and every model's launch config as one versioned JSON file. Model configs are keyed by HuggingFace repo ID rather than by path, so a backup restores onto a different machine; a config for a model not installed there is held as <em>pending</em> and attaches by itself when that model is downloaded, however much later. Restore is per-section and is a merge — it never deletes. Tensor parallel size is reduced to fit the target's GPU count, with a warning, because a config asking for more GPUs than exist fails minutes into a load rather than at restore. Secrets travel only via the explicit checkbox, in plaintext. Deployment identity (listen address, ports, paths) is recorded for reference and never applied. For scripting: <code>GET /api/backup</code> (add <code>?secrets=1</code>) and <code>POST /api/restore</code>. Benchmark history is not included — export that from the Benchmarks page.</dd>
+        <dt>Storage</dt><dd>The data directory is set at install time and shown for reference. The models directory can be pointed elsewhere — an absolute path to an existing directory <em>inside the container</em>, which means a mounted volume. Restart after changing it: the registry and the downloader read it once, at startup.</dd>
+        <dt>Theme</dt><dd>Applied immediately in this browser and saved as the default other browsers start from.</dd>
+    </dl>
+
+    <h2 id="api">Using the API</h2>
+    <p>The engine speaks the OpenAI <code>/v1/*</code> dialect and this tool proxies it, so any OpenAI-compatible client works.</p>
+    <pre>curl $BASE/v1/models
+
+curl $BASE/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;name from /v1/models&gt;",
+    "messages": [{"role": "user", "content": "hello"}]
+  }'</pre>
+    <p>If an API key is set in Settings, add <code>-H "Authorization: Bearer $KEY"</code>. The key guards <code>/v1/*</code> only — the management API under <code>/api</code> is same-origin and protected by your network posture, so treat access to this UI as administrative access.</p>
+    <p>There is no on-demand loading. A request for a model that is not the running one is not a cue to switch; it is an error.</p>
+
+    <h2 id="troubleshooting">Troubleshooting</h2>
+    <dl>
+        <dt>Start fails with an out-of-memory error</dt>
+        <dd>In order of what to try: lower <em>Context length</em>, set the KV cache dtype to <code>fp8</code>, lower <em>GPU memory utilization</em>, or raise tensor parallel size if you have another GPU. Use the context probe to find the real ceiling instead of guessing.</dd>
+
+        <dt>Start hangs, then times out</dt>
+        <dd>Usually graph capture on a large model. Read the log panel — the last line says which stage it reached. Enabling <em>Enforce eager mode</em> skips capture and starts faster, at some steady-state cost.</dd>
+
+        <dt>The model loads but is much slower than expected</dt>
+        <dd>Check what the quantization is actually buying you: a 4-bit weight-only checkpoint runs its matmuls at bf16 speed. On the radiance image at TP=2, also check the batched-token setting against the all-reduce ceiling shown in the model config panel — exceeding it costs about 2.3&times; and reports nothing.</dd>
+
+        <dt><code>/v1/models</code> is empty</dt>
+        <dd>Nothing is loaded. The listing reports what is being served, not what is installed — it is deliberately not a catalogue, because a name listed there that no request can be served by is worse than an empty list. Make a model active on the Models page and start the engine.</dd>
+
+        <dt>A request is rejected with an unknown model</dt>
+        <dd>Pass the repo ID exactly as <code>/v1/models</code> reports it. An engine started before this tool set the served name — or started by hand — will still be answering to its file path instead; restarting it from the Server page fixes that.</dd>
+
+        <dt>A downloaded model is not on the Models page</dt>
+        <dd>If the models directory was overridden without a restart, the scan is still reading the old path. Restart the container.</dd>
+
+        <dt>Tuned kernels seem to have no effect</dt>
+        <dd>They are keyed by the device name vLLM reports. Confirm the name in Settings → Environment matches the one the tuned files were written under; a mismatch produces correctly-formatted files nothing ever reads.</dd>
+
+        <dt>A setting will not stay changed</dt>
+        <dd>Engine-launch parameters apply at the next start, not immediately. If the Models page shows the <span style="color:var(--pico-primary);">&#x21bb;</span> glyph, a restart is owed.</dd>
+    </dl>
+
+    <p style="margin-top: 2rem; text-align: center; color: var(--pico-muted-color); font-size: 0.8rem;">
+        vLLM: <a href="https://github.com/vllm-project/vllm" target="_blank" rel="noopener">github.com/vllm-project/vllm</a>
+    </p>
+</div>
+{{end}}

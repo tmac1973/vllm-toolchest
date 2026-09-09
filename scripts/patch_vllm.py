@@ -1,14 +1,38 @@
 #!/usr/bin/env python3
 # Source: github.com/kyuz0/amd-r9700-vllm-toolboxes (scripts/patch_vllm.py)
-# Build-time patches for AMD Radeon R9700 (gfx1201) vLLM compilation.
+# Build-time patches for vLLM on ROCm.
 # Run from the root of a freshly cloned vLLM repo. All patches are idempotent.
+#
+# Some of these patches are corrections that apply to any ROCm build; four of
+# them hardcode gfx1201 and are specific to the R9700, which is what the
+# upstream script was written for. Those four are gated on GPU_ARCH.
+#
+# Applying them to another card is not a harmless no-op. vLLM derives roughly
+# a dozen predicates from _GCN_ARCH, so pinning it to gfx1201 on, say, a
+# gfx1100 makes _ON_GFX11 and _ON_GFX1100 false and _ON_RDNA4, _ON_GFX12X and
+# _ON_MI3XX true — every RDNA3 path switched off and RDNA4/MI3XX paths
+# switched on, on RDNA3 hardware. It also renames the device, and tuned kernel
+# configs are keyed by device name.
+#
+# vLLM can work the architecture out for itself (_get_gcn_arch queries amdsmi
+# and falls back to torch.cuda), so on any other target the right move is to
+# leave it alone.
 
+import os
 import re
 import sys
 from pathlib import Path
 
 _OK = 0
 _WARN = 0
+
+# The architecture this image is being built for. Matches the Dockerfile's
+# GPU_ARCH build arg, which the compose files pass through from .env.
+GPU_ARCH = os.environ.get("GPU_ARCH", "gfx1201").strip()
+
+# The gfx1201-specific patches exist to work around detection on the R9700 and
+# to route it onto MI350X kernel paths. Neither is true of any other card.
+IS_GFX1201 = GPU_ARCH == "gfx1201"
 
 
 def _patch(path_str: str, description: str, fn):
@@ -69,15 +93,36 @@ def patch_1_init_py(txt: str) -> str:
 
 
 def patch_2_rocm_py_mock(txt: str) -> str:
-    header = (
-        "import sys\n"
-        "from unittest.mock import MagicMock\n"
-        'sys.modules["amdsmi"] = MagicMock()\n'
-    )
-    if 'sys.modules["amdsmi"]' not in txt:
-        txt = header + txt
+    # This used to prepend `sys.modules["amdsmi"] = MagicMock()` here, from
+    # when the image had no amdsmi bindings and vLLM's ROCm platform would not
+    # import without them.
+    #
+    # It has to stay removed. The Dockerfile now copies the real bindings into
+    # the venv, and the mock shadowed them: setting sys.modules ahead of this
+    # module's own `from amdsmi import ...` means every amdsmi call returned a
+    # MagicMock rather than a number. vLLM's get_device_total_memory() queries
+    # amdsmi inside a try/except and falls back to torch.cuda on failure — but
+    # a MagicMock does not fail, so the fallback never ran and the mock escaped
+    # into arithmetic:
+    #
+    #   File "vllm/engine/arg_utils.py", line 2674, in get_batch_defaults
+    #     if device_memory >= 160 * GiB_bytes:
+    #   TypeError: '>=' not supported between instances of 'MagicMock' and 'int'
+    #
+    # Without the mock both paths are correct: with the bindings present vLLM
+    # reads real VRAM, and without them the import raises, vLLM warns, and it
+    # falls back to torch.cuda. Nothing here needs amdsmi anyway — patch_4
+    # hardcodes _GCN_ARCH, and patch_1 already removes the amdsmi dependency
+    # from platform detection.
 
     txt = re.sub(r'device_type\s*:\s*str\s*=\s*"[^"]*"', 'device_type: str = "cuda"', txt)
+
+    # The device-name override is gfx1201-only. Forcing it elsewhere renames
+    # the card vLLM reports, and tuned kernel configs are keyed by that name —
+    # so a wrong one produces correctly-formatted JSON nothing ever reads.
+    if not IS_GFX1201:
+        return txt
+
     txt = re.sub(r'device_name\s*:\s*str\s*=\s*"[^"]*"', 'device_name: str = "gfx1201"', txt)
 
     if "AMD-gfx1201" not in txt:
@@ -112,8 +157,48 @@ def patch_3_transformers_config(txt: str) -> str:
     return txt
 
 
+# BUILD_ARCH is the single architecture to fall back on when the GPU cannot be
+# asked. GPU_ARCH may name several, semicolon-separated for PyTorch; the first
+# is the one this image is primarily for.
+BUILD_ARCH = GPU_ARCH.split(";")[0].strip()
+
+
 def patch_4_gcn_arch(txt: str) -> str:
-    return re.sub(r"_GCN_ARCH\s*=\s*_get_gcn_arch\(\)", '_GCN_ARCH = "gfx1201"', txt)
+    """Make the module-level GCN arch lookup survive a machine with no GPU.
+
+    vLLM resolves _GCN_ARCH at import time, and everything it knows about the
+    card is derived from that one string. The lookup asks amdsmi and then
+    torch.cuda, and on a builder with no /dev/kfd both fail — torch raises
+    "No CUDA GPUs are available" and `import vllm` dies. That matters here
+    because the image verifies its own install by importing vLLM, and it is a
+    real constraint besides: a container build should not need a GPU.
+
+    On gfx1201 the arch is pinned outright, which is how this script has always
+    worked for the R9700 and sidesteps the problem as a side effect.
+
+    Everywhere else the lookup is left to run — detection at runtime is the
+    whole point of not pinning it — with the final fallback changed from a
+    raise to the architecture the image was built for. At runtime, where a GPU
+    is present, this changes nothing: amdsmi answers first and the fallback is
+    never reached.
+    """
+    if IS_GFX1201:
+        return re.sub(r"_GCN_ARCH\s*=\s*_get_gcn_arch\(\)", '_GCN_ARCH = "gfx1201"', txt)
+
+    target = '    return torch.cuda.get_device_properties("cuda").gcnArchName'
+    if target not in txt:
+        return txt
+    replacement = (
+        "    try:\n"
+        '        return torch.cuda.get_device_properties("cuda").gcnArchName\n'
+        "    except Exception as e:\n"
+        "        # No GPU visible — a container build, typically. Fall back to\n"
+        "        # the architecture this image was built for rather than making\n"
+        "        # `import vllm` impossible without a card.\n"
+        '        logger.debug("Failed to get GCN arch via torch.cuda: %s", e)\n'
+        f'        return "{BUILD_ARCH}"'
+    )
+    return txt.replace(target, replacement)
 
 
 def patch_5_spinloop(txt: str) -> str:
@@ -121,6 +206,10 @@ def patch_5_spinloop(txt: str) -> str:
 
 
 def patch_6_on_mi3xx(txt: str) -> str:
+    # Routes the R9700 onto the MI3XX kernel paths. Meaningless anywhere else,
+    # and actively wrong on a card that is not one.
+    if not IS_GFX1201:
+        return txt
     return txt.replace(
         '_ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950"])',
         '_ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950", "gfx1201"])',
@@ -128,6 +217,8 @@ def patch_6_on_mi3xx(txt: str) -> str:
 
 
 def patch_7_aiter_ops(txt: str) -> str:
+    if not IS_GFX1201:
+        return txt
     marker = "map gfx1201 to MI350X"
     if marker in txt:
         return txt
@@ -222,7 +313,11 @@ def patch_9_int8_utils(txt: str) -> str:
 
 def main():
     print("=" * 60)
-    print("patch_vllm.py - R9700 (gfx1201) build-time patches")
+    print(f"patch_vllm.py - ROCm build-time patches (GPU_ARCH={GPU_ARCH})")
+    if IS_GFX1201:
+        print("  including the R9700/gfx1201-specific patches")
+    else:
+        print("  gfx1201-specific patches SKIPPED; vLLM will detect the arch")
     print("=" * 60)
 
     _patch("vllm/platforms/__init__.py", "force ROCm, bypass amdsmi", patch_1_init_py)
@@ -232,7 +327,7 @@ def main():
         txt = patch_4_gcn_arch(txt)
         txt = patch_6_on_mi3xx(txt)
         return txt
-    _patch("vllm/platforms/rocm.py", "mock amdsmi + GCN arch + MI3XX gate", patch_rocm_combined)
+    _patch("vllm/platforms/rocm.py", "device name + GCN arch + MI3XX gate", patch_rocm_combined)
 
     _patch(
         "vllm/transformers_utils/config.py",

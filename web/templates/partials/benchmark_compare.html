@@ -1,0 +1,101 @@
+{{define "benchmark_compare" -}}
+<article id="comparison" style="margin-bottom:1rem;">
+  <header style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+    <span><strong>Comparing {{len .Rows}} runs</strong></span>
+    <button type="button" class="outline secondary" style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;width:auto;"
+            onclick="document.getElementById('comparison-view').innerHTML='';">Close</button>
+  </header>
+
+  {{- if .Identical}}
+  <p><mark>These runs differ in nothing recorded — same model, configuration and preset. Any gap between them is run-to-run variance.</mark></p>
+  {{- end}}
+
+
+  <small><strong>Generation speed (tokens/sec)</strong></small>
+  <div class="bench-compare-bars">
+    {{- range .Rows}}
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="{{.Label}}">{{.Label}}</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:{{printf "%.1f" .GenBarPct}}%;background:{{if .Best}}var(--pico-ins-color){{else}}var(--pico-primary){{end}};"></span>
+      </span>
+      <span class="bench-compare-value">{{if .Failed}}&mdash;{{else}}{{printf "%.1f" .GenTPS}}{{end}}</span>
+      <span class="bench-compare-rank">
+        {{- if .Failed}}<small>failed</small>
+        {{- else if .Best}}<mark>best</mark>
+        {{- else}}{{printf "%.1f" .DeltaPct}}%
+        {{- end}}
+      </span>
+    </div>
+    {{- end}}
+  </div>
+
+  {{- if .HasPrompt}}
+  {{/* Prefill and decode are different workloads, and the fastest run at one
+       is regularly not the fastest at the other — a chart of generation alone
+       hides half of what a sweep changed. */}}
+  <small><strong>Prompt processing (tokens/sec)</strong></small>
+  <div class="bench-compare-bars">
+    {{- range .Rows}}
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="{{.Label}}">{{.Label}}</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:{{printf "%.1f" .PromptBarPct}}%;background:{{if .PromptBest}}var(--pico-ins-color){{else}}var(--pico-primary){{end}};"></span>
+      </span>
+      <span class="bench-compare-value">{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .PromptTPS}}{{end}}</span>
+      <span class="bench-compare-rank">
+        {{- if .Failed}}<small>failed</small>
+        {{- else if .PromptBest}}<mark>best</mark>
+        {{- else}}{{printf "%.1f" .PromptDeltaPct}}%
+        {{- end}}
+      </span>
+    </div>
+    {{- end}}
+  </div>
+  {{- end}}
+
+  <div class="bench-compare-tablehead">
+    <small><strong>Details</strong></small>
+    {{- if .Common}}
+    <label class="bench-const-toggle" title="Show the dimensions every selected run agreed on. They are hidden by default because they are the conditions the comparison holds fixed — worth being able to check, not worth reading past on every row.">
+      <input type="checkbox" onchange="this.closest('#comparison').querySelector('.bench-compare-table').classList.toggle('hide-constant', !this.checked);">
+      Show constant columns <small>({{len .Common}})</small>
+    </label>
+    {{- end}}
+  </div>
+
+  <div class="bench-compare-scroll">
+    <table role="grid" class="bench-compare-table hide-constant" style="font-size:0.85rem;">
+      <thead>
+        <tr>
+          <th>#</th>
+          {{- range .Columns}}<th{{if .Constant}} class="bc-const"{{end}}>{{.Label}}</th>{{end}}
+          <th title="Token generation tokens/sec">TG t/s</th>
+          <th title="Prompt processing tokens/sec">PP t/s</th>
+          <th title="Time to first token">TTFT</th>
+          <th title="Generation rate against the fastest run">vs best</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{- range .Rows}}
+        <tr>
+          <td>{{if .Failed}}&mdash;{{else}}{{.Rank}}{{end}}</td>
+          {{- range $i, $v := .Cells}}<td{{if (index $.Columns $i).Constant}} class="bc-const"{{end}}>{{if $v}}{{$v}}{{else}}&mdash;{{end}}</td>{{end}}
+          <td>{{if .Failed}}&mdash;{{else}}<strong>{{printf "%.1f" .GenTPS}}</strong>{{end}}</td>
+          <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .PromptTPS}}{{end}}</td>
+          <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .TTFTMs}} ms{{end}}</td>
+          <td>
+            {{- if .Failed}}<small>failed</small>
+            {{- else if .Best}}<ins>best</ins>
+            {{- else}}{{printf "%.1f" .DeltaPct}}%
+            {{- end}}
+          </td>
+        </tr>
+      {{- end}}
+      </tbody>
+    </table>
+  </div>
+</article>
+{{- end}}

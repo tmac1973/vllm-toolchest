@@ -40,7 +40,7 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{cfg: &config.Config{}, vllmEnv: tc.env}
-			s.pages = s.parseTemplates()
+			s.initTemplates()
 
 			w := httptest.NewRecorder()
 			s.handleSettingsPage(w, httptest.NewRequest("GET", "/settings", nil))

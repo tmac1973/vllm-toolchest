@@ -58,6 +58,15 @@ type Env struct {
 
 	// TunerScript is the fp8 tuning wrapper, empty when not installed.
 	TunerScript string
+
+	// HasBitsAndBytes reports whether the bitsandbytes package is installed.
+	//
+	// It is not on every image: the ROCm one dropped it when its only ROCm
+	// fork stopped compiling for wave32 (see Dockerfile.rocm), and radiance
+	// has never carried it. Offering BitsAndBytes quantization on an image
+	// without it produces a launch that fails on an import, minutes after the
+	// operator picked it.
+	HasBitsAndBytes bool
 }
 
 // venvCandidates are probed in order. VIRTUAL_ENV comes first so an operator
@@ -105,6 +114,7 @@ func Detect() Env {
 		e.SitePackages = sp
 		e.BlockFP8ConfigsDir = filepath.Join(sp,
 			"vllm/model_executor/layers/quantization/utils/configs")
+		e.HasBitsAndBytes = fileExists(filepath.Join(sp, "bitsandbytes"))
 		if py := filepath.Join(root, "bin/python"); isExecutable(py) {
 			e.Python = py
 		}
