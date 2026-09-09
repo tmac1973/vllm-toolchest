@@ -548,7 +548,20 @@ func (s *Server) jobSummary(job benchmark.BenchmarkJob) jobRow {
 		}
 	}
 	if row.IsAdhoc {
-		row.RunCount = len(s.bench.RunsForJob(job.ID))
+		// The ad-hoc entry is synthesized with a fixed "completed" status —
+		// it is a container for individually-started runs, not something that
+		// runs. Left alone it claims completed while a run inside it is still
+		// going, which is exactly as confusing as it sounds when the row is
+		// expanded. Derive it from what it holds instead.
+		runs := s.bench.RunsForJob(job.ID)
+		row.RunCount = len(runs)
+		row.Status = benchmark.JobStatusCompleted
+		for _, r := range runs {
+			if r.Status == benchmark.StatusRunning {
+				row.Status = benchmark.JobStatusRunning
+				break
+			}
+		}
 	}
 	return row
 }

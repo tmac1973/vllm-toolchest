@@ -324,3 +324,84 @@ func TestJobFormAdvertisesTheServersCap(t *testing.T) {
 			benchmark.MaxSweepCombinations)
 	}
 }
+
+// The Ad-Hoc Runs row is synthesized with a fixed "completed" status, so it
+// claimed completed while a run inside it was still going — and expanding the
+// row showed a running run directly under the badge contradicting it.
+func TestAdhocRowStatusFollowsItsRuns(t *testing.T) {
+	s := newGoldenServer(t, goldenEnvGeneric)
+
+	save := func(id, status string) {
+		if err := s.bench.Save(benchmark.BenchmarkRun{
+			ID: id, JobID: benchmark.AdhocJobID, Status: status,
+			CreatedAt: time.Now(), ModelID: "m", ModelName: "m",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adhoc := func() jobRow {
+		for _, j := range s.bench.ListJobs() {
+			if j.ID == benchmark.AdhocJobID {
+				return s.jobSummary(j)
+			}
+		}
+		t.Fatal("no ad-hoc job")
+		return jobRow{}
+	}
+
+	save("r1", benchmark.StatusCompleted)
+	if got := adhoc().Status; got != benchmark.JobStatusCompleted {
+		t.Errorf("with nothing running the row should read completed, got %q", got)
+	}
+
+	save("r2", benchmark.StatusRunning)
+	row := adhoc()
+	if row.Status != benchmark.JobStatusRunning {
+		t.Errorf("a running run should make the row read running, got %q", row.Status)
+	}
+	if row.RunCount != 2 {
+		t.Errorf("RunCount = %d, want 2", row.RunCount)
+	}
+
+	// And it goes back once the run lands.
+	save("r2", benchmark.StatusCompleted)
+	if got := adhoc().Status; got != benchmark.JobStatusCompleted {
+		t.Errorf("after the run finished the row should read completed, got %q", got)
+	}
+}
+
+// The list only polls while something is running: an idle history of hundreds
+// of runs should not re-render itself every two seconds forever.
+func TestAdhocListPollsOnlyWhileRunning(t *testing.T) {
+	s := newGoldenServer(t, goldenEnvGeneric)
+
+	render := func() string {
+		var b strings.Builder
+		s.renderRunList(&stringWriter{&b}, s.bench.RunsForJob(benchmark.AdhocJobID))
+		return b.String()
+	}
+
+	s.bench.Save(benchmark.BenchmarkRun{ID: "r1", JobID: benchmark.AdhocJobID,
+		Status: benchmark.StatusCompleted, CreatedAt: time.Now(), ModelID: "m"})
+	if strings.Contains(render(), "every 2s") {
+		t.Error("an idle list should not poll")
+	}
+
+	s.bench.Save(benchmark.BenchmarkRun{ID: "r2", JobID: benchmark.AdhocJobID,
+		Status: benchmark.StatusRunning, CreatedAt: time.Now(), ModelID: "m"})
+	out := render()
+	if !strings.Contains(out, "every 2s") {
+		t.Error("a running list should poll so the rows and badge stay current")
+	}
+	if !strings.Contains(out, `id="job-status-adhoc"`) {
+		t.Error("the list should carry the out-of-band badge update")
+	}
+}
+
+// stringWriter adapts a strings.Builder to http.ResponseWriter for the render
+// helpers, which write through one.
+type stringWriter struct{ b *strings.Builder }
+
+func (w *stringWriter) Header() http.Header         { return http.Header{} }
+func (w *stringWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
+func (w *stringWriter) WriteHeader(int)             {}

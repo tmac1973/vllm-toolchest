@@ -1,8 +1,20 @@
 {{define "run_list" -}}
-{{if not . -}}
+{{/* These keep the collapsed Ad-Hoc Runs row honest while a run is going. The
+     row is drawn by the job list, which has no idea a run started, so without
+     them it keeps whatever badge it was rendered with — "completed" over a
+     running run, which is what the expanded list then contradicts. htmx
+     ignores an out-of-band target that is not on the page. */}}
+<span id="job-status-adhoc" hx-swap-oob="true" class="job-status status-{{if .Running}}running{{else}}completed{{end}}">
+  {{- if .Running}}running{{else}}completed{{end -}}
+</span>
+<span id="job-progress-adhoc" hx-swap-oob="true" class="job-progress">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}</span>
+{{if not .Groups -}}
 <p style="opacity:0.7;">No benchmark runs yet. Load a model and start a run from the form above.</p>
 {{- else -}}
-<div class="bench-runs-container">
+{{/* Polls only while something is running, and swaps itself, so an idle list
+     costs nothing and a live one keeps both the rows and the badge current. */}}
+<div class="bench-runs-container"
+     {{if .Running}}hx-get="/api/benchmark-jobs/adhoc" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
   <div class="model-list-controls">
     <input type="search" class="model-filter" placeholder="Filter by model, quant, preset, sweep&hellip;"
            oninput="filterBenchRuns(this)" autocomplete="off">
@@ -31,7 +43,7 @@
       <th>When</th>
       <th></th>
     </tr></thead>
-    {{- range .}}
+    {{- range .Groups}}
     {{/* One tbody per model, and a second per run, so a group header and its
          rows stay associated without the rows having to carry the group name
          in the DOM. */}}
@@ -174,10 +186,12 @@
 {{- end}}
 {{- end}}
 
-{{/* The run appears under Ad-Hoc Runs in the jobs list. That link targeted a
-     #bench-runs element that no longer exists, so it silently did nothing;
-     refreshing the list it actually lands in is the useful thing to offer. */}}
-{{define "run_started"}}<p>Started run <code>{{.}}</code>. <a href="#" hx-get="/api/benchmark-jobs/" hx-target="#bench-jobs" hx-swap="innerHTML">Refresh list</a></p>{{end}}
+{{/* Swapped out-of-band into the notice above the jobs list, for the same
+     reason the batch confirmation is: the form closes on success, so anything
+     rendered inside it would be hidden by the event that signals success. */}}
+{{define "run_started"}}<div id="bench-notice" hx-swap-oob="true">
+  <p><ins>Started an ad-hoc run</ins> <small style="opacity:0.7;">&mdash; <code>{{.}}</code>, under Ad-Hoc Runs below.</small></p>
+</div>{{end}}
 
 {{/* The passive timing table: what real traffic through the proxy measured. */}}
 {{define "timings_list" -}}

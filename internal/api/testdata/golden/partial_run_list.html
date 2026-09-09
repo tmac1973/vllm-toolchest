@@ -1,4 +1,9 @@
-<div class="bench-runs-container">
+
+<span id="job-status-adhoc" hx-swap-oob="true" class="job-status status-running">running</span>
+<span id="job-progress-adhoc" hx-swap-oob="true" class="job-progress">3 runs</span>
+
+<div class="bench-runs-container"
+     hx-get="/api/benchmark-jobs/adhoc" hx-trigger="every 2s" hx-swap="outerHTML">
   <div class="model-list-controls">
     <input type="search" class="model-filter" placeholder="Filter by model, quant, preset, sweep&hellip;"
            oninput="filterBenchRuns(this)" autocomplete="off">

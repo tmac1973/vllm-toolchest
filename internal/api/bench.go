@@ -333,6 +333,10 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
+	// Same signal the batch form uses, so the page can close the form it was
+	// submitted from. Without it the form sits open over its own confirmation
+	// and reads as though nothing happened.
+	w.Header().Set("HX-Trigger", "runSubmitted")
 	w.WriteHeader(http.StatusAccepted)
 	s.renderPartial(w, "run_started", run.ID)
 }
@@ -446,6 +450,15 @@ type runGroup struct {
 	Rows []runRow
 }
 
+// runListView is the ad-hoc list plus what its collapsed row shows. Running is
+// what drives both the badge and the poll: the row is rendered by the job list
+// and does not otherwise know a run has started.
+type runListView struct {
+	Groups   []runGroup
+	RunCount int
+	Running  bool
+}
+
 func (s *Server) renderRunList(w http.ResponseWriter, runs []benchmark.BenchmarkRun) {
 	byModel := map[string]*runGroup{}
 	var order []string
@@ -494,7 +507,14 @@ func (s *Server) renderRunList(w http.ResponseWriter, runs []benchmark.Benchmark
 	for _, name := range order {
 		groups = append(groups, *byModel[name])
 	}
-	s.renderPartial(w, "run_list", groups)
+	view := runListView{Groups: groups, RunCount: len(runs)}
+	for _, r := range runs {
+		if r.Status == benchmark.StatusRunning {
+			view.Running = true
+			break
+		}
+	}
+	s.renderPartial(w, "run_list", view)
 }
 
 // gpuSnapshotText names the cards a run was measured on. Which hardware

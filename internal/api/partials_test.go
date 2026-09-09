@@ -263,7 +263,7 @@ func TestGoldenPartials(t *testing.T) {
 			partial: "run_list",
 			// Two groups, because grouping is the point of this list, and one
 			// of them holds a run at a sweep point and a running one.
-			data: []runGroup{
+			data: runListView{RunCount: 3, Running: true, Groups: []runGroup{
 				{
 					Name: "Qwen3.8-27B-FP8",
 					Rows: []runRow{
@@ -289,7 +289,7 @@ func TestGoldenPartials(t *testing.T) {
 							Search: "mixtral-8x7b-awq awq internal-quick"},
 					},
 				},
-			},
+			}},
 		},
 		{
 			name:    "run_detail",

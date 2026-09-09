@@ -162,7 +162,7 @@ Benchmark inference performance with structured results, multi-run comparison, a
 <div id="comparison-view"></div>
 <section id="bench-jobs"
          hx-get="/api/benchmark-jobs/"
-         hx-trigger="load, benchStarted from:body, jobSubmitted from:body, jobChanged from:body"
+         hx-trigger="load, benchStarted from:body, jobSubmitted from:body, runSubmitted from:body, jobChanged from:body"
          hx-swap="innerHTML">
   <p style="opacity:0.6;">Loading…</p>
 </section>
@@ -182,18 +182,24 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
   }
 });
 
-/* Close the batch-job editor once the job is away, and put the list it landed
-   in where the eye already is. The server sends jobSubmitted only on success,
-   so a rejected submission leaves the form open with its error showing. */
-document.body.addEventListener('jobSubmitted', function () {
-  var form = document.getElementById('bench-job-form');
+/* Close a submission form once its work is away, and put the list it landed in
+   where the eye already is. The server sends these only on success, so a
+   rejected submission leaves its form open with the error showing. */
+function closeSubmitForm(formID, resultID) {
+  var form = document.getElementById(formID);
   if (!form) return;
   var d = form.closest('details');
   if (d) d.open = false;
-  var result = document.getElementById('bench-job-result');
+  var result = document.getElementById(resultID);
   if (result) result.innerHTML = '';
   var notice = document.getElementById('bench-notice');
   if (notice) notice.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+document.body.addEventListener('jobSubmitted', function () {
+  closeSubmitForm('bench-job-form', 'bench-job-result');
+});
+document.body.addEventListener('runSubmitted', function () {
+  closeSubmitForm('bench-form', 'bench-start-result');
 });
 
 // --- Cell selection ---------------------------------------------------
