@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"testing"
+
+	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 )
 
 // presetChoice matches what the benchmark form template reads off a preset.
@@ -226,6 +228,35 @@ func TestGoldenPartials(t *testing.T) {
 					{Name: "benchy-thorough", Label: "benchy-thorough — 3 reps"},
 				},
 			},
+		},
+		{
+			// Built rather than hand-written: the template indexes Columns by
+			// cell position, so a Cells/Columns mismatch is a render panic
+			// and a fixture that hardcoded both could hide one.
+			name:    "benchmark_compare",
+			partial: "benchmark_compare",
+			data: benchmark.BuildCompare([]benchmark.BenchmarkRun{
+				{
+					ID: "r1", ModelID: "unsloth/Qwen3.8-27B-FP8", ModelName: "Qwen3.8-27B-FP8",
+					Quant: "fp8", Preset: "internal-standard",
+					PromptTokens: []int{512}, GenTokens: 128, VLLMVersion: "0.1.dev1",
+					Config:  benchmark.ConfigSnapshot{MaxModelLen: 8192, TensorParallelSize: 1, Dtype: "auto"},
+					Summary: &benchmark.BenchmarkSummary{AvgGenTokPerSec: 46, AvgPromptTokPerSec: 980, AvgTTFTMs: 115},
+				},
+				{
+					ID: "r2", ModelID: "unsloth/Qwen3.8-27B-FP8", ModelName: "Qwen3.8-27B-FP8",
+					Quant: "fp8", Preset: "internal-standard",
+					PromptTokens: []int{512}, GenTokens: 128, VLLMVersion: "0.1.dev1",
+					Config:  benchmark.ConfigSnapshot{MaxModelLen: 65536, TensorParallelSize: 1, Dtype: "auto"},
+					Summary: &benchmark.BenchmarkSummary{AvgGenTokPerSec: 31, AvgPromptTokPerSec: 1210, AvgTTFTMs: 155},
+				},
+				// A failed run has no numbers and still has to render.
+				{
+					ID: "r3", ModelID: "unsloth/Qwen3.8-27B-FP8", ModelName: "Qwen3.8-27B-FP8",
+					Quant: "fp8", Preset: "internal-standard",
+					Config: benchmark.ConfigSnapshot{MaxModelLen: 131072, TensorParallelSize: 1, Dtype: "auto"},
+				},
+			}),
 		},
 		{
 			name:    "run_list",

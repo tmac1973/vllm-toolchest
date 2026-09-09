@@ -10,16 +10,8 @@
   <p><mark>These runs differ in nothing recorded — same model, configuration and preset. Any gap between them is run-to-run variance.</mark></p>
   {{- end}}
 
-  {{- if .Common}}
-  {{/* Stated once rather than repeated down every row: these are the
-       conditions the comparison holds constant, and the point of the table is
-       what does not. */}}
-  <p style="font-size:0.85rem;color:var(--pico-muted-color);margin-bottom:0.75rem;">
-    <strong>All runs share:</strong>
-    {{- range $i, $c := .Common}}{{if $i}} &middot;{{end}} {{$c.Label}} <code>{{$c.Value}}</code>{{end}}
-  </p>
-  {{- end}}
 
+  <small><strong>Generation speed (tokens/sec)</strong></small>
   <div class="bench-compare-bars">
     {{- range .Rows}}
     <div class="bench-compare-row">
@@ -39,12 +31,47 @@
     {{- end}}
   </div>
 
+  {{- if .HasPrompt}}
+  {{/* Prefill and decode are different workloads, and the fastest run at one
+       is regularly not the fastest at the other — a chart of generation alone
+       hides half of what a sweep changed. */}}
+  <small><strong>Prompt processing (tokens/sec)</strong></small>
+  <div class="bench-compare-bars">
+    {{- range .Rows}}
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="{{.Label}}">{{.Label}}</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:{{printf "%.1f" .PromptBarPct}}%;background:{{if .PromptBest}}var(--pico-ins-color){{else}}var(--pico-primary){{end}};"></span>
+      </span>
+      <span class="bench-compare-value">{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .PromptTPS}}{{end}}</span>
+      <span class="bench-compare-rank">
+        {{- if .Failed}}<small>failed</small>
+        {{- else if .PromptBest}}<mark>best</mark>
+        {{- else}}{{printf "%.1f" .PromptDeltaPct}}%
+        {{- end}}
+      </span>
+    </div>
+    {{- end}}
+  </div>
+  {{- end}}
+
+  <div class="bench-compare-tablehead">
+    <small><strong>Details</strong></small>
+    {{- if .Common}}
+    <label class="bench-const-toggle" title="Show the dimensions every selected run agreed on. They are hidden by default because they are the conditions the comparison holds fixed — worth being able to check, not worth reading past on every row.">
+      <input type="checkbox" onchange="this.closest('#comparison').querySelector('.bench-compare-table').classList.toggle('hide-constant', !this.checked);">
+      Show constant columns <small>({{len .Common}})</small>
+    </label>
+    {{- end}}
+  </div>
+
   <div class="bench-compare-scroll">
-    <table role="grid" style="font-size:0.85rem;">
+    <table role="grid" class="bench-compare-table hide-constant" style="font-size:0.85rem;">
       <thead>
         <tr>
           <th>#</th>
-          {{- range .Varying}}<th>{{.Label}}</th>{{end}}
+          {{- range .Columns}}<th{{if .Constant}} class="bc-const"{{end}}>{{.Label}}</th>{{end}}
           <th title="Token generation tokens/sec">TG t/s</th>
           <th title="Prompt processing tokens/sec">PP t/s</th>
           <th title="Time to first token">TTFT</th>
@@ -55,7 +82,7 @@
       {{- range .Rows}}
         <tr>
           <td>{{if .Failed}}&mdash;{{else}}{{.Rank}}{{end}}</td>
-          {{- range .Cells}}<td>{{if .}}{{.}}{{else}}&mdash;{{end}}</td>{{end}}
+          {{- range $i, $v := .Cells}}<td{{if (index $.Columns $i).Constant}} class="bc-const"{{end}}>{{if $v}}{{$v}}{{else}}&mdash;{{end}}</td>{{end}}
           <td>{{if .Failed}}&mdash;{{else}}<strong>{{printf "%.1f" .GenTPS}}</strong>{{end}}</td>
           <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .PromptTPS}}{{end}}</td>
           <td>{{if .Failed}}&mdash;{{else}}{{printf "%.0f" .TTFTMs}} ms{{end}}</td>

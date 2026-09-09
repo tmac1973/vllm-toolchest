@@ -58,6 +58,11 @@ type CompareColumn struct {
 	Key   string
 	Label string
 	Value string
+	// Constant marks a dimension every selected run agreed on. The table
+	// renders these columns but hides them by default: they are the
+	// conditions the comparison holds fixed, which is worth being able to
+	// check and not worth reading past on every row.
+	Constant bool
 }
 
 // CompareRow is one run in the comparison.
@@ -79,13 +84,27 @@ type CompareRow struct {
 	DeltaPct float64
 	Rank     int
 	Best     bool
+
+	// The same three for prompt processing. Prefill and decode are different
+	// workloads and the fastest run at one is regularly not the fastest at
+	// the other, so a comparison that charts only generation hides half of
+	// what a sweep changed.
+	PromptBarPct   float64
+	PromptDeltaPct float64
+	PromptBest     bool
 }
 
 // Comparison is the whole view: what varied, what did not, and the rows.
 type Comparison struct {
 	Varying []CompareColumn
 	Common  []CompareColumn
+	// Columns is every dimension in registry order, varying and constant
+	// alike, and is what Rows[].Cells lines up with.
+	Columns []CompareColumn
 	Rows    []CompareRow
+	// HasPrompt reports whether any run measured prompt processing, so the
+	// second chart is offered only when there is something to draw.
+	HasPrompt bool
 	// Identical is true when the runs differ in nothing this knows how to
 	// name — worth saying out loud, since it usually means the wrong runs
 	// were selected.
@@ -106,7 +125,9 @@ func BuildCompare(runs []BenchmarkRun) Comparison {
 		}
 		switch {
 		case len(seen) > 1:
-			c.Varying = append(c.Varying, CompareColumn{Key: d.Key, Label: d.Label})
+			col := CompareColumn{Key: d.Key, Label: d.Label}
+			c.Varying = append(c.Varying, col)
+			c.Columns = append(c.Columns, col)
 		case len(runs) > 0:
 			var only string
 			for v := range seen {
@@ -115,20 +136,34 @@ func BuildCompare(runs []BenchmarkRun) Comparison {
 			if only != "" {
 				c.Common = append(c.Common, CompareColumn{Key: d.Key, Label: d.Label, Value: only})
 			}
+			// A constant column is carried either way, so revealing them
+			// shows every dimension rather than only the ones that had a
+			// value. An empty one is dropped: "" tells the reader nothing.
+			if only != "" {
+				c.Columns = append(c.Columns,
+					CompareColumn{Key: d.Key, Label: d.Label, Value: only, Constant: true})
+			}
 		}
 	}
 	c.Identical = len(c.Varying) == 0
 
-	var maxGen float64
+	var maxGen, maxPrompt float64
 	for _, r := range runs {
-		if r.Summary != nil && r.Summary.AvgGenTokPerSec > maxGen {
+		if r.Summary == nil {
+			continue
+		}
+		if r.Summary.AvgGenTokPerSec > maxGen {
 			maxGen = r.Summary.AvgGenTokPerSec
 		}
+		if r.Summary.AvgPromptTokPerSec > maxPrompt {
+			maxPrompt = r.Summary.AvgPromptTokPerSec
+		}
 	}
+	c.HasPrompt = maxPrompt > 0
 
 	for _, r := range runs {
 		row := CompareRow{RunID: r.ID, Failed: r.Summary == nil}
-		for _, col := range c.Varying {
+		for _, col := range c.Columns {
 			row.Cells = append(row.Cells, valueFor(r, col.Key))
 		}
 		row.Label = compareLabel(r, c.Varying)
@@ -139,6 +174,11 @@ func BuildCompare(runs []BenchmarkRun) Comparison {
 			if maxGen > 0 {
 				row.GenBarPct = row.GenTPS / maxGen * 100
 				row.DeltaPct = (row.GenTPS - maxGen) / maxGen * 100
+			}
+			if maxPrompt > 0 {
+				row.PromptBarPct = row.PromptTPS / maxPrompt * 100
+				row.PromptDeltaPct = (row.PromptTPS - maxPrompt) / maxPrompt * 100
+				row.PromptBest = row.PromptTPS == maxPrompt
 			}
 		}
 		c.Rows = append(c.Rows, row)

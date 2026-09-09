@@ -1,0 +1,124 @@
+<article id="comparison" style="margin-bottom:1rem;">
+  <header style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+    <span><strong>Comparing 3 runs</strong></span>
+    <button type="button" class="outline secondary" style="margin:0;padding:0.2rem 0.6rem;font-size:0.8rem;width:auto;"
+            onclick="document.getElementById('comparison-view').innerHTML='';">Close</button>
+  </header>
+
+
+  <small><strong>Generation speed (tokens/sec)</strong></small>
+  <div class="bench-compare-bars">
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="8192 · 512 · 128 · 0.1.dev1">8192 · 512 · 128 · 0.1.dev1</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:100.0%;background:var(--pico-ins-color);"></span>
+      </span>
+      <span class="bench-compare-value">46.0</span>
+      <span class="bench-compare-rank"><mark>best</mark>
+      </span>
+    </div>
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="65536 · 512 · 128 · 0.1.dev1">65536 · 512 · 128 · 0.1.dev1</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:67.4%;background:var(--pico-primary);"></span>
+      </span>
+      <span class="bench-compare-value">31.0</span>
+      <span class="bench-compare-rank">-32.6%
+      </span>
+    </div>
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="131072">131072</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:0.0%;background:var(--pico-primary);"></span>
+      </span>
+      <span class="bench-compare-value">&mdash;</span>
+      <span class="bench-compare-rank"><small>failed</small>
+      </span>
+    </div>
+  </div>
+  
+  <small><strong>Prompt processing (tokens/sec)</strong></small>
+  <div class="bench-compare-bars">
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="8192 · 512 · 128 · 0.1.dev1">8192 · 512 · 128 · 0.1.dev1</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:81.0%;background:var(--pico-primary);"></span>
+      </span>
+      <span class="bench-compare-value">980</span>
+      <span class="bench-compare-rank">-19.0%
+      </span>
+    </div>
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="65536 · 512 · 128 · 0.1.dev1">65536 · 512 · 128 · 0.1.dev1</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:100.0%;background:var(--pico-ins-color);"></span>
+      </span>
+      <span class="bench-compare-value">1210</span>
+      <span class="bench-compare-rank"><mark>best</mark>
+      </span>
+    </div>
+    <div class="bench-compare-row">
+      <span class="bench-compare-label" title="131072">131072</span>
+      <span class="bench-compare-bartrack">
+        <span class="bench-compare-barfill"
+              style="width:0.0%;background:var(--pico-primary);"></span>
+      </span>
+      <span class="bench-compare-value">&mdash;</span>
+      <span class="bench-compare-rank"><small>failed</small>
+      </span>
+    </div>
+  </div>
+
+  <div class="bench-compare-tablehead">
+    <small><strong>Details</strong></small>
+    <label class="bench-const-toggle" title="Show the dimensions every selected run agreed on. They are hidden by default because they are the conditions the comparison holds fixed — worth being able to check, not worth reading past on every row.">
+      <input type="checkbox" onchange="this.closest('#comparison').querySelector('.bench-compare-table').classList.toggle('hide-constant', !this.checked);">
+      Show constant columns <small>(6)</small>
+    </label>
+  </div>
+
+  <div class="bench-compare-scroll">
+    <table role="grid" class="bench-compare-table hide-constant" style="font-size:0.85rem;">
+      <thead>
+        <tr>
+          <th>#</th><th class="bc-const">Model</th><th class="bc-const">Quant</th><th class="bc-const">Preset</th><th>Context</th><th class="bc-const">TP</th><th class="bc-const">dtype</th><th class="bc-const">Eager</th><th>Prompt sizes</th><th>Gen tokens</th><th>vLLM</th>
+          <th title="Token generation tokens/sec">TG t/s</th>
+          <th title="Prompt processing tokens/sec">PP t/s</th>
+          <th title="Time to first token">TTFT</th>
+          <th title="Generation rate against the fastest run">vs best</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td><td class="bc-const">Qwen3.8-27B-FP8</td><td class="bc-const">fp8</td><td class="bc-const">internal-standard</td><td>8192</td><td class="bc-const">1</td><td class="bc-const">auto</td><td class="bc-const">false</td><td>512</td><td>128</td><td>0.1.dev1</td>
+          <td><strong>46.0</strong></td>
+          <td>980</td>
+          <td>115 ms</td>
+          <td><ins>best</ins>
+          </td>
+        </tr>
+        <tr>
+          <td>2</td><td class="bc-const">Qwen3.8-27B-FP8</td><td class="bc-const">fp8</td><td class="bc-const">internal-standard</td><td>65536</td><td class="bc-const">1</td><td class="bc-const">auto</td><td class="bc-const">false</td><td>512</td><td>128</td><td>0.1.dev1</td>
+          <td><strong>31.0</strong></td>
+          <td>1210</td>
+          <td>155 ms</td>
+          <td>-32.6%
+          </td>
+        </tr>
+        <tr>
+          <td>&mdash;</td><td class="bc-const">Qwen3.8-27B-FP8</td><td class="bc-const">fp8</td><td class="bc-const">internal-standard</td><td>131072</td><td class="bc-const">1</td><td class="bc-const">auto</td><td class="bc-const">false</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td>
+          <td>&mdash;</td>
+          <td>&mdash;</td>
+          <td>&mdash;</td>
+          <td><small>failed</small>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</article>

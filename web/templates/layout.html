@@ -404,6 +404,27 @@
         button.action-icon:hover { color: var(--pico-primary); }
         .action-icon-placeholder { display: inline-block; width: 1.1rem; }
 
+        /* Benchmarks: comparison. Constant columns are rendered and hidden
+           rather than omitted, so the toggle is a class flip on the table
+           instead of a re-fetch. */
+        .bench-compare-table.hide-constant .bc-const { display: none; }
+        .bench-compare-tablehead {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 1rem;
+            margin: 0.75rem 0 0.25rem;
+        }
+        .bench-const-toggle {
+            margin: 0;
+            font-size: 0.8rem;
+            color: var(--pico-muted-color);
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .bench-const-toggle input { margin: 0; }
+
         /* Benchmarks: the ad-hoc runs list, grouped by model. */
         .bench-runs-table { font-size: 0.85rem; }
         .bench-runs-table td, .bench-runs-table th { padding: 0.3rem 0.5rem; }

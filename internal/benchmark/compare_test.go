@@ -159,3 +159,93 @@ func TestBuildCompareTreatsMissingValuesAsVariation(t *testing.T) {
 		t.Errorf("vllm_version differs between the runs; varying = %v", colKeys(c.Varying))
 	}
 }
+
+// The comparison table renders every dimension and hides the constant ones,
+// so Cells has to line up with Columns rather than with Varying — a mismatch
+// puts each row's values under the wrong headings.
+func TestCompareCellsAlignWithColumns(t *testing.T) {
+	runs := []BenchmarkRun{
+		{ID: "a", ModelID: "m", Preset: "p", Config: ConfigSnapshot{MaxModelLen: 8192},
+			Summary: &BenchmarkSummary{AvgGenTokPerSec: 40, AvgPromptTokPerSec: 900}},
+		{ID: "b", ModelID: "m", Preset: "p", Config: ConfigSnapshot{MaxModelLen: 32768},
+			Summary: &BenchmarkSummary{AvgGenTokPerSec: 30, AvgPromptTokPerSec: 1100}},
+	}
+	c := BuildCompare(runs)
+	if len(c.Columns) == 0 {
+		t.Fatal("no columns")
+	}
+	for _, row := range c.Rows {
+		if len(row.Cells) != len(c.Columns) {
+			t.Fatalf("%s has %d cells for %d columns", row.RunID, len(row.Cells), len(c.Columns))
+		}
+	}
+
+	// Every varying dimension appears as a non-constant column, and the
+	// constants are the rest.
+	varying := map[string]bool{}
+	for _, v := range c.Varying {
+		varying[v.Key] = true
+	}
+	for _, col := range c.Columns {
+		if col.Constant == varying[col.Key] {
+			t.Errorf("%s: Constant=%v but varying=%v", col.Key, col.Constant, varying[col.Key])
+		}
+	}
+}
+
+// Prefill and decode rank independently. This is the case the second chart
+// exists for: the run that generates fastest is the one that prefills slowest.
+func TestCompareRanksPromptSeparatelyFromGeneration(t *testing.T) {
+	runs := []BenchmarkRun{
+		{ID: "short", Config: ConfigSnapshot{MaxModelLen: 8192},
+			Summary: &BenchmarkSummary{AvgGenTokPerSec: 46, AvgPromptTokPerSec: 980}},
+		{ID: "long", Config: ConfigSnapshot{MaxModelLen: 65536},
+			Summary: &BenchmarkSummary{AvgGenTokPerSec: 31, AvgPromptTokPerSec: 1210}},
+	}
+	c := BuildCompare(runs)
+	if !c.HasPrompt {
+		t.Fatal("prompt measurements present but HasPrompt is false")
+	}
+	byID := map[string]CompareRow{}
+	for _, r := range c.Rows {
+		byID[r.RunID] = r
+	}
+	if !byID["short"].Best {
+		t.Error("the fastest generator should be Best")
+	}
+	if byID["short"].PromptBest {
+		t.Error("the fastest generator is not the fastest at prefill here")
+	}
+	if !byID["long"].PromptBest {
+		t.Error("the fastest prefill should be PromptBest")
+	}
+	if byID["long"].PromptBarPct != 100 {
+		t.Errorf("the best prompt bar should be full; got %.1f", byID["long"].PromptBarPct)
+	}
+}
+
+// Nothing measured prompt speed means no second chart, rather than one with
+// every bar at zero.
+func TestCompareHasPromptIsFalseWithoutPromptNumbers(t *testing.T) {
+	c := BuildCompare([]BenchmarkRun{
+		{ID: "a", Summary: &BenchmarkSummary{AvgGenTokPerSec: 40}},
+		{ID: "b", Summary: nil},
+	})
+	if c.HasPrompt {
+		t.Error("HasPrompt should be false when no run recorded prompt throughput")
+	}
+}
+
+// A dimension no run recorded says nothing, so it is not offered as a column
+// to reveal.
+func TestCompareOmitsEmptyConstantColumns(t *testing.T) {
+	c := BuildCompare([]BenchmarkRun{
+		{ID: "a", Config: ConfigSnapshot{MaxModelLen: 8192}},
+		{ID: "b", Config: ConfigSnapshot{MaxModelLen: 32768}},
+	})
+	for _, col := range c.Columns {
+		if col.Constant && col.Value == "" {
+			t.Errorf("%s is a constant column with no value", col.Key)
+		}
+	}
+}
