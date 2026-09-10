@@ -127,7 +127,13 @@ type Descriptor struct {
 	Launcher          []string
 	StampFile         string
 	Caps              []string
-	AttentionBackends []string
+	AttentionBackends []Backend
+
+	// Capabilities are feature slugs the UI branches on, so a section of the
+	// interface can be gated on "this stack has an R4D all-reduce" rather
+	// than on "this is the radiance image". A second variant gaining the
+	// same kernel then gets the same guidance for free.
+	Capabilities []string
 
 	// ImageEnv is the environment this variant's image needs in order to
 	// behave as its author intended: kernel routing, backend selection, and
@@ -149,6 +155,22 @@ type Descriptor struct {
 
 	// Groups is Knobs partitioned into contiguous runs.
 	Groups []Group
+}
+
+// Backend is one attention backend a variant adds to its vendor's list.
+type Backend struct {
+	Value string
+	Label string
+}
+
+// Has reports whether this variant declares a capability.
+func (d Descriptor) Has(capability string) bool {
+	for _, c := range d.Capabilities {
+		if c == capability {
+			return true
+		}
+	}
+	return false
 }
 
 // HostReq is one pre-build check setup.sh runs against the host. Severity is
@@ -339,26 +361,38 @@ func parse(id string, src string) (Descriptor, error) {
 	}
 
 	d := Descriptor{
-		ID:                kv["VARIANT_ID"],
-		Label:             kv["VARIANT_LABEL"],
-		Summary:           kv["VARIANT_SUMMARY"],
-		Vendor:            kv["VARIANT_VENDOR"],
-		Tier:              kv["VARIANT_TIER"],
-		DocURL:            kv["VARIANT_DOC_URL"],
-		DocLabel:          kv["VARIANT_DOC_LABEL"],
-		Note:              kv["VARIANT_NOTE"],
-		BaseImage:         kv["VARIANT_BASE_IMAGE"],
-		Dockerfile:        kv["VARIANT_DOCKERFILE"],
-		NeedsFlatten:      kv["VARIANT_NEEDS_FLATTEN"] == "1",
-		VLLMPin:           kv["VARIANT_VLLM_PIN"],
-		GFXTargets:        strings.Fields(kv["VARIANT_GFX_TARGETS"]),
-		HostArch:          kv["VARIANT_HOST_ARCH"],
-		VenvRoot:          kv["VARIANT_VENV_ROOT"],
-		Launcher:          strings.Fields(kv["VARIANT_LAUNCHER"]),
-		StampFile:         kv["VARIANT_STAMP_FILE"],
-		Caps:              strings.Fields(kv["VARIANT_CAPS"]),
-		AttentionBackends: strings.Fields(kv["VARIANT_ATTENTION_BACKENDS"]),
-		ImageEnv:          strings.Fields(kv["VARIANT_IMAGE_ENV"]),
+		ID:           kv["VARIANT_ID"],
+		Label:        kv["VARIANT_LABEL"],
+		Summary:      kv["VARIANT_SUMMARY"],
+		Vendor:       kv["VARIANT_VENDOR"],
+		Tier:         kv["VARIANT_TIER"],
+		DocURL:       kv["VARIANT_DOC_URL"],
+		DocLabel:     kv["VARIANT_DOC_LABEL"],
+		Note:         kv["VARIANT_NOTE"],
+		BaseImage:    kv["VARIANT_BASE_IMAGE"],
+		Dockerfile:   kv["VARIANT_DOCKERFILE"],
+		NeedsFlatten: kv["VARIANT_NEEDS_FLATTEN"] == "1",
+		VLLMPin:      kv["VARIANT_VLLM_PIN"],
+		GFXTargets:   strings.Fields(kv["VARIANT_GFX_TARGETS"]),
+		HostArch:     kv["VARIANT_HOST_ARCH"],
+		VenvRoot:     kv["VARIANT_VENV_ROOT"],
+		Launcher:     strings.Fields(kv["VARIANT_LAUNCHER"]),
+		StampFile:    kv["VARIANT_STAMP_FILE"],
+		Caps:         strings.Fields(kv["VARIANT_CAPS"]),
+		Capabilities: strings.Fields(kv["VARIANT_CAPABILITIES"]),
+		ImageEnv:     strings.Fields(kv["VARIANT_IMAGE_ENV"]),
+	}
+
+	// Attention backends carry a label, because the picker's whole job is to
+	// tell an operator what a backend actually needs -- R4D refuses to load
+	// on a shape it was not compiled for, and saying so in the option is the
+	// difference between a considered choice and a startup abort.
+	for _, val := range strings.Fields(kv["VARIANT_ATTENTION_BACKENDS"]) {
+		b := Backend{Value: val, Label: kv["BACKEND_"+strings.ToUpper(val)+"_LABEL"]}
+		if b.Label == "" {
+			b.Label = val
+		}
+		d.AttentionBackends = append(d.AttentionBackends, b)
 	}
 	if d.ID == "" {
 		d.ID = id

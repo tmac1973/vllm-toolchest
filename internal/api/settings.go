@@ -40,11 +40,10 @@ type settingsResponse struct {
 	// Image variant and its feature knobs. Knobs carries only the running
 	// variant's values, keyed by knob id; Variant says which manifest
 	// describes them.
-	Variant         string            `json:"variant"`
-	RadianceVersion string            `json:"radiance_version,omitempty"`
-	IsRadiance      bool              `json:"is_radiance"`
-	VLLMDeviceName  string            `json:"vllm_device_name,omitempty"`
-	Knobs           map[string]string `json:"knobs"`
+	Variant        string            `json:"variant"`
+	VariantVersion string            `json:"variant_version,omitempty"`
+	VLLMDeviceName string            `json:"vllm_device_name,omitempty"`
+	Knobs          map[string]string `json:"knobs"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -73,11 +72,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		AutoRestart:         c.AutoRestart,
 		Theme:               c.Theme,
 
-		Variant:         s.vllmEnv.Variant,
-		RadianceVersion: s.vllmEnv.RadianceVersion,
-		IsRadiance:      s.vllmEnv.IsRadiance(),
-		VLLMDeviceName:  s.deviceName(),
-		Knobs:           c.KnobValues(s.vllmEnv.Variant),
+		Variant:        s.vllmEnv.Variant,
+		VariantVersion: s.vllmEnv.VariantVersion,
+		VLLMDeviceName: s.deviceName(),
+		Knobs:          c.KnobValues(s.vllmEnv.Variant),
 	}
 
 	respondJSON(w, resp)

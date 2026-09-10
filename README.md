@@ -41,33 +41,50 @@ offers a second, hand-tuned image -- see [Image variants](#image-variants).
 |---------|--------|
 | NVIDIA CUDA | Tested and working |
 | AMD ROCm (RDNA3) | Supported |
-| AMD ROCm (RDNA4) | Supported -- generic, or the tuned `radiance` variant |
+| AMD ROCm (RDNA4) | Supported -- from source, or the tuned `radiance` variant |
 
 ## Image variants
 
-vllm-toolchest is the same Go binary and web UI either way; what differs is the
-vLLM stack underneath it.
+vllm-toolchest is the same Go binary and web UI whichever you pick; what
+differs is the vLLM stack underneath it. Each variant is described by one file
+in [`variants/`](variants/) -- its base image, the hardware it runs on, and the
+feature switches its Settings page offers.
 
-| | `generic` | `radiance` |
+| Variant | Runs on | Stack |
 |---|---|---|
-| Base | Fedora + ROCm (or CUDA), vLLM built from source | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance), a stack hand-tuned for gfx1201 |
-| GPUs | Any supported NVIDIA or AMD card | AMD RDNA4 only (gfx1201: R9700, RX 9070/XT) |
-| vLLM | Tracks `main` | Pinned to the release radiance was built against |
-| Model support | Newest | Frozen at that vLLM/transformers release |
-| Install | Long -- compiles the whole stack | Fast -- pulls a prebuilt base |
-| Performance on RDNA4 | Correctness patches only | Custom attention/GEMM/all-reduce kernels, tuned FP8 + MoE configs, MTP drafting |
+| `rocm-source` | Any supported AMD card | Fedora + ROCm, vLLM built from source, tracking `main` |
+| `cuda-source` | Any supported NVIDIA card | CUDA devel image + vLLM from PyPI |
+| `radiance` | AMD RDNA4 (gfx1201: R9700, RX 9070/XT) | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance), hand-tuned for gfx1201 |
 
-`./setup.sh install` detects the GPU and, on gfx1201, offers to build the
-radiance variant. Answer yes and it asks the remaining questions -- which GPUs
-to use, which ports, where to keep models -- then configures and builds. You do
-not need to write a config file first.
+Run `./setup.sh variants` to see the list on your machine, with the ones that
+fit your GPU marked.
+
+Each variant carries a **support tier**: `tested` means someone on this project
+ran it on that hardware, `community` means it is published upstream but not
+validated here, and `experimental` means little upstream support.
+
+The trade-off between the two kinds: a from-source build takes a long time and
+tracks vLLM `main`, so model support is as new as it gets. A prebuilt variant
+installs fast but pins vLLM to the release its base was built against, so **a
+model needing a newer vLLM will not load**. The install prints the pin, and so
+does `./setup.sh status`.
+
+`./setup.sh install` detects the GPU, offers the variants that fit it with the
+best match preselected, then asks the remaining questions -- which GPUs to use,
+which ports, where to keep models -- and builds. You do not need to write a
+config file first.
 
 To skip the prompt, or to change your mind later:
 
 ```bash
-VLLMCTL_VARIANT=radiance ./setup.sh install    # build radiance without being asked
-VLLMCTL_VARIANT=generic  ./setup.sh rebuild    # switch back to the portable image
+VLLMCTL_VARIANT=radiance ./setup.sh install     # build a specific variant
+VLLMCTL_VARIANT=rocm-source ./setup.sh rebuild  # switch to the from-source image
 ```
+
+A variant states what it needs of the host -- a GPU architecture, a minimum
+driver version -- and the install checks those before building rather than
+after. If a check is wrong for your machine, `VLLMCTL_SKIP_HOSTCHECK=1` lifts
+all of them.
 
 The answers are stored in `.env` and reused by every later command, so `up`,
 `down`, `logs` and `rebuild` all act on the variant you installed.
@@ -96,7 +113,7 @@ work needs a speculative config. Radiance's measurements are all on FP8 models
 across two R9700s.
 
 Because radiance pins vLLM and transformers, **a model newer than that release
-will not load**. If you need the newest architectures, use `generic`.
+will not load**. If you need the newest architectures, use `rocm-source`.
 
 ### Docker and Podman
 
@@ -164,5 +181,5 @@ the published image. If you use it, go read their
 [DOCKERHUB.md](https://codeberg.org/StillDeadcode/vllm-radiance/src/branch/main/DOCKERHUB.md)
 -- it documents every knob in far more detail than we reproduce here.
 
-The generic ROCm image's RDNA4 build patches come from
+The `rocm-source` image's RDNA4 build patches come from
 [kyuz0/amd-r9700-vllm-toolboxes](https://github.com/kyuz0/amd-r9700-vllm-toolboxes).

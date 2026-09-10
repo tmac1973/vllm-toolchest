@@ -33,7 +33,7 @@ func renderHelp(t *testing.T, variant string) string {
 // Every anchor the table of contents links to has to exist, or a heading
 // rename leaves a link that silently goes nowhere.
 func TestHelpTOCAnchorsResolve(t *testing.T) {
-	body := renderHelp(t, vllmenv.VariantRadiance)
+	body := renderHelp(t, "radiance")
 
 	// The TOC is the first nav on the page; collect its hrefs.
 	start := strings.Index(body, `class="help-toc"`)
@@ -63,8 +63,8 @@ func TestHelpTOCAnchorsResolve(t *testing.T) {
 // The radiance-only sections describe a kernel library the generic image does
 // not ship. Showing them there would document a ceiling that does not exist.
 func TestHelpRadianceSectionsAreGated(t *testing.T) {
-	generic := renderHelp(t, vllmenv.VariantGeneric)
-	radiance := renderHelp(t, vllmenv.VariantRadiance)
+	generic := renderHelp(t, "rocm-source")
+	radiance := renderHelp(t, "radiance")
 
 	for _, phrase := range []string{"all-reduce token ceiling", "image default"} {
 		if strings.Contains(generic, phrase) {
@@ -79,7 +79,7 @@ func TestHelpRadianceSectionsAreGated(t *testing.T) {
 // The help page links into the app. A typo'd path is a dead link on the one
 // page whose whole job is pointing people at the right place.
 func TestHelpInternalLinksArePagePaths(t *testing.T) {
-	body := renderHelp(t, vllmenv.VariantRadiance)
+	body := renderHelp(t, "radiance")
 
 	pages := map[string]bool{
 		"/": true, "/server": true, "/models": true, "/models/browse": true,

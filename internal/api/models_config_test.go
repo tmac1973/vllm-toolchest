@@ -55,7 +55,7 @@ func configTestServer(t *testing.T, env vllmenv.Env) (*Server, *models.Model) {
 // fields.
 func TestModelConfigPanelRenders(t *testing.T) {
 	s, m := configTestServer(t, vllmenv.Env{
-		Variant: vllmenv.VariantRadiance, Launcher: []string{"/opt/radiance_entrypoint.sh"},
+		Variant: "radiance", Launcher: []string{"/opt/radiance_entrypoint.sh"},
 	})
 
 	w := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestModelConfigPanelRenders(t *testing.T) {
 // before: the handler rebuilds VLLMConfig from scratch, so any field missing
 // from the form is silently zeroed on every save.
 func TestModelConfigUpdateRoundTrip(t *testing.T) {
-	s, m := configTestServer(t, vllmenv.Env{Variant: vllmenv.VariantGeneric})
+	s, m := configTestServer(t, vllmenv.Env{Variant: "rocm-source"})
 
 	form := url.Values{
 		"dtype":                    {"auto"},
@@ -169,7 +169,7 @@ func TestModelConfigUpdateRoundTrip(t *testing.T) {
 // interpolating it raw closed the value="..." attribute it was written into,
 // so the browser kept only the leading brace and silently discarded the rest.
 func TestConfigPanelEscapesJSONValues(t *testing.T) {
-	s, m := configTestServer(t, vllmenv.Env{Variant: vllmenv.VariantGeneric})
+	s, m := configTestServer(t, vllmenv.Env{Variant: "rocm-source"})
 
 	w := httptest.NewRecorder()
 	s.handleModelConfigPanel(w, httptest.NewRequest("GET", "/x?id="+url.QueryEscape(m.ID), nil))

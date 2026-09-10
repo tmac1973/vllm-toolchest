@@ -163,18 +163,18 @@ func goldenFixtureModels() []*models.Model {
 // goldenEnvGeneric is the default image the recordings render against: a
 // generic install that does carry bitsandbytes, as the CUDA one does.
 var goldenEnvGeneric = vllmenv.Env{
-	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv", HasBitsAndBytes: true,
+	Variant: "rocm-source", VenvRoot: "/opt/vllm-venv", HasBitsAndBytes: true,
 }
 
 // goldenEnvRadiance is the RDNA4 image, which has never shipped bitsandbytes.
 var goldenEnvRadiance = vllmenv.Env{
-	Variant: vllmenv.VariantRadiance, RadianceVersion: "0.9.3", VenvRoot: "/opt/vllm",
+	Variant: "radiance", VariantVersion: "0.9.3", VenvRoot: "/opt/vllm",
 }
 
 // goldenEnvNoBNB is an image whose venv lacks bitsandbytes — the ROCm one,
 // since its only ROCm fork stopped compiling for wave32.
 var goldenEnvNoBNB = vllmenv.Env{
-	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv",
+	Variant: "rocm-source", VenvRoot: "/opt/vllm-venv",
 }
 
 // newGoldenServer builds a Server whose every dependency is local and

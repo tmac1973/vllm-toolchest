@@ -328,13 +328,18 @@ func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "help.html", struct {
 		pageData
-		// IsRadiance gates the sections that only make sense on the RDNA4
-		// image — the all-reduce ceiling in particular, which is a property of
-		// a kernel library the generic image does not ship.
-		IsRadiance bool
+		// Gates the section explaining the all-reduce token ceiling. It is a
+		// property of a kernel library, not of one image, so it is keyed on
+		// the capability: a second variant adopting that kernel gets the
+		// explanation without a change here.
+		HasR4DAllReduce bool
+		// Gates the glossary entry for the feature-knob panel, so the help
+		// page does not describe a Settings section this image has not got.
+		KnobSection *knobSectionView
 	}{
-		pageData:   pageData{Title: "Help", Nav: "help"},
-		IsRadiance: s.vllmEnv.IsRadiance(),
+		pageData:        pageData{Title: "Help", Nav: "help"},
+		HasR4DAllReduce: s.vllmEnv.Has(capR4DAllReduce),
+		KnobSection:     s.knobSection(),
 	})
 }
 
@@ -408,8 +413,8 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		Theme               string
 
 		Variant           string
-		RadianceVersion   string
-		IsRadiance        bool
+		VariantVersion    string
+		HasR4DAllReduce   bool
 		VLLMDeviceName    string
 		VenvRoot          string
 		AttentionBackends []backendOption
@@ -444,11 +449,11 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		Theme:               c.Theme,
 
 		Variant:           s.vllmEnv.Variant,
-		RadianceVersion:   s.vllmEnv.RadianceVersion,
-		IsRadiance:        s.vllmEnv.IsRadiance(),
+		VariantVersion:    s.vllmEnv.VariantVersion,
+		HasR4DAllReduce:   s.vllmEnv.Has(capR4DAllReduce),
 		VLLMDeviceName:    s.deviceName(),
 		VenvRoot:          s.vllmEnv.VenvRoot,
-		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
+		AttentionBackends: attentionBackendOptions(s.vllmEnv.Descriptor()),
 		KnobSection:       s.knobSection(),
 
 		RuntimeEnvRows:  s.runtimeEnvRows(),

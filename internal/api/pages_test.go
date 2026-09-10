@@ -21,22 +21,25 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 		skip []string
 	}{
 		{
-			name: "generic",
-			env:  vllmenv.Env{Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv"},
-			want: []string{"Image variant", "generic", "attention_backend"},
-			// generic declares no knobs, so the whole panel is absent —
-			// not an empty box — and its R4D backend must not appear on an
-			// image that has neither.
-			skip: []string{"knob_", `value="R4D"`},
+			name: "rocm-source",
+			env:  vllmenv.Env{Variant: "rocm-source", VenvRoot: "/opt/vllm-venv"},
+			want: []string{"Image variant", "rocm-source", "attention_backend"},
+			// A from-source image declares no knobs, so the whole panel is
+			// absent rather than an empty box. R4D belongs to radiance, and
+			// FLASHINFER to NVIDIA: offering either here would abort the
+			// engine minutes into a load.
+			skip: []string{"knob_", `value="R4D"`, `value="FLASHINFER"`},
 		},
 		{
 			name: "radiance",
 			env: vllmenv.Env{
-				Variant:         vllmenv.VariantRadiance,
-				RadianceVersion: "0.9.3",
-				VenvRoot:        "/opt/vllm",
+				Variant:        "radiance",
+				VariantVersion: "0.9.3",
+				VenvRoot:       "/opt/vllm",
 			},
 			want: []string{"knob_use_r4d", "knob_draft_tau", "0.9.3", `value="R4D"`,
+				// Its vendor's backends, and not the other vendor's.
+				`value="ROCM_FLASH"`,
 				// Rendered from the manifest, not from template markup:
 				// the four-state select and a per-option label.
 				`value="all"`, "all shapes"},
@@ -49,7 +52,9 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 			name: "unknown variant",
 			env:  vllmenv.Env{Variant: "some-future-image", VenvRoot: "/opt/vllm-venv"},
 			want: []string{"Image variant", "some-future-image"},
-			skip: []string{"knob_"},
+			// No manifest means no knobs and no vendor, so only the backends
+			// that work anywhere are offered.
+			skip: []string{"knob_", `value="ROCM_FLASH"`, `value="FLASHINFER"`},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

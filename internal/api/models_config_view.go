@@ -164,7 +164,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 	}
 
 	v.BatchedAdvice, v.BatchedAdviceWarn = batchedTokenAdvice(
-		s.vllmEnv.IsRadiance(), m.HFConfig.HiddenSize,
+		s.vllmEnv.Has(capR4DAllReduce), m.HFConfig.HiddenSize,
 		c.TensorParallelSize, c.MaxNumBatchedTokens,
 	)
 
@@ -197,7 +197,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		v.ParserGroups = append(v.ParserGroups, g)
 	}
 
-	for _, opt := range attentionBackendOptions(s.vllmEnv.IsRadiance()) {
+	for _, opt := range attentionBackendOptions(s.vllmEnv.Descriptor()) {
 		v.BackendOptions = append(v.BackendOptions, selectOption{opt.Val, opt.Label, c.AttentionBackend == opt.Val})
 	}
 	for _, opt := range []struct{ val, label string }{

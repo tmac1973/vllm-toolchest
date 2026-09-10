@@ -293,7 +293,7 @@
     <header>Environment</header>
     <div class="grid">
         <label title="Which container image this is. Each variant is a different vLLM stack, chosen at install time to match your GPU.">Image variant
-            <input type="text" value="{{.Variant}}{{if .RadianceVersion}} {{.RadianceVersion}}{{end}}" readonly>
+            <input type="text" value="{{.Variant}}{{if .VariantVersion}} {{.VariantVersion}}{{end}}" readonly>
         </label>
         <label title="The name vLLM reports for this GPU. Tuned kernel configs are keyed by it, so it is probed from the running vLLM rather than guessed. Blank means the probe has not finished yet.">vLLM device name
             <input type="text" value="{{.VLLMDeviceName}}" readonly>

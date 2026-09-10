@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // mkVenv builds a fake venv layout under root and returns its path.
@@ -73,25 +76,47 @@ func TestDetectSkipsVenvWithoutVLLM(t *testing.T) {
 	}
 }
 
+// Which image this is decides which knobs the Settings page offers and which
+// attention backends the model config panel lists, so getting it wrong is not
+// cosmetic: it offers a backend the stack does not have, and the engine aborts
+// minutes into a load.
 func TestDetectVariant(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		env         map[string]string
 		wantVariant string
-		wantVersion string
 	}{
-		{"default is generic", nil, VariantGeneric, ""},
-		{"RADIANCE_VERSION marks radiance",
-			map[string]string{"RADIANCE_VERSION": "0.9.3"}, VariantRadiance, "0.9.3"},
-		{"explicit override wins",
-			map[string]string{"VLLMCTL_IMAGE_VARIANT": "radiance"}, VariantRadiance, ""},
-		{"override can force generic on a radiance image",
-			map[string]string{"RADIANCE_VERSION": "0.9.3", "VLLMCTL_IMAGE_VARIANT": "generic"},
-			VariantGeneric, "0.9.3"},
+		{
+			// Outside a container, nothing identifies the image. Reporting
+			// "unknown" is what makes the UI degrade to its generic form
+			// rather than claiming capabilities it cannot verify.
+			name:        "nothing identifies the image",
+			env:         nil,
+			wantVariant: VariantUnknown,
+		},
+		{
+			// Dockerfile.prebuilt stamps this from the manifest, and the
+			// from-source Dockerfiles set it too, so it is the normal path
+			// rather than an escape hatch.
+			name:        "the image names itself",
+			env:         map[string]string{"VLLMCTL_IMAGE_VARIANT": "radiance"},
+			wantVariant: "radiance",
+		},
+		{
+			name:        "a from-source image names itself",
+			env:         map[string]string{"VLLMCTL_IMAGE_VARIANT": "rocm-source"},
+			wantVariant: "rocm-source",
+		},
+		{
+			// Honoured rather than corrected: the operator set it, and the
+			// Settings page shows what it reports. Nothing matches it, so no
+			// knobs and no vendor backends are offered.
+			name:        "an unrecognised name is reported as given",
+			env:         map[string]string{"VLLMCTL_IMAGE_VARIANT": "some-future-image"},
+			wantVariant: "some-future-image",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Clear both so the host environment can't leak in.
-			t.Setenv("RADIANCE_VERSION", "")
 			t.Setenv("VLLMCTL_IMAGE_VARIANT", "")
 			for k, v := range tc.env {
 				t.Setenv(k, v)
@@ -101,13 +126,91 @@ func TestDetectVariant(t *testing.T) {
 			if e.Variant != tc.wantVariant {
 				t.Errorf("Variant = %q, want %q", e.Variant, tc.wantVariant)
 			}
-			if e.RadianceVersion != tc.wantVersion {
-				t.Errorf("RadianceVersion = %q, want %q", e.RadianceVersion, tc.wantVersion)
+			// Capabilities follow the variant, and only a described one has any.
+			if got, want := e.Has("r4d_allreduce"), tc.wantVariant == "radiance"; got != want {
+				t.Errorf("Has(r4d_allreduce) = %v, want %v", got, want)
 			}
-			if got := e.IsRadiance(); got != (tc.wantVariant == VariantRadiance) {
-				t.Errorf("IsRadiance() = %v", got)
+			if _, known := e.Descriptor(); known != (tc.wantVariant == "radiance" || tc.wantVariant == "rocm-source") {
+				t.Errorf("Descriptor() resolved unexpectedly for %q", tc.wantVariant)
 			}
 		})
+	}
+}
+
+// The stamp file is how an image is identified when nothing names it: a marker
+// its base ships that no other image has. Detect reads absolute paths, so this
+// exercises the reader rather than the real /opt locations.
+func TestStampVersion(t *testing.T) {
+	dir := t.TempDir()
+
+	missing := filepath.Join(dir, "absent")
+	if v := stampVersion(missing); v != "" {
+		t.Errorf("a missing stamp = %q, want empty", v)
+	}
+	if v := stampVersion(""); v != "" {
+		t.Errorf("no stamp path = %q, want empty", v)
+	}
+
+	withVersion := filepath.Join(dir, "version")
+	os.WriteFile(withVersion, []byte("  0.9.3\n"), 0o644)
+	if v := stampVersion(withVersion); v != "0.9.3" {
+		t.Errorf("stamp = %q, want the trimmed version", v)
+	}
+
+	// A stamp with no readable content still identifies the image, so it must
+	// not read as absent -- otherwise detection falls through to the next
+	// variant and reports the wrong one.
+	empty := filepath.Join(dir, "empty")
+	os.WriteFile(empty, []byte("\n"), 0o644)
+	if v := stampVersion(empty); v == "" {
+		t.Error("an empty-but-present stamp must still identify the image")
+	}
+}
+
+// The venv is where every tuned-kernel path, the bitsandbytes check and the
+// tuner all point. Probing must cover the running variant's declared root and
+// every other one, because an operator who overrides the variant should still
+// end up with a working install.
+func TestVenvCandidatesCoverEveryDeclaredRoot(t *testing.T) {
+	t.Setenv("VLLMCTL_VLLM_VENV", "")
+	t.Setenv("VIRTUAL_ENV", "")
+
+	d, ok := variants.Get("radiance")
+	if !ok {
+		t.Fatal("radiance manifest missing")
+	}
+	got := venvCandidates(d, true)
+
+	if len(got) == 0 || got[0] != d.VenvRoot {
+		t.Errorf("candidates = %v, want the running variant's root first", got)
+	}
+	for _, other := range variants.All() {
+		if other.VenvRoot == "" {
+			continue
+		}
+		if !slices.Contains(got, other.VenvRoot) {
+			t.Errorf("%s declares venv %s but it is never probed", other.ID, other.VenvRoot)
+		}
+	}
+	// No duplicates: probing the same directory twice is harmless but says
+	// the de-duplication is broken.
+	seen := map[string]bool{}
+	for _, c := range got {
+		if seen[c] {
+			t.Errorf("candidate %q listed twice", c)
+		}
+		seen[c] = true
+	}
+}
+
+// An explicit override beats every declared root, so an operator can point
+// vllmctl at an install nothing knows about.
+func TestVenvOverrideComesFirst(t *testing.T) {
+	t.Setenv("VLLMCTL_VLLM_VENV", "/somewhere/else")
+	t.Setenv("VIRTUAL_ENV", "")
+	d, _ := variants.Get("radiance")
+	if got := venvCandidates(d, true); got[0] != "/somewhere/else" {
+		t.Errorf("candidates = %v, want the override first", got)
 	}
 }
 

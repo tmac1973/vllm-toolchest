@@ -46,6 +46,20 @@ func runSetupSh(t *testing.T, snippet string) string {
 	return string(out)
 }
 
+// runSetupShAllowFail is runSetupSh for snippets expected to exit non-zero --
+// a host check that blocks, for instance.
+func runSetupShAllowFail(t *testing.T, snippet string) string {
+	t.Helper()
+	root := repoRoot(t)
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	cmd := exec.Command("bash", "-c", ". ./setup.sh\n"+snippet)
+	cmd.Dir = root
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
+
 func TestBashAndGoReadTheSameManifests(t *testing.T) {
 	for _, d := range variants.All() {
 		t.Run(d.ID, func(t *testing.T) {

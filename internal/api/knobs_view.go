@@ -72,7 +72,7 @@ func (s *Server) knobSection() *knobSectionView {
 	out := &knobSectionView{
 		Title:    d.Label,
 		Note:     d.Note,
-		Version:  s.vllmEnv.RadianceVersion,
+		Version:  s.vllmEnv.VariantVersion,
 		DocURL:   d.DocURL,
 		DocLabel: d.DocLabel,
 	}

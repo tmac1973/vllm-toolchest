@@ -1,6 +1,8 @@
 package variants
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,18 +35,45 @@ func TestGetUnknownVariant(t *testing.T) {
 }
 
 // A variant with no knobs is a first-class case, not a gap: the Settings panel
-// must render nothing rather than an empty box.
-func TestGenericDeclaresNoKnobs(t *testing.T) {
-	d, ok := Get("generic")
-	if !ok {
-		t.Fatal("generic manifest missing")
+// must render nothing rather than an empty box. The from-source variants are
+// that case -- a stock vLLM build has no image-specific switches to expose,
+// and the runtime environment table already covers the VLLM_* variables.
+func TestFromSourceVariantsDeclareNoKnobs(t *testing.T) {
+	for _, id := range []string{"rocm-source", "cuda-source"} {
+		d, ok := Get(id)
+		if !ok {
+			t.Fatalf("%s manifest missing", id)
+		}
+		if len(d.Knobs) != 0 || len(d.Groups) != 0 {
+			t.Errorf("%s should declare no knobs, got %d knobs in %d groups",
+				id, len(d.Knobs), len(d.Groups))
+		}
+		if len(d.Recommended()) != 0 {
+			t.Errorf("%s has no knobs, so nothing to recommend", id)
+		}
+		if d.BaseImage != "" {
+			t.Errorf("%s builds from source and must not name a base image", id)
+		}
 	}
-	if len(d.Knobs) != 0 || len(d.Groups) != 0 {
-		t.Errorf("generic should declare no knobs, got %d knobs in %d groups",
-			len(d.Knobs), len(d.Groups))
-	}
-	if len(d.Recommended()) != 0 {
-		t.Error("a variant with no knobs has nothing to recommend")
+}
+
+// The variant a from-source image reports comes from an ENV its Dockerfile
+// sets, because it ships no stamp file. If the two disagree the image offers
+// the wrong backends, so check the Dockerfiles actually say it.
+func TestFromSourceDockerfilesNameTheirVariant(t *testing.T) {
+	for _, id := range []string{"rocm-source", "cuda-source"} {
+		d, ok := Get(id)
+		if !ok {
+			t.Fatalf("%s manifest missing", id)
+		}
+		body, err := os.ReadFile(filepath.Join("..", d.Dockerfile))
+		if err != nil {
+			t.Fatalf("%s: %v", d.Dockerfile, err)
+		}
+		want := "VLLMCTL_IMAGE_VARIANT=" + id
+		if !strings.Contains(string(body), want) {
+			t.Errorf("%s does not set %s, so the image would not know which variant it is", d.Dockerfile, want)
+		}
 	}
 }
 

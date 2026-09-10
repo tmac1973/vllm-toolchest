@@ -2,7 +2,13 @@ package api
 
 import "fmt"
 
-// The radiance image's peer-to-peer all-reduce takes a message only up to this
+// capR4DAllReduce is the manifest capability this guidance is gated on: a
+// stack whose tensor-parallel all-reduce is the hand-written R4D peer-to-peer
+// kernel rather than RCCL. A second variant adopting that kernel gets the same
+// advice by declaring the capability, with no change here.
+const capR4DAllReduce = "r4d_allreduce"
+
+// The R4D peer-to-peer all-reduce takes a message only up to this
 // size; above it, vLLM falls back to RCCL with no error and no log line, at
 // roughly 2.3x the cost. The value is _MAX_BYTES in radiance_allreduce.py
 // (49152 * 1024).
@@ -35,8 +41,8 @@ func r4dBatchedTokenCeiling(hiddenSize int) int {
 //
 // Returns the advice and whether it is a warning (the current setting is
 // already over the ceiling).
-func batchedTokenAdvice(radiance bool, hiddenSize, tpSize, configured int) (string, bool) {
-	if !radiance {
+func batchedTokenAdvice(hasR4D bool, hiddenSize, tpSize, configured int) (string, bool) {
+	if !hasR4D {
 		return "", false
 	}
 	if tpSize <= 1 {
