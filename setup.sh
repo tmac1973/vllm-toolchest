@@ -180,6 +180,116 @@ knob_recommended_env() {
     done
 }
 
+# ─── Generated knob documentation ────────────────────────────────────────────
+#
+# The feature switches used to be written out by hand in .env.example, in the
+# Settings template, in the Go config layer and in three more places. They are
+# declared once in variants/<id>.conf now, so the documentation is generated
+# from the same declaration rather than kept in step with it.
+
+# knob_example_value SLUG — a value worth showing in an example line.
+# For a picker, the first real option; for free text, the placeholder or the
+# recommendation. Never the unset sentinel: an example that does nothing
+# teaches nothing.
+knob_example_value() {
+    local slug="$1" rec vals v
+    rec="$(knob_attr "$slug" RECOMMENDED)"
+    if [[ -n "$rec" && "$rec" != "-" ]]; then
+        printf '%s' "$rec"; return
+    fi
+    vals="$(knob_attr "$slug" VALUES)"
+    if [[ -n "$vals" ]]; then
+        # shellcheck disable=SC2086
+        for v in $vals; do
+            [[ "$v" == "-" ]] && continue
+            printf '%s' "$v"; return
+        done
+    fi
+    # A placeholder is grey hint text in the UI, which is sometimes a real
+    # value ("1:8,2:7,4:6") and sometimes prose ("off — try: auto"). Only the
+    # former belongs after an "=". Whitespace is the tell, and getting it wrong
+    # means shipping a .env line that sets a knob to a sentence.
+    v="$(knob_attr "$slug" PLACEHOLDER)"
+    if [[ -n "$v" && "$v" != *[[:space:]]* ]]; then
+        printf '%s' "$v"; return
+    fi
+    printf ''
+}
+
+# print_env_knobs writes the commented KEY=VALUE documentation for every
+# variant that declares switches, in .env format.
+print_env_knobs() {
+    local id first=1 slug label help example group last_group
+    for id in $(list_variants); do
+        ( load_variant_manifest "$id" || exit 0
+          [[ -n "${KNOBS:-}" ]] || exit 0
+
+          [[ $first -eq 1 ]] || echo ""
+          echo "# ── ${VARIANT_LABEL} — VLLMCTL_VARIANT=${VARIANT_ID} ──"
+          [[ -n "${VARIANT_DOC_URL:-}" ]] && echo "# ${VARIANT_DOC_URL}"
+
+          last_group=""
+          # shellcheck disable=SC2086
+          for slug in $KNOBS; do
+              group="$(knob_attr "$slug" GROUP)"
+              if [[ "$group" != "$last_group" ]]; then
+                  local gt gn
+                  gt="$(eval "printf '%s' \"\${GROUP_${group}_TITLE-}\"")"
+                  gn="$(eval "printf '%s' \"\${GROUP_${group}_NOTE-}\"")"
+                  if [[ -n "$gt" || -n "$gn" ]]; then
+                      echo "#"
+                      [[ -n "$gt" ]] && echo "# ${gt}."
+                      [[ -n "$gn" ]] && fold -s -w 70 <<<"$gn" | sed 's/^/# /; s/[[:space:]]*$//'
+                  fi
+                  last_group="$group"
+              fi
+
+              label="$(knob_attr "$slug" LABEL)"
+              help="$(knob_attr "$slug" HELP)"
+              example="$(knob_example_value "$slug")"
+
+              echo "#"
+              fold -s -w 70 <<<"${label}. ${help}" | sed 's/^/# /; s/[[:space:]]*$//'
+              echo "#$(knob_attr "$slug" ENV)=${example}"
+          done )
+        first=0
+    done
+}
+
+# write_env_example rewrites the generated block of a .env template in place,
+# leaving everything outside the markers alone. Splitting the file rather than
+# generating all of it keeps the hand-written parts -- ports, GPU selection,
+# storage -- hand-written, because those are prose about choices rather than a
+# list derived from the manifests.
+write_env_example() {
+    local target="$1" tmp
+    [[ -f "$target" ]] || fatal "no such file: $target"
+    tmp="$(mktemp)"
+
+    local in_block=0 line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            "# >>> BEGIN GENERATED KNOBS")
+                printf '%s\n' "$line" >> "$tmp"
+                print_env_knobs >> "$tmp"
+                in_block=1
+                continue
+                ;;
+            "# <<< END GENERATED KNOBS")
+                in_block=0
+                ;;
+        esac
+        [[ $in_block -eq 1 ]] && continue
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$target"
+
+    if ! grep -q '^# <<< END GENERATED KNOBS$' "$tmp"; then
+        rm -f "$tmp"
+        fatal "$target has no generated-knob markers to fill"
+    fi
+    mv "$tmp" "$target"
+}
+
 # ─── Detection: GPU ──────────────────────────────────────────────────────────
 
 # Detect host video/render group GIDs for container device access.
@@ -1933,6 +2043,18 @@ USAGE
 main() {
     local command="${1:-help}"
     cd "$SCRIPT_DIR"
+
+    # Used by `make env-example` and the drift test. Not in usage: it exists
+    # to keep generated documentation in step with the manifests, and has no
+    # meaning to someone installing.
+    if [[ "$command" == "--print-env-knobs" ]]; then
+        print_env_knobs
+        exit 0
+    fi
+    if [[ "$command" == "--write-env-example" ]]; then
+        write_env_example "${2:-.env.example}"
+        exit 0
+    fi
 
     case "$command" in
         install|uninstall|up|down|rebuild|quick|logs|detect|variants|status|enable|disable) ;;

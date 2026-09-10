@@ -1,6 +1,6 @@
 .PHONY: build run dev docker docker-rebuild up down \
 	docker-amd docker-nvidia up-amd down-amd up-nvidia down-nvidia \
-	logs shell test js-test reload clean
+	logs shell test js-test reload clean env-example
 
 # ─── Variant + vendor ───────────────────────────────────────────────
 # setup.sh writes the chosen variant and its vendor to .env; read both from
@@ -74,6 +74,13 @@ down-amd:
 
 down-nvidia:
 	docker compose -f docker-compose.nvidia.yml down
+
+# ─── Generated documentation ───────────────────────────────────────
+# The feature switches are declared in variants/<id>.conf. Regenerate the
+# block in .env.example from them rather than editing it by hand; a test
+# fails if the two drift.
+env-example:
+	@./setup.sh --write-env-example .env.example
 
 # ─── Common ────────────────────────────────────────────────────────
 docker-rebuild:

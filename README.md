@@ -52,9 +52,17 @@ feature switches its Settings page offers.
 
 | Variant | Runs on | Stack |
 |---|---|---|
-| `rocm-source` | Any supported AMD card | Fedora + ROCm, vLLM built from source, tracking `main` |
+| `cuda` | Any supported NVIDIA card | [vllm/vllm-openai](https://hub.docker.com/r/vllm/vllm-openai) -- the vLLM project's own image |
 | `cuda-source` | Any supported NVIDIA card | CUDA devel image + vLLM from PyPI |
-| `radiance` | AMD RDNA4 (gfx1201: R9700, RX 9070/XT) | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance), hand-tuned for gfx1201 |
+| `rocm` | AMD RDNA3 and RDNA4 (gfx1100-gfx1201) | [rocm/vllm](https://hub.docker.com/r/rocm/vllm) -- AMD's own build |
+| `rocm-cdna` | AMD Instinct (MI200, MI300, MI350) | [rocm/vllm](https://hub.docker.com/r/rocm/vllm) -- AMD's CDNA build |
+| `rocm-source` | Any supported AMD card | Fedora + ROCm, vLLM built from source, tracking `main` |
+| `radiance` | AMD RDNA4 (gfx1201: R9700, RX 9070/XT) | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance) -- hand-tuned for gfx1201 |
+| `rdna4-clav` | AMD RDNA4 (gfx1201 and gfx1200) | [tcclaviger/vllm](https://blog.robai.net/vllmdocs/) -- hand-written HIP kernels |
+| `strix-halo` | Ryzen AI MAX (gfx1151) | [kyuz0/vllm-therock-gfx1151](https://hub.docker.com/r/kyuz0/vllm-therock-gfx1151) |
+| `gfx906` | MI50, MI60, Radeon VII | [vllm-gfx906-mobydick](https://github.com/ai-infos/vllm-gfx906-mobydick) -- serve with `--dtype float16` |
+| `xpu` | Intel Arc Pro B60/B70 (Battlemage) | [intel/llm-scaler-vllm](https://hub.docker.com/r/intel/llm-scaler-vllm) |
+| `gb10` | NVIDIA DGX Spark (arm64, sm_121a) | [vllm-gb10](https://github.com/timothystewart6/vllm-gb10) |
 
 Run `./setup.sh variants` to see the list on your machine, with the ones that
 fit your GPU marked.
@@ -183,3 +191,73 @@ the published image. If you use it, go read their
 
 The `rocm-source` image's RDNA4 build patches come from
 [kyuz0/amd-r9700-vllm-toolboxes](https://github.com/kyuz0/amd-r9700-vllm-toolboxes).
+
+Every other prebuilt variant is somebody else's work too, and the whole reason
+this tool can serve on hardware upstream vLLM does not reach. vllm-toolchest
+adds a management UI to a published image and changes nothing about the stack:
+
+- **[tcclaviger/vllm](https://blog.robai.net/vllmdocs/)** (`rdna4-clav`) --
+  RDNA4 with hand-written AOT HIP kernels across attention, the gated-delta-net
+  path, the quantized and block-FP8 GEMMs, the KV-cache write and the
+  all-reduce.
+- **[kyuz0/vllm-therock-gfx1151](https://hub.docker.com/r/kyuz0/vllm-therock-gfx1151)**
+  (`strix-halo`) -- built on TheRock nightlies, for a long time the only
+  working vLLM path on Ryzen AI MAX.
+- **[vllm-gfx906-mobydick](https://github.com/ai-infos/vllm-gfx906-mobydick)**
+  (`gfx906`) -- keeps Vega 20 alive after upstream dropped it, and successor to
+  the archived [nlzy/vllm-gfx906](https://github.com/nlzy/vllm-gfx906).
+- **[intel/llm-scaler-vllm](https://hub.docker.com/r/intel/llm-scaler-vllm)**
+  (`xpu`) -- Intel's own Arc Pro build, with oneAPI and oneCCL pinned to each
+  release.
+- **[vllm-gb10](https://github.com/timothystewart6/vllm-gb10)** (`gb10`) --
+  DGX Spark, pinning every input by commit or digest.
+- **[rocm/vllm](https://hub.docker.com/r/rocm/vllm)** (`rocm`, `rocm-cdna`) and
+  **[vllm/vllm-openai](https://hub.docker.com/r/vllm/vllm-openai)** (`cuda`) --
+  the vendor and upstream images.
+
+## Adding a variant
+
+One file. `variants/<id>.conf` states what the image is, what it runs on and
+what it needs; nothing else has to change. The format is a strict subset of
+bash so `setup.sh` can source it with no `jq`, `yq` or Python on the host, and
+the Go binary embeds and parses the same bytes.
+
+```sh
+VARIANT_ID='my-variant'
+VARIANT_LABEL='Something descriptive'
+VARIANT_SUMMARY='One line, shown in the install menu.'
+VARIANT_VENDOR='amd'                  # picks docker-compose.<vendor>.yml
+VARIANT_TIER='community'              # tested | community | experimental
+VARIANT_BASE_IMAGE='docker.io/someone/their-vllm:1.2.3'
+VARIANT_DOCKERFILE='Dockerfile.prebuilt'
+VARIANT_VLLM_PIN='v0.28.0'            # surfaced as the model-support ceiling
+VARIANT_GFX_TARGETS='gfx1201'         # empty = not tied to one architecture
+VARIANT_VENV_ROOT='/opt/venv'         # where vLLM lives inside that image
+KNOBS=''
+```
+
+Two things are worth reading off the published image rather than guessing, because
+the build asserts them: `VARIANT_VENV_ROOT` (from `VIRTUAL_ENV` or `PATH` in the
+image config) and `VARIANT_VLLM_PIN`. Get the pin wrong and the build stops with
+a message telling you the right value.
+
+Feature switches are declared here too, once, and the config layer, the Settings
+page and `.env.example` all generate from that declaration:
+
+```sh
+KNOBS='FAST_PATH'
+KNOB_FAST_PATH_ENV='THEIR_FAST_PATH'
+KNOB_FAST_PATH_TYPE='select'          # select | text
+KNOB_FAST_PATH_LABEL='Fast path'
+KNOB_FAST_PATH_HELP='What it does, and what it costs when it is wrong.'
+KNOB_FAST_PATH_VALUES='- 1 0'         # "-" is "leave the image default alone"
+KNOB_FAST_PATH_RECOMMENDED='-'
+```
+
+After adding a switch, run `make env-example` to regenerate its documentation,
+and add its variable to the vendor's compose file as a bare `- THEIR_FAST_PATH`
+entry so it reaches the container. Tests fail if you forget either.
+
+`go test ./variants/` checks that the manifest parses, that bash and Go read it
+identically, that the Settings page can draw every control it declares, and
+that its compose file and Dockerfile exist.
