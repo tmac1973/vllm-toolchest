@@ -30,9 +30,9 @@ type envLine struct {
 //
 // It reports the same two layers the launch does, in the same order, so the
 // preview cannot disagree with what actually runs: the runtime environment
-// first, then the Radiance switches. See launchEnv.
+// first, then the running variant's feature knobs. See launchEnv.
 func (s *Server) effectiveEnvLines() []envLine {
-	pairs := append(s.cfg.RuntimeEnvPairs(), s.cfg.Radiance.Env()...)
+	pairs := append(s.cfg.RuntimeEnvPairs(), s.cfg.KnobEnv(s.vllmEnv.Variant)...)
 
 	// Later wins, exactly as os/exec resolves it, so a name set in both
 	// layers appears once with the value that will actually apply.

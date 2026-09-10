@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/backup"
-	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
@@ -78,7 +77,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	sel := backup.Selections{
 		Settings:     r.FormValue("sec_settings") == "on",
 		RuntimeEnv:   r.FormValue("sec_env") == "on",
-		Radiance:     r.FormValue("sec_radiance") == "on",
+		Knobs:        r.FormValue("sec_knobs") == "on",
 		ModelConfigs: r.FormValue("sec_models") == "on",
 	}
 	if sel.None() {
@@ -194,8 +193,11 @@ func (s *Server) restoreDeps() backup.Deps {
 			s.cfg.RuntimeEnvExtra = merged.Extra
 			return s.cfg.Save("")
 		},
-		ApplyRadiance: func(rad config.RadianceConfig) error {
-			s.cfg.Radiance = rad
+		CurrentKnobs: func() map[string]map[string]string {
+			return s.cfg.Knobs
+		},
+		ApplyKnobs: func(merged map[string]map[string]string) error {
+			s.cfg.Knobs = merged
 			return s.cfg.Save("")
 		},
 		InstalledModel: func(modelID string) bool {

@@ -23,6 +23,6 @@ import (
 // must go through here, or a model benchmarked under one environment gets
 // served under another.
 func (s *Server) launchEnv(quantMethod string) []string {
-	extra := append(s.cfg.RuntimeEnvPairs(), s.cfg.Radiance.Env()...)
+	extra := append(s.cfg.RuntimeEnvPairs(), s.cfg.KnobEnv(s.vllmEnv.Variant)...)
 	return process.BuildEnv(quantMethod, extra...)
 }

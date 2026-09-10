@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // settingsResponse is the public-facing settings (sensitive fields masked).
@@ -36,12 +37,14 @@ type settingsResponse struct {
 	AutoRestart         bool    `json:"auto_restart"`
 	Theme               string  `json:"theme"`
 
-	// Image variant + radiance knobs.
-	Variant         string                `json:"variant"`
-	RadianceVersion string                `json:"radiance_version,omitempty"`
-	IsRadiance      bool                  `json:"is_radiance"`
-	VLLMDeviceName  string                `json:"vllm_device_name,omitempty"`
-	Radiance        config.RadianceConfig `json:"radiance"`
+	// Image variant and its feature knobs. Knobs carries only the running
+	// variant's values, keyed by knob id; Variant says which manifest
+	// describes them.
+	Variant         string            `json:"variant"`
+	RadianceVersion string            `json:"radiance_version,omitempty"`
+	IsRadiance      bool              `json:"is_radiance"`
+	VLLMDeviceName  string            `json:"vllm_device_name,omitempty"`
+	Knobs           map[string]string `json:"knobs"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +77,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		RadianceVersion: s.vllmEnv.RadianceVersion,
 		IsRadiance:      s.vllmEnv.IsRadiance(),
 		VLLMDeviceName:  s.deviceName(),
-		Radiance:        c.Radiance,
+		Knobs:           c.KnobValues(s.vllmEnv.Variant),
 	}
 
 	respondJSON(w, resp)
@@ -233,44 +236,36 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			envWarnings = set.Warnings()
 		}
 
-		// Radiance switches. These are tri-state in the UI: "" leaves the
-		// image's own default in place rather than pinning a value that would
-		// then drift as radiance is updated.
-		if r.Form.Has("radiance_use_r4d") {
-			c.Radiance.UseR4D = r.FormValue("radiance_use_r4d")
-		}
-		if r.Form.Has("radiance_use_r4d_ar") {
-			c.Radiance.UseR4DAllReduce = r.FormValue("radiance_use_r4d_ar")
-		}
-		if r.Form.Has("radiance_use_r4d_ar_quant") {
-			c.Radiance.AllReduceQuant = r.FormValue("radiance_use_r4d_ar_quant")
-		}
-		if r.Form.Has("radiance_preshuffle") {
-			c.Radiance.Preshuffle = r.FormValue("radiance_preshuffle")
-		}
-		if r.Form.Has("radiance_fuse_rms_quant") {
-			c.Radiance.FuseRMSQuant = r.FormValue("radiance_fuse_rms_quant")
-		}
-		if r.Form.Has("radiance_skinny_gemm") {
-			c.Radiance.SkinnyGEMM = r.FormValue("radiance_skinny_gemm")
-		}
-		if r.Form.Has("radiance_dynamic_draft") {
-			c.Radiance.DynamicDraft = r.FormValue("radiance_dynamic_draft")
-		}
-		if r.Form.Has("radiance_fast_draft") {
-			c.Radiance.FastDraft = r.FormValue("radiance_fast_draft")
-		}
-		if r.Form.Has("radiance_draft_tau") {
-			c.Radiance.DraftTau = strings.TrimSpace(r.FormValue("radiance_draft_tau"))
-		}
-		if r.Form.Has("radiance_draft_schedule") {
-			c.Radiance.DraftSchedule = strings.TrimSpace(r.FormValue("radiance_draft_schedule"))
-		}
-		if r.Form.Has("radiance_run_bwtest") {
-			c.Radiance.RunBWTest = r.FormValue("radiance_run_bwtest")
-		}
-		if r.Form.Has("radiance_numa_bind") {
-			c.Radiance.NumaBind = strings.TrimSpace(r.FormValue("radiance_numa_bind"))
+		// Variant feature knobs, rendered from the running image's manifest.
+		//
+		// Presence decides, not emptiness. An empty submitted value is the
+		// operator choosing "image default", and must clear a stored one; an
+		// absent field means this form never carried that knob, and the stored
+		// value has to survive. Collapsing those two cases would let any form
+		// POST that omits the section wipe every switch.
+		if d, ok := variants.Get(s.vllmEnv.Variant); ok {
+			vals := c.KnobValues(d.ID)
+			for _, k := range d.Knobs {
+				field := "knob_" + k.ID
+				if !r.Form.Has(field) {
+					continue
+				}
+				if v := strings.TrimSpace(r.FormValue(field)); v != "" {
+					vals[k.ID] = v
+				} else {
+					delete(vals, k.ID)
+				}
+			}
+			if err := (config.KnobSet{Variant: d.ID, Values: vals}).Validate(); err != nil {
+				if isHTMX(r) {
+					respondHTML(w)
+					s.renderPartial(w, "error_message", err.Error())
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			c.SetKnobs(d.ID, vals)
 		}
 	}
 

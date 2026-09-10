@@ -19,19 +19,26 @@ import (
 )
 
 // Version is the current backup schema version. Parse rejects any other value.
-const Version = 1
+//
+// v2 replaced the single `radiance` object — which serialized a Go struct by
+// its field names — with `knobs`, keyed by variant id then knob id, so a
+// backup describes which image its switches belong to. v1 files are refused
+// rather than upgraded: a v1 export predates the manifests, and re-exporting
+// from a current build is cheap next to silently reinterpreting one image's
+// switches as another's.
+const Version = 2
 
 // File is the top-level backup document. Every field carries an explicit
 // snake_case JSON tag: this is a versioned wire format, and the Settings
 // page's client-side preview reads these exact keys.
 type File struct {
-	Version      int                    `json:"version"`
-	ExportedAt   time.Time              `json:"exported_at"`
-	Source       SourceInfo             `json:"source"` // reference only, never applied
-	Settings     *Settings              `json:"settings,omitempty"`
-	RuntimeEnv   *RuntimeEnv            `json:"runtime_env,omitempty"`
-	Radiance     *config.RadianceConfig `json:"radiance,omitempty"`
-	ModelConfigs []ModelConfigExport    `json:"model_configs,omitempty"`
+	Version      int                          `json:"version"`
+	ExportedAt   time.Time                    `json:"exported_at"`
+	Source       SourceInfo                   `json:"source"` // reference only, never applied
+	Settings     *Settings                    `json:"settings,omitempty"`
+	RuntimeEnv   *RuntimeEnv                  `json:"runtime_env,omitempty"`
+	Knobs        map[string]map[string]string `json:"knobs,omitempty"`
+	ModelConfigs []ModelConfigExport          `json:"model_configs,omitempty"`
 }
 
 // SourceInfo documents the origin server. Restore ignores it entirely —
@@ -143,13 +150,20 @@ func Assemble(cfg *config.Config, reg *models.Registry, variant string, gpus []s
 
 	f.RuntimeEnv = &RuntimeEnv{Curated: cfg.RuntimeEnv, Extra: cfg.RuntimeEnvExtra}
 
-	// The Radiance switches are only meaningful on the radiance image, but
-	// they travel regardless: a backup taken on a generic box and restored
-	// onto a radiance one should carry whatever was configured, and every
-	// value defaults to "" (leave the image's own default alone) so an
-	// all-empty section applies as a no-op.
-	rad := cfg.Radiance
-	f.Radiance = &rad
+	// Every variant's knobs travel, not just the running image's. Keying by
+	// variant is what makes that safe: a backup taken on radiance and
+	// restored onto a generic box lands under knobs.radiance and simply
+	// waits there until someone rebuilds onto that image.
+	if len(cfg.Knobs) > 0 {
+		f.Knobs = map[string]map[string]string{}
+		for variant, vals := range cfg.Knobs {
+			copied := map[string]string{}
+			for id, v := range vals {
+				copied[id] = v
+			}
+			f.Knobs[variant] = copied
+		}
+	}
 
 	f.ModelConfigs = assembleModelConfigs(reg)
 	return f

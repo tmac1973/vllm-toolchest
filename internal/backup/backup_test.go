@@ -35,6 +35,7 @@ func testConfig() *config.Config {
 		HFToken:       "hf_secret",
 		APIKey:        "key_secret",
 		RuntimeEnv:    map[string]string{"VLLM_LOGGING_LEVEL": "DEBUG"},
+		Knobs:         map[string]map[string]string{"radiance": {"use_r4d": "1"}},
 	}
 }
 
@@ -117,7 +118,7 @@ func TestWireFormatKeys(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"version", "exported_at", "source", "settings", "runtime_env", "radiance", "model_configs"} {
+	for _, key := range []string{"version", "exported_at", "source", "settings", "runtime_env", "knobs", "model_configs"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("missing top-level key %q", key)
 		}
@@ -127,8 +128,13 @@ func TestWireFormatKeys(t *testing.T) {
 func TestParseRejects(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"not json", "{{{", "not a valid backup file"},
-		{"wrong version", `{"version": 2}`, "not supported"},
-		{"empty model id", `{"version":1,"model_configs":[{"model_id":"  "}]}`, "model_id is required"},
+		// v1 is the format this build replaced. The refusal has to say so
+		// and say what to do about it, or it reads as a corrupt file at
+		// exactly the moment someone is relying on a backup.
+		{"version 1", `{"version": 1}`, "export a fresh backup"},
+		{"version 1 names both versions", `{"version": 1}`, "version 1 and this build writes version 2"},
+		{"unknown future version", `{"version": 99}`, "this build writes version 2"},
+		{"empty model id", `{"version":2,"model_configs":[{"model_id":"  "}]}`, "model_id is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

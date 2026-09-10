@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // RuntimeEnvOption is a curated environment variable that measurably affects
@@ -260,12 +262,9 @@ var riskyEnvVars = map[string]string{
 	"PYTHONUNBUFFERED":             "the process manager sets this so errors reach the log panel as they happen rather than at exit",
 }
 
-// radiancePrefix marks the variables owned by the Radiance settings section.
-const radiancePrefix = "RADIANCE_"
-
 // Warnings returns one message per known-risky variable present in the set,
-// plus one per RADIANCE_* variable, which the Radiance section owns. The
-// variables still apply as described — this is information, not enforcement.
+// plus one per variable a variant's feature-knob section owns. The variables
+// still apply as described — this is information, not enforcement.
 func (e EnvSet) Warnings() []string {
 	var out []string
 	seen := map[string]bool{}
@@ -278,10 +277,16 @@ func (e EnvSet) Warnings() []string {
 			out = append(out, fmt.Sprintf("%s: %s", name, reason))
 			return
 		}
-		if strings.HasPrefix(name, radiancePrefix) {
+		// Exact ownership, not a name prefix. Prefix matching used to claim
+		// RADIANCE_IMAGE and RADIANCE_VERSION, which are compose build args
+		// and not knobs at all — the warning told the operator a section
+		// would override a variable no section reads.
+		if where, ok := variants.EnvNameSet()[name]; ok {
 			seen[name] = true
+			owner, _, _ := strings.Cut(where, ".")
 			out = append(out, fmt.Sprintf(
-				"%s: the Radiance section owns this variable and is applied after this one, so a value set there wins", name))
+				"%s: the %s feature-knob section owns this variable and is applied after this one, so a value set there wins",
+				name, owner))
 		}
 	}
 	curated := make([]string, 0, len(e.Curated))

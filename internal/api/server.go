@@ -413,7 +413,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMDeviceName    string
 		VenvRoot          string
 		AttentionBackends []backendOption
-		Radiance          config.RadianceConfig
+		KnobSection       *knobSectionView
 
 		RuntimeEnvRows  []runtimeEnvRow
 		RuntimeEnvExtra string
@@ -449,7 +449,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMDeviceName:    s.deviceName(),
 		VenvRoot:          s.vllmEnv.VenvRoot,
 		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
-		Radiance:          c.Radiance,
+		KnobSection:       s.knobSection(),
 
 		RuntimeEnvRows:  s.runtimeEnvRows(),
 		RuntimeEnvExtra: c.RuntimeEnvExtra,

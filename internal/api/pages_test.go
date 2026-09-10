@@ -24,9 +24,10 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 			name: "generic",
 			env:  vllmenv.Env{Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv"},
 			want: []string{"Image variant", "generic", "attention_backend"},
-			// The radiance panel and its R4D backend must not appear on an
+			// generic declares no knobs, so the whole panel is absent —
+			// not an empty box — and its R4D backend must not appear on an
 			// image that has neither.
-			skip: []string{"radiance_use_r4d", `value="R4D"`},
+			skip: []string{"knob_", `value="R4D"`},
 		},
 		{
 			name: "radiance",
@@ -35,7 +36,20 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 				RadianceVersion: "0.9.3",
 				VenvRoot:        "/opt/vllm",
 			},
-			want: []string{"radiance_use_r4d", "radiance_draft_tau", "0.9.3", `value="R4D"`},
+			want: []string{"knob_use_r4d", "knob_draft_tau", "0.9.3", `value="R4D"`,
+				// Rendered from the manifest, not from template markup:
+				// the four-state select and a per-option label.
+				`value="all"`, "all shapes"},
+		},
+		{
+			// An image whose variant no manifest describes — built before
+			// its manifest existed, or an operator override naming
+			// something we do not ship. The panel must be absent rather
+			// than empty, and the page must still render.
+			name: "unknown variant",
+			env:  vllmenv.Env{Variant: "some-future-image", VenvRoot: "/opt/vllm-venv"},
+			want: []string{"Image variant", "some-future-image"},
+			skip: []string{"knob_"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

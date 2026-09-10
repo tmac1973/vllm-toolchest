@@ -1,12 +1,15 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 type Config struct {
@@ -89,93 +92,166 @@ type Config struct {
 	// produces correctly-formatted files vLLM never reads.
 	VLLMDeviceName string `yaml:"vllm_device_name"`
 
-	// Radiance holds the RDNA4 image's feature switches. Only meaningful on
-	// the radiance image variant; empty values leave the image default alone.
-	Radiance RadianceConfig `yaml:"radiance"`
+	// Knobs holds the image-variant feature switches, keyed by variant id
+	// and then by knob id, as declared in variants/<id>.conf. An absent
+	// value leaves the image's own default alone, which is not the same as
+	// setting it empty.
+	//
+	// Keyed by variant rather than flat because a config outlives the image
+	// it was written on: rebuilding onto a different variant, or restoring a
+	// backup taken on one, must not discard the switches belonging to the
+	// variant that is not currently running.
+	Knobs map[string]map[string]string `yaml:"knobs,omitempty"`
+
+	// LegacyRadiance is the pre-manifest `radiance:` block. It is read on
+	// load, folded into Knobs["radiance"], and never written back — see
+	// migrateLegacyKnobs.
+	LegacyRadiance map[string]string `yaml:"radiance,omitempty"`
 
 	// Internal: path this config was loaded from (not serialized)
 	configPath string `yaml:"-"`
 }
 
-// RadianceConfig mirrors the RADIANCE_* environment knobs the vllm-radiance
-// image reads. Every field is a string with "" meaning "don't set it, use the
-// image's baked-in default" — the image is the source of truth for defaults,
-// and hardcoding them here would silently drift as radiance is updated.
+// KnobEnv renders the knobs configured for variantID as KEY=VALUE strings, in
+// manifest order, skipping any that are unset.
 //
-// See the vllm-radiance DOCKERHUB.md for the full reference.
-type RadianceConfig struct {
-	// UseR4D is the master switch for the hand-written gfx1201 kernel
-	// library (attention, gated delta net, vision attention, all-reduce,
-	// skinny GEMM). "0" reverts every one of them to the stock path.
-	UseR4D string `yaml:"use_r4d"`
-
-	// UseR4DAllReduce toggles the TP=2 P2P one-shot all-reduce; "0" keeps
-	// RCCL. Bit-identical to RCCL either way.
-	UseR4DAllReduce string `yaml:"use_r4d_ar"`
-
-	// AllReduceQuant compresses large (prefill) all-reduce payloads. Not
-	// bit-identical to RCCL; "0" gives the exact bf16 all-reduce.
-	AllReduceQuant string `yaml:"use_r4d_ar_quant"`
-
-	// Preshuffle enables the preshuffled block-FP8 GEMM weight layout.
-	Preshuffle string `yaml:"preshuffle"`
-
-	// FuseRMSQuant enables the fused RMSNorm + group-FP8-quant path.
-	FuseRMSQuant string `yaml:"fuse_rms_quant"`
-
-	// SkinnyGEMM routes small-M bf16 projections to the R4D split-K kernel.
-	// "all" adds shapes that differ from rocBLAS at a bf16 ULP.
-	SkinnyGEMM string `yaml:"skinny_gemm"`
-
-	// DynamicDraft varies MTP draft depth per request by confidence. "0" is
-	// byte-identical stock MTP.
-	DynamicDraft string `yaml:"dynamic_draft"`
-
-	// DraftSchedule caps serial MTP forwards by batch size, e.g.
-	// "1:8,2:7,4:6,8:5,16:4".
-	DraftSchedule string `yaml:"draft_schedule"`
-
-	// DraftTau is the per-request confidence gate. Keep in sync with
-	// FastDraft: radiance tunes 0.28 for the 2-bit head and 0.35 for the
-	// stock bf16 one.
-	DraftTau string `yaml:"draft_tau"`
-
-	// FastDraft enables the 2-bit draft head with exact rerank, plus 4-bit
-	// dflash drafter weights.
-	FastDraft string `yaml:"fast_draft"`
-
-	// RunBWTest runs the startup topology + bandwidth sweep. Backgrounded,
-	// about a second; "0" skips it.
-	RunBWTest string `yaml:"run_bwtest"`
-
-	// NumaBind pins the vLLM fleet to the GPU-local NUMA node(s):
-	// "auto", explicit nodes ("0" / "0,1"), or "" for off.
-	NumaBind string `yaml:"numa_bind"`
-}
-
-// Env renders the non-empty knobs as KEY=VALUE strings for the vLLM process.
-func (r RadianceConfig) Env() []string {
-	pairs := []struct{ key, val string }{
-		{"RADIANCE_USE_R4D", r.UseR4D},
-		{"RADIANCE_USE_R4D_AR", r.UseR4DAllReduce},
-		{"RADIANCE_USE_R4D_AR_QUANT", r.AllReduceQuant},
-		{"RADIANCE_PRESHUFFLE", r.Preshuffle},
-		{"RADIANCE_FUSE_RMS_QUANT", r.FuseRMSQuant},
-		{"RADIANCE_SKINNY_GEMM", r.SkinnyGEMM},
-		{"RADIANCE_DYNAMIC_DRAFT", r.DynamicDraft},
-		{"RADIANCE_DRAFT_SCHEDULE", r.DraftSchedule},
-		{"RADIANCE_DRAFT_TAU", r.DraftTau},
-		{"RADIANCE_FAST_DRAFT", r.FastDraft},
-		{"RADIANCE_RUN_BWTEST", r.RunBWTest},
-		{"RADIANCE_NUMA_BIND", r.NumaBind},
+// Unset means "leave the image's own default in place". That is deliberately
+// not the same as setting the variable empty: several images read an empty
+// RADIANCE_*-style switch as "off", so emitting one would silently disable the
+// feature the image exists for.
+//
+// A variant with no manifest — an image built before its manifest existed, or
+// an operator override naming something we do not ship — contributes nothing
+// rather than erroring. There is no environment we could correctly emit for a
+// variant we cannot describe.
+func (c *Config) KnobEnv(variantID string) []string {
+	d, ok := variants.Get(variantID)
+	if !ok {
+		return nil
 	}
+	vals := c.Knobs[variantID]
 	var env []string
-	for _, p := range pairs {
-		if p.val != "" {
-			env = append(env, p.key+"="+p.val)
+	for _, k := range d.Knobs {
+		if v := strings.TrimSpace(vals[k.ID]); v != "" {
+			env = append(env, k.Env+"="+v)
 		}
 	}
 	return env
+}
+
+// KnobValues returns one variant's configured knobs. The returned map is a
+// copy, so a caller rendering the Settings page cannot mutate stored config.
+func (c *Config) KnobValues(variantID string) map[string]string {
+	out := map[string]string{}
+	for id, v := range c.Knobs[variantID] {
+		out[id] = v
+	}
+	return out
+}
+
+// SetKnobs replaces one variant's knobs, dropping empty values so that "image
+// default" round-trips as an absent key rather than an empty string.
+func (c *Config) SetKnobs(variantID string, vals map[string]string) {
+	cleaned := map[string]string{}
+	for id, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			cleaned[id] = v
+		}
+	}
+	if len(cleaned) == 0 {
+		delete(c.Knobs, variantID)
+		return
+	}
+	if c.Knobs == nil {
+		c.Knobs = map[string]map[string]string{}
+	}
+	c.Knobs[variantID] = cleaned
+}
+
+// KnobSet is one variant's worth of knob values, for validation before save.
+type KnobSet struct {
+	Variant string
+	Values  map[string]string
+}
+
+// Validate rejects a knob this variant does not declare, and a select knob set
+// to a value outside its option list.
+//
+// Text knobs accept anything: the image is the authority on what it parses,
+// and refusing a value here because we do not recognise it would make a knob
+// unusable the moment upstream extends it.
+func (s KnobSet) Validate() error {
+	d, ok := variants.Get(s.Variant)
+	if !ok {
+		if len(s.Values) == 0 {
+			return nil
+		}
+		return fmt.Errorf("no manifest describes variant %q, so it has no knobs to set", s.Variant)
+	}
+	for id, v := range s.Values {
+		k, known := d.Knob(id)
+		if !known {
+			return fmt.Errorf("%s has no knob %q", s.Variant, id)
+		}
+		if k.Kind != variants.KindSelect || v == "" {
+			continue
+		}
+		valid := false
+		var allowed []string
+		for _, o := range k.Options {
+			if o.Value == "" {
+				continue
+			}
+			allowed = append(allowed, o.Value)
+			if o.Value == v {
+				valid = true
+			}
+		}
+		if !valid {
+			return fmt.Errorf("%s: %q is not a valid value (want one of %s, or empty for the image default)",
+				k.Label, v, strings.Join(allowed, ", "))
+		}
+	}
+	return nil
+}
+
+// migrateLegacyKnobs folds the pre-manifest `radiance:` block into
+// knobs.radiance.
+//
+// The old block's yaml keys are the knob ids — that is not a coincidence, the
+// manifest slugs were named after them — so this is a reparent, key for key,
+// with no renaming and no value transformation. It cannot lose a setting.
+//
+// A value already under knobs wins: a file written by a current build is
+// authoritative over a stale legacy block someone left behind by hand. Keys
+// the manifest no longer declares are dropped rather than carried, which is
+// why LegacyRadiance is a map and not the old struct — unmarshalling into the
+// struct would have failed outright on a field that had been removed.
+//
+// Nilling LegacyRadiance is what retires the old shape: `omitempty` means the
+// next Save writes no `radiance:` key at all. The reading side stays for good,
+// though. It is a few lines, and dropping it would make an old config lose
+// every knob silently rather than fail loudly.
+func migrateLegacyKnobs(cfg *Config) {
+	if len(cfg.LegacyRadiance) == 0 {
+		return
+	}
+	defer func() { cfg.LegacyRadiance = nil }()
+
+	d, ok := variants.Get("radiance")
+	if !ok {
+		return
+	}
+	vals := cfg.KnobValues(d.ID)
+	for _, k := range d.Knobs {
+		if _, exists := vals[k.ID]; exists {
+			continue
+		}
+		if v := strings.TrimSpace(cfg.LegacyRadiance[k.ID]); v != "" {
+			vals[k.ID] = v
+		}
+	}
+	cfg.SetKnobs(d.ID, vals)
 }
 
 func Load(path string) (*Config, error) {
@@ -194,6 +270,11 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+
+	// Before the env overrides, so a knob set in the container environment
+	// still beats one stored in the file — the precedence the hand-written
+	// version had.
+	migrateLegacyKnobs(cfg)
 
 	applyEnvOverrides(cfg)
 	return cfg, nil
@@ -264,21 +345,32 @@ func applyEnvOverrides(cfg *Config) {
 	envStr(&cfg.GPUArch, "GPU_ARCH")
 	envStr(&cfg.VLLMDeviceName, "VLLMCTL_VLLM_DEVICE_NAME")
 
-	// Radiance knobs. The image already exports sane RADIANCE_* defaults, so
-	// these exist to let an operator override them from .env / compose
-	// without editing vllmctl.yaml.
-	envStr(&cfg.Radiance.UseR4D, "RADIANCE_USE_R4D")
-	envStr(&cfg.Radiance.UseR4DAllReduce, "RADIANCE_USE_R4D_AR")
-	envStr(&cfg.Radiance.AllReduceQuant, "RADIANCE_USE_R4D_AR_QUANT")
-	envStr(&cfg.Radiance.Preshuffle, "RADIANCE_PRESHUFFLE")
-	envStr(&cfg.Radiance.FuseRMSQuant, "RADIANCE_FUSE_RMS_QUANT")
-	envStr(&cfg.Radiance.SkinnyGEMM, "RADIANCE_SKINNY_GEMM")
-	envStr(&cfg.Radiance.DynamicDraft, "RADIANCE_DYNAMIC_DRAFT")
-	envStr(&cfg.Radiance.DraftSchedule, "RADIANCE_DRAFT_SCHEDULE")
-	envStr(&cfg.Radiance.DraftTau, "RADIANCE_DRAFT_TAU")
-	envStr(&cfg.Radiance.FastDraft, "RADIANCE_FAST_DRAFT")
-	envStr(&cfg.Radiance.RunBWTest, "RADIANCE_RUN_BWTEST")
-	envStr(&cfg.Radiance.NumaBind, "RADIANCE_NUMA_BIND")
+	applyKnobEnvOverrides(cfg)
+}
+
+// applyKnobEnvOverrides lets an operator set a variant's feature knobs from
+// .env or compose without editing vllmctl.yaml. The images export their own
+// sane defaults, so this is an override path, not a source of defaults.
+//
+// It walks every variant rather than only the running one: config.Load has no
+// business knowing which image it is inside, and env names are unique across
+// manifests by lint, so a variable can always be attributed to exactly one
+// knob. Setting a knob for a variant you are not running is harmless — nothing
+// reads it until you rebuild onto that image.
+func applyKnobEnvOverrides(cfg *Config) {
+	for _, d := range variants.All() {
+		vals := cfg.KnobValues(d.ID)
+		changed := false
+		for _, k := range d.Knobs {
+			if v := os.Getenv(k.Env); v != "" {
+				vals[k.ID] = v
+				changed = true
+			}
+		}
+		if changed {
+			cfg.SetKnobs(d.ID, vals)
+		}
+	}
 }
 
 // DeviceNameSuffix is the value vLLM expects in tuned kernel config
