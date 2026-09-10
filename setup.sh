@@ -13,10 +13,6 @@ readonly QUADLET_USER_DIR="${HOME}/.config/containers/systemd"
 readonly QUADLET_SYSTEM_DIR="/etc/containers/systemd"
 readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 
-# Base image for the radiance variant. KEEP IN SYNC with the defaults in
-# Dockerfile.radiance and docker-compose.radiance.yml.
-readonly RADIANCE_DEFAULT_IMAGE="docker.io/stilldeadcode/vllm-radiance:0.9.3"
-
 # ─── Global state (populated by detect_* functions) ──────────────────────────
 
 GPU_VENDOR=""           # cuda, rocm
@@ -821,7 +817,11 @@ load_env_ports() {
     fi
 }
 
-# ─── Radiance base image ─────────────────────────────────────────────────────
+# ─── Prebuilt base images ────────────────────────────────────────────────────
+#
+# Variants that layer onto a published image name it in their manifest. Some of
+# those images need repairing before they can be built on, which is what the
+# rest of this section is about.
 #
 # vllm-radiance is published as an OCI manifest whose layers carry *Docker*
 # media types. Docker/BuildKit tolerates the mix; containers/image -- the
@@ -838,15 +838,22 @@ load_env_ports() {
 # entrypoint across by hand.
 #
 # This is an upstream packaging bug, so it is behind a cheap probe: the day a
-# conformant image is published, the probe passes and none of this runs.
+# conformant image is published, the probe passes and none of this runs. It is
+# applied to every prebuilt variant, not just radiance -- several of these
+# bases publish to Docker Hub the same way, so the same bug is expected.
 
-radiance_base_ref() {
-    if [[ -n "${RADIANCE_IMAGE:-}" ]]; then
-        echo "$RADIANCE_IMAGE"; return
+# variant_base_ref prints the base image for the selected variant. An explicit
+# VLLMCTL_BASE_IMAGE wins (env, then .env) so an operator can pin a different
+# tag -- an alternate build of the same stack, say -- without editing the
+# manifest.
+variant_base_ref() {
+    if [[ -n "${VLLMCTL_BASE_IMAGE:-}" ]]; then
+        echo "$VLLMCTL_BASE_IMAGE"; return
     fi
     local val
-    val="$(grep '^RADIANCE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
-    echo "${val:-$RADIANCE_DEFAULT_IMAGE}"
+    val="$(grep '^VLLMCTL_BASE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    [[ -n "$val" ]] && { echo "$val"; return; }
+    variant_field "$BUILD_VARIANT" BASE_IMAGE
 }
 
 # Can the build actually use this image as a base? A LABEL-only build is enough
@@ -890,13 +897,15 @@ flatten_image() {
     return $rc
 }
 
-# Make sure the radiance base is present and usable, flattening it if the
-# runtime cannot build on top of it. Exports RADIANCE_IMAGE for the build.
-ensure_radiance_base() {
-    [[ "$BUILD_VARIANT" == "radiance" ]] || return 0
-
+# Make sure a prebuilt base is present and usable, flattening it if the runtime
+# cannot build on top of it. Exports VLLMCTL_BASE_IMAGE for the build.
+#
+# A variant that builds vLLM from source declares no base image and returns
+# here immediately.
+ensure_base_image() {
     local src flat tag
-    src="$(radiance_base_ref)"
+    src="$(variant_base_ref)"
+    [[ -n "$src" ]] || return 0
 
     if ! image_exists "$src"; then
         log "Pulling ${src} (about 4 GB)..."
@@ -904,17 +913,17 @@ ensure_radiance_base() {
     fi
 
     if base_is_buildable "$src"; then
-        export RADIANCE_IMAGE="$src"
+        export VLLMCTL_BASE_IMAGE="$src"
         return 0
     fi
 
     tag="${src##*:}"
     [[ "$tag" == "$src" ]] && tag="latest"
-    flat="localhost/vllm-radiance-flat:${tag}"
+    flat="localhost/vllmctl-${BUILD_VARIANT}-flat:${tag}"
 
     if image_exists "$flat"; then
         log "Using previously normalized base image ${flat}"
-        export RADIANCE_IMAGE="$flat"
+        export VLLMCTL_BASE_IMAGE="$flat"
         return 0
     fi
 
@@ -922,7 +931,7 @@ ensure_radiance_base() {
     warn "it is an OCI manifest carrying Docker-typed layers, which"
     warn "containers/image refuses to rewrite. Normalizing it locally."
     echo ""
-    echo "  This flattens the image into a single layer, once per radiance"
+    echo "  This flattens the image into a single layer, once per base image"
     echo "  version. It needs roughly 10 GB of free space and a few minutes."
     echo ""
 
@@ -935,9 +944,9 @@ ensure_radiance_base() {
     log "Normalizing ${src} -> ${flat} ..."
     if ! flatten_image "$src" "$flat"; then
         $CONTAINER_CMD rmi -f "$flat" >/dev/null 2>&1 || true
-        fatal "Could not normalize ${src}. Building the radiance variant needs
-       either a container runtime that accepts this image (Docker does) or
-       a conformant image published upstream."
+        fatal "Could not normalize ${src}. Building the ${BUILD_VARIANT} variant
+       needs either a container runtime that accepts this image (Docker does)
+       or a conformant image published upstream."
     fi
 
     if ! base_is_buildable "$flat"; then
@@ -945,29 +954,44 @@ ensure_radiance_base() {
     fi
 
     ok "Normalized base image ready: ${flat}"
-    export RADIANCE_IMAGE="$flat"
+    export VLLMCTL_BASE_IMAGE="$flat"
 }
 
 # ─── Container operations ────────────────────────────────────────────────────
 
-# The radiance variant has its own image; every other combination is keyed by
-# GPU vendor. Keeping GPU_VENDOR as the hardware family (rather than folding
-# radiance into it) is what lets the ROCm prerequisite checks, GID detection
-# and SELinux handling apply unchanged to both ROCm images.
-image_key() {
-    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
-        echo "radiance"
-    else
-        echo "$GPU_VENDOR"
+# Device wiring is a property of the GPU vendor, not of the vLLM stack on top
+# of it, so there is one compose file per vendor and every variant of that
+# vendor shares it. GPU_VENDOR names the compute stack (cuda/rocm); the
+# manifests name the vendor (nvidia/amd/intel).
+#
+# `generic` deliberately declares no vendor: it is two variants wearing one
+# name, and which one you get depends on the GPU found at install time. That
+# is exactly why it splits into rocm-source and cuda-source later, and until
+# it does, the detected vendor stands in.
+variant_vendor() {
+    local v
+    v="$(variant_field "$BUILD_VARIANT" VENDOR)"
+    if [[ -n "$v" ]]; then
+        echo "$v"; return
     fi
+    case "$GPU_VENDOR" in
+        cuda) echo "nvidia" ;;
+        rocm) echo "amd" ;;
+        *)    echo "$GPU_VENDOR" ;;
+    esac
 }
 
 compose_file() {
-    echo "docker-compose.$(image_key).yml"
+    echo "docker-compose.$(variant_vendor).yml"
 }
 
+# Which Dockerfile: the manifest names one when the variant layers onto a
+# published image. A from-source variant leaves it unset and is keyed by the
+# compute stack, the way it always was.
 dockerfile() {
-    echo "Dockerfile.$(image_key)"
+    local f
+    f="$(variant_field "$BUILD_VARIANT" DOCKERFILE)"
+    echo "${f:-Dockerfile.${GPU_VENDOR}}"
 }
 
 # compose_cmd builds the full compose command with all required -f flags.
@@ -989,10 +1013,17 @@ write_env_file() {
     local env_file="${SCRIPT_DIR}/.env"
 
     # Keys this script owns. Everything else in .env belongs to the user --
-    # HF_TOKEN, VLLMCTL_API_KEY, the RADIANCE_* switches -- and truncating the
-    # file would silently discard it on every install/rebuild.
+    # HF_TOKEN, VLLMCTL_API_KEY, the feature-knob switches -- and truncating
+    # the file would silently discard it on every install/rebuild.
+    #
+    # The VLLMCTL_BASE_IMAGE / DOCKERFILE / VENV_ROOT / STAMP_FILE / VLLM_PIN
+    # group is derived from the chosen variant's manifest and rewritten on
+    # every install, so hand-editing them does not stick. Change the manifest,
+    # or override VLLMCTL_BASE_IMAGE in the environment for a one-off build.
     local managed=(
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
+        VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
+        VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
         HIP_VISIBLE_DEVICES
     )
@@ -1008,6 +1039,22 @@ write_env_file() {
         echo "VLLMCTL_PORT=${VLLMCTL_PORT}"
         echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}"
         echo "VLLMCTL_VARIANT=${BUILD_VARIANT}"
+
+        # The variant's build inputs, so compose can substitute them without
+        # knowing which variant is selected.
+        echo "VLLMCTL_VENDOR=$(variant_vendor)"
+        echo "VLLMCTL_DOCKERFILE=$(dockerfile)"
+        local _base _venv _stamp _pin
+        _base="$(variant_base_ref)"
+        _venv="$(variant_field "$BUILD_VARIANT" VENV_ROOT)"
+        _stamp="$(variant_field "$BUILD_VARIANT" STAMP_FILE)"
+        _pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
+        [[ -n "$_base" ]]  && echo "VLLMCTL_BASE_IMAGE=${_base}"
+        [[ -n "$_venv" ]]  && echo "VLLMCTL_VENV_ROOT=${_venv}"
+        [[ -n "$_stamp" ]] && echo "VLLMCTL_STAMP_FILE=${_stamp}"
+        # "main" is the from-source marker, not a tag to pin a prebuilt base
+        # against, so it is not written through.
+        [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
 
         [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
         [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
@@ -1046,7 +1093,7 @@ container_down() {
 }
 
 container_install() {
-    ensure_radiance_base
+    ensure_base_image
     write_env_file
 
     # Remove any existing container before bringing one up. `up -d` alone does
@@ -1073,7 +1120,7 @@ container_install() {
 }
 
 container_rebuild() {
-    ensure_radiance_base
+    ensure_base_image
     local quadlet_active=false
     has_quadlet && quadlet_active=true
 
@@ -1092,7 +1139,7 @@ container_rebuild() {
 
 # Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
 container_quick_rebuild() {
-    ensure_radiance_base
+    ensure_base_image
     container_down
     write_env_file
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
@@ -1162,13 +1209,14 @@ generate_quadlet() {
         if [[ -n "$AMD_GFX_VERSION" ]]; then
             hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
         fi
-        local extra_caps=""
-        if [[ "$BUILD_VARIANT" == "radiance" ]]; then
-            # py-spy profiling and the optional RADIANCE_NUMA_BIND mempolicy
-            # syscalls; both no-ops unless used.
-            extra_caps="AddCapability=SYS_PTRACE
-AddCapability=SYS_NICE"
-        fi
+        # Extra capabilities come from the variant's manifest. Unlike compose,
+        # a Quadlet unit is generated per install, so this can be per-variant
+        # rather than the union across a vendor.
+        local extra_caps="" cap
+        for cap in $(variant_field "$BUILD_VARIANT" CAPS); do
+            extra_caps+="AddCapability=${cap}"$'\n'
+        done
+        extra_caps="${extra_caps%$'\n'}"
         gpu_args="AddDevice=/dev/kfd
 AddDevice=/dev/dri
 SecurityLabelDisable=true
@@ -1515,7 +1563,7 @@ Environment variables:
   GPU=cuda|rocm                        Override GPU auto-detection
   VLLMCTL_VARIANT=generic|radiance     Override image variant (skips the prompt)
   RUNTIME=docker|podman                Override container runtime auto-detection
-  RADIANCE_IMAGE=<ref>                 Base image for the radiance variant
+  VLLMCTL_BASE_IMAGE=<ref>             Override a prebuilt variant's base image
 
   VARIANT= is accepted as a short form, but VLLMCTL_VARIANT is preferred:
   VARIANT is also an /etc/os-release field (Ubuntu Server sets it to

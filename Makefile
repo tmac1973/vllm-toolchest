@@ -1,30 +1,30 @@
-.PHONY: build run dev docker docker-cuda docker-rocm docker-radiance docker-rebuild \
-	up down up-cuda down-cuda up-rocm down-rocm up-radiance down-radiance \
+.PHONY: build run dev docker docker-rebuild up down \
+	docker-amd docker-nvidia up-amd down-amd up-nvidia down-nvidia \
 	logs shell test js-test reload clean
 
-# ─── Variant + GPU auto-detection ───────────────────────────────────
-# setup.sh records the chosen image variant in .env; honour it here so `make
-# up` and `./setup.sh up` cannot disagree about which container they manage.
-# Override on the command line: `make up VARIANT=radiance`.
+# ─── Variant + vendor ───────────────────────────────────────────────
+# setup.sh writes the chosen variant and its vendor to .env; read both from
+# there so `make up` and `./setup.sh up` cannot disagree about which container
+# they manage. This deliberately does not re-derive the vendor: that rule lives
+# in setup.sh and the manifests, and a second copy here is what drifted last
+# time. Override on the command line: `make up VENDOR=amd`.
 VARIANT ?= $(shell sed -n 's/^VLLMCTL_VARIANT=//p' .env 2>/dev/null | head -1)
+VENDOR  ?= $(shell sed -n 's/^VLLMCTL_VENDOR=//p' .env 2>/dev/null | head -1)
 
-GPU_TYPE := $(shell \
+# Before the first install there is no .env. Fall back to a device probe so
+# `make up` on a fresh checkout still does something sensible.
+ifeq ($(VENDOR),)
+VENDOR := $(shell \
 	if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then \
-		echo "cuda"; \
+		echo "nvidia"; \
 	elif [ -e /dev/kfd ]; then \
-		echo "rocm"; \
+		echo "amd"; \
 	else \
-		echo "cuda"; \
+		echo "nvidia"; \
 	fi)
-
-# The image key mirrors setup.sh's image_key(): the radiance variant has its
-# own compose file, everything else is keyed by GPU vendor.
-IMAGE_KEY := $(GPU_TYPE)
-ifeq ($(VARIANT),radiance)
-	IMAGE_KEY := radiance
 endif
 
-COMPOSE_FILE := docker-compose.$(IMAGE_KEY).yml
+COMPOSE_FILE := docker-compose.$(VENDOR).yml
 
 # ─── Version ────────────────────────────────────────────────────────
 # Stamped into the binary and shown under the sidebar brand, so a running
@@ -44,43 +44,36 @@ dev:
 
 # ─── Container (auto-detect GPU) ────────────────────────────────────
 docker:
-	@echo "GPU: $(GPU_TYPE)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
+	@echo "vendor: $(VENDOR)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
 	docker compose -f $(COMPOSE_FILE) build
 
 up:
-	@echo "GPU: $(GPU_TYPE)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
+	@echo "vendor: $(VENDOR)  variant: $(or $(VARIANT),generic) → $(COMPOSE_FILE)"
 	docker compose -f $(COMPOSE_FILE) up -d
 
 down:
 	docker compose -f $(COMPOSE_FILE) down
 
-# ─── Container (explicit GPU target) ───────────────────────────────
-docker-cuda:
-	docker compose -f docker-compose.cuda.yml build
+# ─── Container (explicit vendor) ───────────────────────────────────
+# One pair per vendor, not per variant: which variant is built depends on the
+# VLLMCTL_* build inputs in .env, which setup.sh derives from the manifest.
+docker-amd:
+	docker compose -f docker-compose.amd.yml build
 
-docker-rocm:
-	docker compose -f docker-compose.rocm.yml build
+docker-nvidia:
+	docker compose -f docker-compose.nvidia.yml build
 
-docker-radiance:
-	docker compose -f docker-compose.radiance.yml build
+up-amd:
+	docker compose -f docker-compose.amd.yml up -d
 
-up-cuda:
-	docker compose -f docker-compose.cuda.yml up -d
+up-nvidia:
+	docker compose -f docker-compose.nvidia.yml up -d
 
-up-rocm:
-	docker compose -f docker-compose.rocm.yml up -d
+down-amd:
+	docker compose -f docker-compose.amd.yml down
 
-up-radiance:
-	docker compose -f docker-compose.radiance.yml up -d
-
-down-cuda:
-	docker compose -f docker-compose.cuda.yml down
-
-down-rocm:
-	docker compose -f docker-compose.rocm.yml down
-
-down-radiance:
-	docker compose -f docker-compose.radiance.yml down
+down-nvidia:
+	docker compose -f docker-compose.nvidia.yml down
 
 # ─── Common ────────────────────────────────────────────────────────
 docker-rebuild:

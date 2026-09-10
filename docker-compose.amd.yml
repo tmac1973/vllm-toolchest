@@ -1,0 +1,125 @@
+# vllm-toolchest on an AMD GPU.
+#
+# One file for every AMD variant — radiance, rdna4-mxfp4, rocm, rocm-source,
+# strix-halo, gfx906 — because the device wiring is a property of the vendor,
+# not of the vLLM stack on top of it. What differs per variant is the base
+# image and the Dockerfile, and those arrive through .env, which setup.sh
+# writes from variants/<id>.conf.
+services:
+  vllm-toolchest:
+    # Tag the build deterministically. Without this, compose derives a
+    # project-based name that neither `setup.sh uninstall` nor the Quadlet
+    # unit (which expects localhost/vllm-toolchest:latest) can find. Podman
+    # stores an unqualified name under an implicit localhost/ prefix.
+    image: vllm-toolchest:latest
+    build:
+      context: .
+      # Which Dockerfile depends on whether this variant builds vLLM from
+      # source or layers onto a published image.
+      dockerfile: ${VLLMCTL_DOCKERFILE:-Dockerfile.rocm}
+      args:
+        # Prebuilt variants. BASE_IMAGE and VLLM_VERSION move together: the
+        # tuner benchmark script is fetched from the vLLM tag the base was
+        # built against, and the build fails if the image disagrees.
+        #
+        # Fully qualified on purpose. Podman resolves an unqualified name
+        # against its unqualified-search-registries, which on Fedora/RHEL
+        # tries registry.fedoraproject.org first and fails with "manifest
+        # unknown" before it ever reaches Docker Hub.
+        BASE_IMAGE: "${VLLMCTL_BASE_IMAGE:-docker.io/stilldeadcode/vllm-radiance:0.9.3}"
+        VARIANT_ID: "${VLLMCTL_VARIANT:-radiance}"
+        VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/opt/vllm}"
+        STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
+        VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-v0.27.1}"
+
+        # From-source variants only. Harmless to the prebuilt Dockerfile,
+        # which does not declare them: an unconsumed build arg is a warning,
+        # not an error, and one compose file cannot be conditional.
+        ROCM_VERSION: "${ROCM_VERSION:-7.2.3}"
+        # Compile jobs for the two source-building stages. Empty means the
+        # builder works it out: one per core, capped by RAM. Set it in .env
+        # to pin it — lower to leave the machine usable during a build.
+        MAX_JOBS: "${MAX_JOBS:-}"
+
+        GPU_ARCH: "${GPU_ARCH:-gfx1201}"
+    container_name: vllm-toolchest
+    ports:
+      - "${VLLMCTL_PORT:-3000}:3000"
+      - "${VLLMCTL_INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - vllmctl-data:/data:z
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${HOST_VIDEO_GID:-video}"
+      - "${HOST_RENDER_GID:-render}"
+    ipc: host
+    # REQUIRED, and not redundant with ipc:host. vLLM's multiprocess executor
+    # puts its inter-process message queue in /dev/shm, and needs a few hundred
+    # MiB of it; the container default is 64 MB, which fails engine startup at
+    # any tensor-parallel size > 1:
+    #
+    #   RuntimeError: Insufficient space in /dev/shm: 160 MiB required, 62 MiB free
+    #
+    # `ipc: host` would give the container the host's /dev/shm and solve it --
+    # but podman-compose (1.6.0) silently ignores that key, so on Podman the
+    # container gets the 64 MB default anyway. shm_size is honoured by both
+    # docker compose and podman-compose. Where ipc:host *is* applied the host's
+    # /dev/shm wins and this is simply unused.
+    shm_size: "${VLLMCTL_SHM_SIZE:-8gb}"
+    security_opt:
+      - seccomp=unconfined
+    # Granted for every AMD variant rather than per-variant, because compose
+    # cannot be conditional and both are inert unless something asks for them:
+    # SYS_PTRACE is py-spy profiling, SYS_NICE is the numactl mempolicy calls a
+    # NUMA-binding knob makes. The Quadlet unit takes them from the manifest's
+    # VARIANT_CAPS instead, where per-variant is expressible.
+    cap_add:
+      - SYS_PTRACE
+      - SYS_NICE
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    # List form, deliberately: `KEY: "${KEY:-}"` would define KEY as an EMPTY
+    # string inside the container, and these images read an empty feature
+    # switch as "off" -- silently disabling the very thing the variant exists
+    # for. A bare `- KEY` passes the value through only when it is actually set
+    # in the shell or .env, and leaves it undefined otherwise, so the image's
+    # own defaults survive.
+    #
+    # This is the union of the knob variables across every AMD variant. A knob
+    # belonging to a variant you are not running is simply never set. Keep it
+    # equal to what the manifests declare -- TestComposePassthroughMatchesManifests
+    # fails if it drifts, because a knob missing from here is silently dead.
+    environment:
+      # Select your GPUs by HIP index, excluding any iGPU. Never use
+      # CUDA_VISIBLE_DEVICES on ROCm.
+      - HIP_VISIBLE_DEVICES
+
+      # radiance
+      - RADIANCE_USE_R4D
+      - RADIANCE_USE_R4D_AR
+      - RADIANCE_USE_R4D_AR_QUANT
+      - RADIANCE_PRESHUFFLE
+      - RADIANCE_FUSE_RMS_QUANT
+      - RADIANCE_SKINNY_GEMM
+      - RADIANCE_DYNAMIC_DRAFT
+      - RADIANCE_FAST_DRAFT
+      - RADIANCE_DRAFT_TAU
+      - RADIANCE_DRAFT_SCHEDULE
+      - RADIANCE_RUN_BWTEST
+      - RADIANCE_NUMA_BIND
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  vllmctl-data:
+    name: vllmctl-data
+    driver: local

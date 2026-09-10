@@ -1,0 +1,165 @@
+# ── vllm-toolchest on a published vLLM image ───────────────────────────────
+#
+# One Dockerfile for every variant built on somebody else's image. It layers
+# the vllmctl management binary and web UI onto a base named by that variant's
+# manifest (variants/<id>.conf) and changes nothing else about the stack.
+#
+# The variants that build vLLM from source have their own Dockerfiles —
+# Dockerfile.rocm and Dockerfile.cuda — because compiling a stack is a
+# different job from layering onto one.
+#
+# Why consume an image rather than reproduce it: these bases carry tens of
+# source patches against a moving vLLM tag, hand-written kernels, and tuned
+# GEMM/attention configs. Re-deriving that on every upstream bump is not
+# maintainable, so we take the image and add the UI.
+#
+# Why bypassing the base's ENTRYPOINT is safe: these stacks install their
+# runtime hooks through vLLM's plugin loader, which runs per-process on every
+# `vllm serve`. vllmctl spawns the server as a child process and gets the full
+# stack. Where a variant ships a launcher worth keeping — for its banner, NUMA
+# binding or bandwidth sweep — its manifest names it in VARIANT_LAUNCHER and
+# vllmctl invokes that instead of `vllm` directly.
+#
+# Trade-off worth knowing before picking one of these: a prebuilt base pins
+# vLLM and transformers to the release it was built against, so model support
+# is frozen at that level. Each manifest states its pin in VARIANT_VLLM_PIN and
+# the UI surfaces it. The from-source variants track vLLM main.
+
+# ── Build args ─────────────────────────────────────────────────────────────
+# Declared before the first FROM so they are global: an ARG declared inside a
+# stage is scoped to that stage, and both the fetch stage and the runtime stage
+# need VLLM_VERSION. Each stage re-declares them to pull the default in.
+#
+# BASE_IMAGE and VLLM_VERSION must move together — the tuner benchmark script
+# is fetched from the vLLM tag the base was built against, and the build
+# asserts the two agree.
+#
+# Defaults are the radiance variant's, so a bare `docker build -f
+# Dockerfile.prebuilt .` produces something that works. setup.sh always passes
+# them explicitly from the manifest.
+ARG BASE_IMAGE=docker.io/stilldeadcode/vllm-radiance:0.9.3
+ARG VLLM_VERSION=v0.27.1
+ARG GPU_ARCH=gfx1201
+ARG VARIANT_ID=radiance
+# Where vLLM lives inside the base, and the file proving this really is that
+# base. Both come from the manifest; the assertion block below checks them.
+ARG VENV_ROOT=/opt/vllm
+ARG STAMP_FILE=/opt/radiance_version
+
+# ── Stage 1: Go builder ─────────────────────────────────────────────────────
+FROM docker.io/library/golang:1.26-bookworm AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
+
+# ── Stage 2: fetch the tuner benchmark from the matching vLLM tag ───────────
+# The kernel-tuning feature drives vLLM's own benchmark_w8a8_block_fp8.py. The
+# from-source images copy it out of the vLLM tree they just built; a release
+# image ships no source tree, so we fetch that one file from the exact tag the
+# base compiled. Pinned deliberately — a script from a different release can
+# reference kernels this vLLM does not have.
+FROM docker.io/library/alpine:3.22 AS tuner-fetch
+ARG VLLM_VERSION
+RUN apk add --no-cache curl && \
+    curl -fsSL -o /benchmark_w8a8_block_fp8.py \
+      "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_VERSION}/benchmarks/kernels/benchmark_w8a8_block_fp8.py" && \
+    head -c 200 /benchmark_w8a8_block_fp8.py
+
+# ── Stage 3: the runtime image ─────────────────────────────────────────────
+FROM ${BASE_IMAGE}
+
+# Re-declare after FROM: global ARGs are not visible inside a stage until the
+# stage names them again.
+ARG BASE_IMAGE
+ARG VLLM_VERSION
+ARG GPU_ARCH
+ARG VARIANT_ID
+ARG VENV_ROOT
+ARG STAMP_FILE
+
+# VLLMCTL_IMAGE_VARIANT is how the running binary knows which manifest
+# describes it, and therefore which feature knobs to offer.
+ENV GPU_ARCH=${GPU_ARCH} \
+    VLLMCTL_IMAGE_VARIANT=${VARIANT_ID} \
+    VLLMCTL_VLLM_VENV=${VENV_ROOT}
+
+LABEL org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.description="vllm-toolchest UI on the ${VARIANT_ID} vLLM stack"
+
+# ── uv (for llama-benchy benchmarks) ───────────────────────────────────────
+# The benchmark runner invokes `uvx llama-benchy ...`. uv is a single
+# statically-linked binary, ~15 MB. curl and ca-certificates are assumed
+# present: every base here ships them for its own healthcheck.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh && \
+    /usr/local/bin/uv --version && /usr/local/bin/uvx --version
+
+# ── Kernel-tuning wrapper ──────────────────────────────────────────────────
+# tune_fp8_wrapper.py imports benchmark_w8a8_block_fp8 from its own directory,
+# so the two must sit together.
+COPY --from=tuner-fetch /benchmark_w8a8_block_fp8.py /opt/vllm-tuner/benchmark_w8a8_block_fp8.py
+COPY scripts/tune_fp8_wrapper.py /opt/vllm-tuner/tune_fp8_wrapper.py
+
+# Kernel-routing environment is NOT set here. It differs per variant, a
+# Dockerfile cannot write ENV from a variable-length build arg, and vllmctl
+# applies it at launch from VARIANT_IMAGE_ENV in the manifest — which covers
+# `podman run` and the Quadlet unit as well as compose. See launchEnv.
+
+# ── Caches ─────────────────────────────────────────────────────────────────
+# Persisted on the data volume so a restart doesn't recompile Triton/inductor
+# kernels. A cold cache adds minutes before the engine comes up. These are
+# about our volume layout, not the variant, so they are the same everywhere.
+# AITER_ROOT_DIR is inert on a non-AMD stack.
+ENV NCCL_PROTO=Simple \
+    TORCHINDUCTOR_COMPILE_THREADS=4 \
+    VLLM_CACHE_ROOT=/data/cache/vllm \
+    TORCHINDUCTOR_CACHE_DIR=/data/cache/inductor \
+    TRITON_CACHE_DIR=/data/cache/triton \
+    AITER_ROOT_DIR=/data/cache/aiter \
+    TRITON_CACHE_AUTOTUNING=1 \
+    HF_HOME=/data/cache/huggingface \
+    PYTHONUNBUFFERED=1
+
+# ── Go management binary ───────────────────────────────────────────────────
+COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
+
+# ── Data directories ───────────────────────────────────────────────────────
+RUN mkdir -p /data/config /data/models /data/cache
+
+RUN cat > /data/config/vllmctl.yaml << 'EOF'
+listen_addr: ":3000"
+data_dir: "/data"
+vllm_port: 8000
+log_level: "info"
+tool_use_enabled: true
+gpu_memory_util: 0.90
+EOF
+
+# Fail the build rather than ship an image whose management binary cannot find
+# the stack it is meant to manage. Catches a base that moved its venv, a
+# manifest pointing at the wrong image, and a tuner wrapper that lost its
+# benchmark script.
+RUN set -e; \
+    test -d "${VENV_ROOT}/lib" || { echo "FATAL: no venv at ${VENV_ROOT} — does VARIANT_VENV_ROOT match this base?"; exit 1; }; \
+    if [ -n "${STAMP_FILE}" ]; then \
+      test -f "${STAMP_FILE}" || { echo "FATAL: ${STAMP_FILE} missing — is BASE_IMAGE really a ${VARIANT_ID} image?"; exit 1; }; \
+    fi; \
+    test -f /opt/vllm-tuner/benchmark_w8a8_block_fp8.py || { echo "FATAL: tuner benchmark script missing"; exit 1; }; \
+    command -v vllm >/dev/null || { echo "FATAL: vllm not on PATH"; exit 1; }; \
+    installed="$(python -c 'import importlib.metadata as m; print(m.version("vllm"))')"; \
+    want="${VLLM_VERSION#v}"; \
+    case "$installed" in "$want"*) ;; *) \
+      echo "FATAL: the tuner script was fetched from vLLM ${VLLM_VERSION} but this image has vLLM ${installed}."; \
+      echo "       Set VARIANT_VLLM_PIN in variants/${VARIANT_ID}.conf to v${installed}."; exit 1 ;; \
+    esac; \
+    echo "${VARIANT_ID} base OK: vllm ${installed}"
+
+VOLUME ["/data"]
+
+EXPOSE 3000
+EXPOSE 8000
+
+# Replaces the base's ENTRYPOINT. Where a variant has a launcher worth keeping,
+# vllmctl re-invokes it per serve, so nothing that launcher does is lost.
+ENTRYPOINT ["vllmctl", "--config", "/data/config/vllmctl.yaml"]

@@ -223,6 +223,18 @@ func TestValidateRejects(t *testing.T) {
 			"label is required",
 		},
 		{
+			"image env that is not KEY=VALUE",
+			base + "KNOBS=''\nVARIANT_IMAGE_ENV='JUST_A_NAME'\n",
+			"is not KEY=VALUE",
+		},
+		{
+			// The process manager sets these and depends on them: spawn is
+			// what puts worker output in the log panel.
+			"image env taking over a process-manager variable",
+			base + "KNOBS=''\nVARIANT_IMAGE_ENV='VLLM_WORKER_MULTIPROC_METHOD=fork'\n",
+			"owned by the process manager",
+		},
+		{
 			"bad tier",
 			"VARIANT_ID='t'\nVARIANT_LABEL='T'\nVARIANT_TIER='probably fine'\nKNOBS=''\n",
 			"not tested, community or experimental",

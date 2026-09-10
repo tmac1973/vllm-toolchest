@@ -129,6 +129,18 @@ type Descriptor struct {
 	Caps              []string
 	AttentionBackends []string
 
+	// ImageEnv is the environment this variant's image needs in order to
+	// behave as its author intended: kernel routing, backend selection, and
+	// anything else that is not an operator choice.
+	//
+	// It is applied by vllmctl when it spawns the server rather than baked
+	// as ENV, because a Dockerfile cannot set ENV from a variable-length
+	// build arg — and applying it at launch is the stronger guarantee
+	// anyway: `podman run`, the Quadlet unit and `docker compose up` all go
+	// through the same code path. Operator settings still win, since the
+	// runtime environment and the feature knobs are applied after it.
+	ImageEnv []string
+
 	HostReqs []HostReq
 
 	// Knobs is in declaration order, which is the single authoritative
@@ -346,6 +358,7 @@ func parse(id string, src string) (Descriptor, error) {
 		StampFile:         kv["VARIANT_STAMP_FILE"],
 		Caps:              strings.Fields(kv["VARIANT_CAPS"]),
 		AttentionBackends: strings.Fields(kv["VARIANT_ATTENTION_BACKENDS"]),
+		ImageEnv:          strings.Fields(kv["VARIANT_IMAGE_ENV"]),
 	}
 	if d.ID == "" {
 		d.ID = id
@@ -483,6 +496,21 @@ func (d Descriptor) Validate() error {
 	}
 	if d.Tier != "" && d.Tier != "tested" && d.Tier != "community" && d.Tier != "experimental" {
 		return fmt.Errorf("VARIANT_TIER: %q is not tested, community or experimental", d.Tier)
+	}
+
+	for _, pair := range d.ImageEnv {
+		name, _, ok := strings.Cut(pair, "=")
+		if !ok || name == "" {
+			return fmt.Errorf("VARIANT_IMAGE_ENV: %q is not KEY=VALUE", pair)
+		}
+		// The process manager depends on these two: spawn is what makes
+		// worker output reach the log panel, and unbuffered is what makes a
+		// crash visible when it happens rather than at exit. A manifest
+		// silently taking them over would cost someone a very confusing
+		// debugging session.
+		if name == "VLLM_WORKER_MULTIPROC_METHOD" || name == "PYTHONUNBUFFERED" {
+			return fmt.Errorf("VARIANT_IMAGE_ENV: %s is owned by the process manager and cannot be set by a manifest", name)
+		}
 	}
 
 	seenEnv := map[string]bool{}
