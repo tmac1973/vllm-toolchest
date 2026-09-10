@@ -376,7 +376,7 @@ func parse(id string, src string) (Descriptor, error) {
 		GFXTargets:   strings.Fields(kv["VARIANT_GFX_TARGETS"]),
 		HostArch:     kv["VARIANT_HOST_ARCH"],
 		VenvRoot:     kv["VARIANT_VENV_ROOT"],
-		Launcher:     strings.Fields(kv["VARIANT_LAUNCHER"]),
+		Launcher:     parseLauncher(kv),
 		StampFile:    kv["VARIANT_STAMP_FILE"],
 		Caps:         strings.Fields(kv["VARIANT_CAPS"]),
 		Capabilities: strings.Fields(kv["VARIANT_CAPABILITIES"]),
@@ -432,6 +432,34 @@ func parse(id string, src string) (Descriptor, error) {
 	d.Groups = groupKnobs(kv, d.Knobs)
 
 	return d, nil
+}
+
+// parseLauncher reads the argv a variant starts its server with.
+//
+// VARIANT_LAUNCHER is the space-separated short form, which covers a launcher
+// that is just a path. When an argument itself contains spaces the numbered
+// form is required, because nothing else can express it:
+//
+//	VARIANT_LAUNCHER_1='bash'
+//	VARIANT_LAUNCHER_2='-c'
+//	VARIANT_LAUNCHER_3='source /opt/oneapi/setvars.sh && exec vllm serve "$@"'
+//	VARIANT_LAUNCHER_4='--'
+//
+// That is not hypothetical: the Intel image sets up oneAPI in its entrypoint,
+// and dropping that step leaves vLLM unable to find its libraries.
+func parseLauncher(kv map[string]string) []string {
+	if _, numbered := kv["VARIANT_LAUNCHER_1"]; !numbered {
+		return strings.Fields(kv["VARIANT_LAUNCHER"])
+	}
+	var out []string
+	for i := 1; ; i++ {
+		v, ok := kv[fmt.Sprintf("VARIANT_LAUNCHER_%d", i)]
+		if !ok {
+			break
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func parseKnob(kv map[string]string, slug string) (Knob, error) {

@@ -75,10 +75,21 @@ func TestRecommendationPrefersTheSpecificVariant(t *testing.T) {
 		t.Errorf("recommended = %q, want radiance (it names gfx1201; rocm-source names nothing)", got)
 	}
 
+	// On RDNA3 the tuned gfx1201 images do not apply, but AMD's own prebuilt
+	// does -- and it names ten architectures where the source build names
+	// none, so it wins on specificity. That is the right default: an hours-long
+	// compile should be something someone opts into, not what they get for
+	// pressing Enter.
 	got = strings.TrimSpace(runMatch(t,
 		`GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "recommended_variant"))
-	if got != "rocm-source" {
-		t.Errorf("recommended = %q, want rocm-source", got)
+	if got != "rocm" {
+		t.Errorf("recommended = %q, want rocm (it names gfx1100; rocm-source names nothing)", got)
+	}
+
+	// The source build is still offered, just not preselected.
+	all := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
+	if !contains(all, "rocm-source") {
+		t.Errorf("rocm-source should still be on the menu; got %v", all)
 	}
 }
 

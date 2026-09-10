@@ -112,13 +112,19 @@ prompt_confirm() {
 readonly VARIANTS_DIR="${SCRIPT_DIR}/variants"
 
 # list_variants prints every declared variant id, one per line.
+#
+# Sorted byte-wise, not by locale. A glob expands in collation order, which in
+# most locales ignores punctuation and puts "rocm-cdna" before "rocm" -- while
+# Go sorts by byte value and puts "rocm" first. The two readers disagreeing
+# about order is the kind of thing that goes unnoticed until a menu numbers its
+# entries differently from the list somebody read.
 list_variants() {
     local f base
     for f in "${VARIANTS_DIR}"/*.conf; do
         [[ -e "$f" ]] || continue
         base="${f##*/}"
         printf '%s\n' "${base%.conf}"
-    done
+    done | LC_ALL=C sort
 }
 
 # load_variant_manifest sources a manifest into the current shell.

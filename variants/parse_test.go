@@ -304,3 +304,56 @@ func TestHostReqParsing(t *testing.T) {
 		t.Error("accepted a host req with too few fields")
 	}
 }
+
+// A launcher is usually just a path, but not always: the Intel image sets up
+// oneAPI before exec-ing the server, and dropping that leaves vLLM unable to
+// find its libraries. Space-splitting cannot express that, so the numbered
+// form exists -- and it has to survive the round trip byte for byte, because
+// what it carries is a shell fragment.
+func TestLauncherForms(t *testing.T) {
+	short, err := parse("t", "VARIANT_ID='t'\nVARIANT_LABEL='T'\nKNOBS=''\nVARIANT_LAUNCHER='/opt/entry.sh'\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(short.Launcher) != 1 || short.Launcher[0] != "/opt/entry.sh" {
+		t.Errorf("short form = %v", short.Launcher)
+	}
+
+	const frag = `source /opt/oneapi/setvars.sh --force && exec vllm serve "$@"`
+	long, err := parse("t", "VARIANT_ID='t'\nVARIANT_LABEL='T'\nKNOBS=''\n"+
+		"VARIANT_LAUNCHER_1='bash'\nVARIANT_LAUNCHER_2='-c'\n"+
+		"VARIANT_LAUNCHER_3='"+frag+"'\nVARIANT_LAUNCHER_4='--'\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bash", "-c", frag, "--"}
+	if len(long.Launcher) != len(want) {
+		t.Fatalf("numbered form = %v, want %v", long.Launcher, want)
+	}
+	for i := range want {
+		if long.Launcher[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, long.Launcher[i], want[i])
+		}
+	}
+
+	// The numbered form wins when both are present, and a gap ends the list
+	// rather than silently skipping an argument.
+	gap, _ := parse("t", "VARIANT_ID='t'\nVARIANT_LABEL='T'\nKNOBS=''\n"+
+		"VARIANT_LAUNCHER='ignored'\nVARIANT_LAUNCHER_1='a'\nVARIANT_LAUNCHER_3='c'\n")
+	if len(gap.Launcher) != 1 || gap.Launcher[0] != "a" {
+		t.Errorf("gap handling = %v, want [a]", gap.Launcher)
+	}
+}
+
+// Every variant that ships a launcher must be startable through it: vllmctl
+// runs launcher[0] with launcher[1:] plus the model path and flags.
+func TestDeclaredLaunchersAreUsable(t *testing.T) {
+	for _, d := range All() {
+		if len(d.Launcher) == 0 {
+			continue
+		}
+		if d.Launcher[0] == "" {
+			t.Errorf("%s: launcher has an empty program name", d.ID)
+		}
+	}
+}
