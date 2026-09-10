@@ -95,6 +95,88 @@ prompt_confirm() {
     esac
 }
 
+# ─── Variant manifests ───────────────────────────────────────────────────────
+#
+# variants/<id>.conf describes one image this tool can be built on: its base
+# image, the hardware it runs on, and the feature switches ("knobs") its
+# Settings panel offers. Each fact is declared exactly once, there, and both
+# this script and the Go binary generate from it -- the binary go:embeds the
+# same files and parses the same grammar (see variants/variants.go).
+#
+# The grammar is a strict subset of bash on purpose, so this script can source
+# a manifest with no jq, yq or python on the host: NAME='value', one per line,
+# always single-quoted. That literalness is what lets a tooltip carry commas,
+# double quotes and em-dashes unescaped; the one character it cannot carry is
+# the ASCII apostrophe.
+#
+# Every key is VARIANT_-, GROUP_- or KNOB_-prefixed because these files land in
+# this script's own shell: a bare ID= or VENDOR= would clobber a global.
+
+readonly VARIANTS_DIR="${SCRIPT_DIR}/variants"
+
+# list_variants prints every declared variant id, one per line.
+list_variants() {
+    local f base
+    for f in "${VARIANTS_DIR}"/*.conf; do
+        [[ -e "$f" ]] || continue
+        base="${f##*/}"
+        printf '%s\n' "${base%.conf}"
+    done
+}
+
+# load_variant_manifest sources a manifest into the current shell.
+#
+# Sourcing a second manifest leaves the first one's KNOB_* variables behind,
+# because a manifest only assigns the keys it declares. Anything that walks
+# every variant must therefore do it in a subshell -- see variant_field.
+load_variant_manifest() {
+    local f="${VARIANTS_DIR}/$1.conf"
+    [[ -r "$f" ]] || return 1
+    # shellcheck source=/dev/null
+    . "$f"
+}
+
+# knob_attr SLUG ATTR prints one knob attribute, empty when undeclared.
+# The ${!var-} form matters under `set -u`: an absent attribute has to read as
+# empty, not abort the script.
+knob_attr() {
+    local var="KNOB_$1_$2"
+    printf '%s' "${!var-}"
+}
+
+# variant_field ID NAME prints one VARIANT_* field from a manifest without
+# leaving that manifest loaded, so callers can query several in a loop.
+variant_field() {
+    ( load_variant_manifest "$1" || exit 1
+      local var="VARIANT_$2"
+      printf '%s' "${!var-}" )
+}
+
+# knob_env_names prints the environment variables the loaded manifest's knobs
+# own, in declaration order. $KNOBS is deliberately unquoted: word splitting is
+# how the list is iterated.
+knob_env_names() {
+    local slug
+    # shellcheck disable=SC2086
+    for slug in ${KNOBS:-}; do
+        printf '%s\n' "$(knob_attr "$slug" ENV)"
+    done
+}
+
+# knob_recommended_env prints the KEY=VALUE lines an "apply recommended
+# settings" action would write. A recommendation of "-" means the manifest's
+# advice is to leave the image's own default alone, so it emits nothing.
+knob_recommended_env() {
+    local slug rec env
+    # shellcheck disable=SC2086
+    for slug in ${KNOBS:-}; do
+        rec="$(knob_attr "$slug" RECOMMENDED)"
+        [[ -n "$rec" && "$rec" != "-" ]] || continue
+        env="$(knob_attr "$slug" ENV)"
+        printf '%s=%s\n' "$env" "$rec"
+    done
+}
+
 # ─── Detection: GPU ──────────────────────────────────────────────────────────
 
 # Detect host video/render group GIDs for container device access.
@@ -1570,4 +1652,10 @@ main() {
     echo ""
 }
 
-main "$@"
+# Run only when executed, not when sourced. Sourcing is how the manifest-reader
+# parity test gets at load_variant_manifest and friends: the bash reader and
+# the Go parser have to agree about every variants/*.conf, and the only way to
+# prove that is to exercise the same functions this script actually uses.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
