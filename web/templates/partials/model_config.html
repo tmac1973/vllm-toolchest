@@ -49,7 +49,7 @@
     <fieldset><legend>Performance</legend>
       <div class="grid">
         <label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}> Enforce eager mode</label>
-        <label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"{{if .EnablePrefixCaching}} checked{{end}}> Prefix caching</label>
+        <label title="Reuse the KV blocks of a shared prefix — a system prompt, a conversation so far — instead of recomputing them every turn.&#10;&#10;UNTICKED does not mean off. vLLM decides per model, and enables it for ordinary decoder models. It declines only where the feature is still experimental: hybrid linear-attention (gated-delta-net / mamba) models, attention-free models, and encoder-decoder ones.&#10;&#10;TICKED forces it on. On a model vLLM declined, it warns that this may crash the engine or produce incorrect output — and on a hybrid model you also need the mamba cache mode below set to align."><input type="checkbox" name="enable_prefix_caching" role="switch"{{if .EnablePrefixCaching}} checked{{end}}> Force prefix caching</label>
       </div>
       <label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs">
         {{- range .MaxNumSeqsOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}

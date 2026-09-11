@@ -81,3 +81,36 @@ func quantKeySection(t *testing.T, page string) string {
 	}
 	return page[i : i+j]
 }
+
+// The prefix-caching control is a three-state setting wearing a checkbox:
+// unticked means "vLLM decides", not "off". Someone reading it as "off" goes
+// looking for a win that is usually already applied — or forces it on a hybrid
+// model, which vLLM warns may crash the engine.
+func TestPrefixCachingLabelIsNotMisleading(t *testing.T) {
+	s := newGoldenServer(t, goldenEnvGeneric)
+
+	w := httptest.NewRecorder()
+	s.handleSettingsPage(w, httptest.NewRequest("GET", "/settings", nil))
+	settings := w.Body.String()
+
+	if strings.Contains(settings, ">\n            Enable prefix caching") {
+		t.Error(`settings still says "Enable prefix caching", which reads as an on/off switch`)
+	}
+	for _, want := range []string{"Force prefix caching", "does not mean off", "vLLM decides per model"} {
+		if !strings.Contains(settings, want) {
+			t.Errorf("settings page is missing %q", want)
+		}
+	}
+
+	// And the same on the per-model panel, which is where it is usually set.
+	help := renderHelp(t, "rocm-source")
+	for _, want := range []string{
+		"an unticked box usually means it is already on",
+		"crash the engine or produce incorrect output",
+		"align", // the extra step hybrid models need
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help is missing %q", want)
+		}
+	}
+}

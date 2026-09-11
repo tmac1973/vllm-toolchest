@@ -71,9 +71,9 @@
             <input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}>
             Enforce eager mode
         </label>
-        <label title="Cache KV blocks for shared prefixes (like system prompts) by default. Speeds up repeated requests with the same prefix.">
+        <label title="Applied to newly downloaded models. Unticked does not mean off: vLLM decides per model and enables prefix caching for ordinary decoder models, declining only where it is still experimental (hybrid linear-attention, attention-free and encoder-decoder models). Ticking this forces it on for every new model, which vLLM warns may crash or produce incorrect output on the ones it declined.">
             <input type="checkbox" name="enable_prefix_cache" role="switch"{{if .EnablePrefixCache}} checked{{end}}>
-            Enable prefix caching
+            Force prefix caching
         </label>
     </div>
 </article>
