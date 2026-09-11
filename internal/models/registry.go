@@ -29,6 +29,12 @@ type Model struct {
 	GenDefaults  GenDefaults  `json:"generation_defaults,omitempty"`
 	VRAMEstimate VRAMEstimate `json:"vram_estimate"`
 	VLLMConfig   VLLMConfig   `json:"vllm_config"`
+
+	// ActiveProfile is the profile the live VLLMConfig was last restored from
+	// or saved as. It is a label, not a link: the live config keeps
+	// autosaving, so it can drift away from the profile at any time, and
+	// Registry.ActiveProfile reports that drift rather than clearing this.
+	ActiveProfile string `json:"active_profile,omitempty"`
 }
 
 // HFConfig holds key fields from the model's config.json.
@@ -177,7 +183,8 @@ type VLLMConfig struct {
 //	1  the original file
 //	2  pending_configs, and the first version whose builds refuse to overwrite
 //	   a file they did not fully understand
-const schemaVersion = 2
+//	3  config_profiles, and active_profile on each model
+const schemaVersion = 3
 
 type registryFile struct {
 	Models        map[string]*Model `json:"models"`
@@ -186,6 +193,8 @@ type registryFile struct {
 	// PendingConfigs are launch configs restored from a backup for models
 	// that aren't installed here; see pending.go.
 	PendingConfigs []PendingConfig `json:"pending_configs,omitempty"`
+	// Profiles are named per-model config snapshots; see profiles.go.
+	Profiles []ConfigProfile `json:"config_profiles,omitempty"`
 }
 
 // Registry manages the model inventory.
@@ -198,7 +207,10 @@ type Registry struct {
 	// stays with the rest of the registry state.
 	modelsDir string
 	// pending holds configs waiting for their model to arrive.
-	pending  []PendingConfig
+	pending []PendingConfig
+	// profiles holds every model's named config snapshots, ordered by model
+	// ID and then folded name.
+	profiles []ConfigProfile
 	filePath string
 
 	// readOnlyReason is set when load() could not take responsibility for the
@@ -257,6 +269,7 @@ func (r *Registry) load() {
 		r.models = rf.Models
 	}
 	r.pending = rf.PendingConfigs
+	r.profiles = rf.Profiles
 }
 
 // ReadOnly reports why the registry refuses to write, or "" when it does not.
@@ -288,6 +301,7 @@ func (r *Registry) save() error {
 		SchemaVersion:  schemaVersion,
 		LastScan:       time.Now(),
 		PendingConfigs: r.pending,
+		Profiles:       r.profiles,
 	}
 	data, err := json.MarshalIndent(rf, "", "  ")
 	if err != nil {

@@ -3,6 +3,7 @@ package models
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,8 @@ const v2File = `{
   "pending_configs": [{"model_id": "org/waiting", "config": {"max_model_len": 8192}}]
 }`
 
-// The file this build already writes must load and rewrite without loss.
+// A version-2 file, the last before profiles, must load and be rewritten as
+// the current version without loss.
 func TestCurrentSchemaLoadsAndRewrites(t *testing.T) {
 	dir := t.TempDir()
 	path := writeRegistryFile(t, dir, v2File)
@@ -114,9 +116,13 @@ func TestUnreadableRegistryIsNeverOverwritten(t *testing.T) {
 // would send the operator hunting for models that were never lost.
 func TestNewerSchemaStillListsModels(t *testing.T) {
 	dir := t.TempDir()
-	writeRegistryFile(t, dir, strings.Replace(v2File, `"schema_version": 2`, `"schema_version": 3`, 1))
+	newer := fmt.Sprintf(`"schema_version": %d`, schemaVersion+1)
+	writeRegistryFile(t, dir, strings.Replace(v2File, `"schema_version": 2`, newer, 1))
 
 	reg := NewRegistry(dir, filepath.Join(dir, "models"))
+	if reg.ReadOnly() == "" {
+		t.Fatal("a file one version ahead should make the registry read-only")
+	}
 	if _, ok := reg.Get("org/model"); !ok {
 		t.Error("models from a newer file should still be listed")
 	}
