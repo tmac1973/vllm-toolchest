@@ -493,6 +493,18 @@ type dashboardTiming struct {
 	LastSeen  string
 }
 
+// timingsView is what the Live Performance panel renders.
+//
+// Pending is carried separately from Rows because a model still gathering
+// samples is not the same as no traffic at all, and the panel used to show
+// both as "nothing captured yet" — which reads as broken when it is in fact
+// working.
+type timingsView struct {
+	Rows       []dashboardTiming
+	Pending    []dashboardTiming
+	MinSamples int
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	metrics := s.monitor.Current()
 

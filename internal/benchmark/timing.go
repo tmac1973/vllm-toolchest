@@ -129,6 +129,27 @@ func (s *Store) RunningAverage(modelID string) (RunningAverage, bool) {
 	return out, out.Count >= timingMinSamplesForAverage
 }
 
+// MinSamplesForAverage is the number of observed requests a model needs before
+// its average is meaningful enough to show. Exported so the UI can say how far
+// along it is rather than just withholding the row.
+func MinSamplesForAverage() int { return timingMinSamplesForAverage }
+
+// PendingAverages returns models that have samples but not yet enough for an
+// average. The UI shows these as progress: "collecting, 6 of 10". Without it a
+// panel that is working looks identical to one that is broken.
+func (s *Store) PendingAverages() []RunningAverage {
+	s.timing.mu.RLock()
+	defer s.timing.mu.RUnlock()
+
+	out := make([]RunningAverage, 0, len(s.timing.averages))
+	for _, avg := range s.timing.averages {
+		if avg.Count > 0 && avg.Count < timingMinSamplesForAverage {
+			out = append(out, *avg)
+		}
+	}
+	return out
+}
+
 // RunningAverages returns running averages for every model with at least
 // timingMinSamplesForAverage samples.
 func (s *Store) RunningAverages() []RunningAverage {

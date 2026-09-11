@@ -195,11 +195,9 @@
 
 {{/* The passive timing table: what real traffic through the proxy measured. */}}
 {{define "timings_list" -}}
-{{if not . -}}
-<p style="opacity:0.6;"><small>No active inference traffic captured yet. Recent /v1/chat/completions activity will populate this.</small></p>
-{{- else -}}
+{{- if .Rows}}
 <table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
-{{- range .}}
+{{- range .Rows}}
   <tr>
     <td><small>{{.ModelID}}</small></td>
     <td>{{printf "%.1f" .AvgGenTPS}} t/s</td>
@@ -209,4 +207,13 @@
 {{- end}}
 </tbody></table>
 {{- end}}
+{{- if .Pending}}
+{{- range .Pending}}
+<p style="opacity:0.6;"><small>Collecting samples for <strong>{{.ModelID}}</strong> — {{.Count}} of {{$.MinSamples}}. An average from fewer is mostly noise.</small></p>
+{{- end}}
+{{- end}}
+{{- if and (not .Rows) (not .Pending)}}
+<p style="opacity:0.6;"><small>No inference traffic captured yet.</small></p>
+{{- end}}
+<p style="opacity:0.6;"><small>Counts requests that are <strong>not streaming</strong> and go through this server&rsquo;s port rather than straight to vLLM&rsquo;s. A streaming client &mdash; which most chat UIs are by default &mdash; will not appear here. Use the <a href="/benchmarks">Benchmarks</a> page for numbers that do not depend on how you happen to be calling the API.</small></p>
 {{- end}}

@@ -26,18 +26,25 @@ func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := make([]dashboardTiming, 0, len(avgs))
-	for _, a := range avgs {
-		rows = append(rows, dashboardTiming{
+	toRow := func(a benchmark.RunningAverage) dashboardTiming {
+		return dashboardTiming{
 			ModelID:   a.ModelID,
 			AvgGenTPS: a.AvgGenTPS,
 			Count:     a.Count,
 			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
-		})
+		}
+	}
+
+	view := timingsView{MinSamples: benchmark.MinSamplesForAverage()}
+	for _, a := range avgs {
+		view.Rows = append(view.Rows, toRow(a))
+	}
+	for _, a := range s.bench.PendingAverages() {
+		view.Pending = append(view.Pending, toRow(a))
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "timings_list", rows)
+	s.renderPartial(w, "timings_list", view)
 }
 
 // handleTimingsForModel returns recent timing samples plus the running

@@ -420,9 +420,29 @@ func TestGoldenPartials(t *testing.T) {
 		{
 			name:    "timings_list",
 			partial: "timings_list",
-			data: []dashboardTiming{
-				{ModelID: "unsloth/Qwen3.8-27B-FP8", AvgGenTPS: 102.2, Count: 47, LastSeen: "Sep 8 10:58"},
+			data: timingsView{
+				MinSamples: 10,
+				Rows: []dashboardTiming{
+					{ModelID: "unsloth/Qwen3.8-27B-FP8", AvgGenTPS: 102.2, Count: 47, LastSeen: "Sep 8 10:58"},
+				},
 			},
+		},
+		{
+			// A model still gathering samples must not render as "nothing
+			// captured": that reads as broken when it is working.
+			name:    "timings_list_pending",
+			partial: "timings_list",
+			data: timingsView{
+				MinSamples: 10,
+				Pending: []dashboardTiming{
+					{ModelID: "unsloth/Qwen3.8-27B-FP8", Count: 6, LastSeen: "Sep 8 10:58"},
+				},
+			},
+		},
+		{
+			name:    "timings_list_empty",
+			partial: "timings_list",
+			data:    timingsView{MinSamples: 10},
 		},
 	}
 

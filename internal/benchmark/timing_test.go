@@ -132,3 +132,41 @@ func TestTimingTimestampDefaultsToNow(t *testing.T) {
 		t.Errorf("expected default Timestamp ≥ before(%v), got %v", before, got[0].Timestamp)
 	}
 }
+
+// A model gathering samples must be distinguishable from no traffic at all.
+// Collapsing the two is what made the Live Performance panel look broken while
+// it was working: six samples had been captured and the panel said none had.
+func TestPendingAveragesTracksProgressThenClears(t *testing.T) {
+	s := NewStore("")
+
+	for i := 0; i < MinSamplesForAverage()-1; i++ {
+		s.AddTiming(TimingSample{ModelID: "m", GenTokens: 1, GenTokPerSec: 50})
+	}
+	if got := len(s.RunningAverages()); got != 0 {
+		t.Errorf("running averages = %d below the threshold, want 0", got)
+	}
+	pending := s.PendingAverages()
+	if len(pending) != 1 || pending[0].Count != MinSamplesForAverage()-1 {
+		t.Fatalf("pending = %+v, want one entry just short of the threshold", pending)
+	}
+
+	// Reaching the threshold promotes it and clears it from pending, so the
+	// panel never shows a model as both averaged and still collecting.
+	s.AddTiming(TimingSample{ModelID: "m", GenTokens: 1, GenTokPerSec: 50})
+	if got := len(s.RunningAverages()); got != 1 {
+		t.Errorf("running averages = %d at the threshold, want 1", got)
+	}
+	if got := len(s.PendingAverages()); got != 0 {
+		t.Errorf("pending = %d after promotion, want 0", got)
+	}
+}
+
+// A model with no samples is not pending anything.
+func TestPendingAveragesIgnoresModelsWithNoSamples(t *testing.T) {
+	s := NewStore("")
+	s.AddTiming(TimingSample{ModelID: "", GenTokens: 5})  // rejected: no model
+	s.AddTiming(TimingSample{ModelID: "m", GenTokens: 0}) // rejected: no tokens
+	if got := len(s.PendingAverages()); got != 0 {
+		t.Errorf("pending = %d, want 0 — neither sample was recorded", got)
+	}
+}

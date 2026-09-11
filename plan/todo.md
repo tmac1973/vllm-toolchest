@@ -61,3 +61,18 @@ as "cross-cutting, unscheduled" and never landed. Verified still outstanding
 - Capabilities endpoint — `/api/models/{id}/info`, plus a `meta` extension on
   `/v1/models`, so a client can self-configure in one round-trip.
 - `/api/ps` — process listing.
+
+## Live Performance: capture streaming requests
+
+The panel only measures non-streaming requests routed through vllmctl's port.
+Most chat clients stream by default, so for many users it never accumulates
+anything — the panel now says so, but saying so is not the same as working.
+
+Capturing streaming would mean reading the SSE tail for the final `usage`
+object rather than buffering a whole response body. It would also give a real
+time-to-first-token, which the non-streaming path cannot measure at all:
+`AvgPromptTPS` is currently always zero because the proxy sees one response,
+not a first token and then the rest.
+
+See `internal/api/proxy.go` — streaming requests are forwarded untouched at the
+top of the capture path.
