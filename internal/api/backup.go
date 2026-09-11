@@ -223,6 +223,11 @@ func (s *Server) restoreDeps() backup.Deps {
 func (s *Server) handleDiscardPending(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	modelID := r.FormValue("model_id")
+	// Checked first so the refusal is not reported as a missing entry.
+	if reason := s.registry.ReadOnly(); reason != "" {
+		http.Error(w, "models.json "+reason+" — nothing was discarded", http.StatusConflict)
+		return
+	}
 	if !s.registry.DiscardPendingConfig(modelID) {
 		http.Error(w, fmt.Sprintf("no pending config for %s", modelID), http.StatusNotFound)
 		return

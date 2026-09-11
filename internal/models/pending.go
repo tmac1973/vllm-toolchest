@@ -26,6 +26,9 @@ type PendingConfig struct {
 func (r *Registry) SetPendingConfig(p PendingConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 	for i := range r.pending {
 		if r.pending[i].ModelID == p.ModelID {
 			r.pending[i] = p
@@ -50,6 +53,11 @@ func (r *Registry) PendingConfigs() []PendingConfig {
 func (r *Registry) DiscardPendingConfig(modelID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Nothing is discarded while the registry is read-only: an entry dropped
+	// here but never written out would reappear at the next start.
+	if r.writableLocked() != nil {
+		return false
+	}
 	for i, p := range r.pending {
 		if p.ModelID == modelID {
 			r.pending = append(r.pending[:i], r.pending[i+1:]...)
