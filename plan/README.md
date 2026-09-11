@@ -9,6 +9,9 @@ things that turned out to be wrong.
 - [`phase-10-variant-expansion.md`](phase-10-variant-expansion.md) — image
   variants for NVIDIA, AMD and Intel accelerators. Implemented on the
   `variant-manifests` branch; its §7 lists what is still unproven.
+- [`phase-11-config-profiles.md`](phase-11-config-profiles.md) — named,
+  per-model snapshots of a launch config, and the `models.json` schema gate
+  they needed first.
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive
