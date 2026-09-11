@@ -215,6 +215,21 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 		cfg.ToolCallParser = ""
 	}
 
+	// The attention backend named in the speculative config or the extra
+	// flags gets the same check the picker does. Refused rather than saved
+	// with a warning: unlike a risky environment variable, this one does not
+	// degrade, it aborts the engine minutes into a load.
+	d, known := s.vllmEnv.Descriptor()
+	if err := validateNamedBackends(d, known, cfg.SpeculativeConfig, cfg.ExtraFlags); err != nil {
+		if isHTMX(r) {
+			respondHTML(w)
+			s.renderPartial(w, "error_message", err.Error())
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if err := s.registry.UpdateConfig(id, cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
