@@ -5,6 +5,13 @@
   Tune Triton W8A8 block-FP8 matmul kernels for the matmul shapes your registered FP8 models use.
   Tuned configs land in <code>/data/tuned-kernels/{{.DeviceName}}/</code> and are symlinked into vLLM's
   config dir on container startup. Each model's row shows how many of its derived shapes are already tuned.
+  <a href="/help#tuning">When to run this, and what it applies to.</a>
+</p>
+
+<p style="opacity:0.7;font-size:0.9rem;">
+  <strong>Starting a run stops the vLLM server</strong> — the tuner needs the whole GPU. Shapes depend on
+  the tensor-parallel size, so results from one TP do not carry to another, and only block-quantized FP8
+  checkpoints reach the kernel being tuned.
 </p>
 
 {{if not .DeviceName}}

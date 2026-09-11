@@ -191,12 +191,37 @@
 
     <h2 id="tuning">Tuning</h2>
     <p>An autotuner for block-FP8 GEMM kernels. For a chosen model and tensor-parallel size it derives the unique weight-matmul shapes that model's decoder layers will execute, benchmarks kernel configurations for each, and writes the winners as JSON files that vLLM loads at run time.</p>
-    <p>Two things to know:</p>
+
+    <h3>What it actually tunes</h3>
+    <p>The <em>linear</em> layers, not attention. Every decoder layer runs a handful of matmuls — the Q/K/V and output projections, and the MLP's gate, up and down projections — and on a block-quantized FP8 checkpoint those go through a Triton kernel whose tile sizes, warp count and pipeline depth are configurable. vLLM ships defaults tuned on other people's hardware. Tuning measures the alternatives on <em>your</em> GPU, for <em>your</em> model's shapes, and keeps the winners.</p>
+    <p>This is a different subsystem from the attention backend on the model config panel. Choosing <code>TRITON_ATTN</code> or <code>ROCM_ATTN</code> or <code>R4D</code> changes how attention is computed and has no bearing on whether these tuned configs are used. Nothing you pick there enables or disables tuning.</p>
+
+    <h3>When it applies</h3>
+    <p>Three things have to line up, and the shape count on the Tuning page already reflects the third:</p>
     <ul>
-        <li>It only helps models with <strong>block-quantized FP8</strong> weights. Other formats never reach the kernel being tuned.</li>
-        <li>Tuned configs are keyed by <em>the device name vLLM reports</em>, not by the marketing name or the architecture. That name is probed from the running vLLM at startup rather than guessed, because the image variants disagree about it — and a file written under the wrong name is correctly formatted and never read. The name in use is shown in <a href="/settings">Settings</a> under Environment.</li>
+        <li><strong>The checkpoint must be block-quantized FP8.</strong> That is narrower than "FP8": a checkpoint scaled per tensor or per channel uses a different code path and never touches this kernel. The Tuning page marks anything tagged <code>FP8</code> or <code>compressed-tensors</code> as eligible, which is a looser test than the kernel's — a per-tensor FP8 model, or a <code>compressed-tensors</code> repo that turns out to hold 4-bit weight-only data, will look eligible and gain nothing. <code>AWQ</code>, <code>GPTQ</code>, <code>bitsandbytes</code> and unquantized <code>FP16</code> are never candidates.</li>
+        <li><strong>Shapes come from the model and the TP size.</strong> They are computed from hidden size, intermediate size, head count, KV-head count and head dimension, each divided by the tensor-parallel factor. Tuning at TP=1 does nothing for the same model at TP=2 — the matrices are a different width. Two different models that happen to share dimensions do share results, because the files are keyed by shape rather than by model name.</li>
+        <li><strong>Only shapes the kernel can take.</strong> Both dimensions must divide by the block size (128). Shapes that do not are skipped rather than counted as untuned — they use a fallback path with nothing to tune. A model showing "6 of 6" is fully tuned even though it has more matmuls than six.</li>
     </ul>
 
+    <h3>When to run it</h3>
+    <div class="callout warn">
+        Tuning <strong>stops the running vLLM server</strong> before it starts, because it needs the whole GPU. Do not start a run on a machine that is serving something you care about.
+    </div>
+    <p>Worth doing when all of these hold:</p>
+    <ul>
+        <li>You have settled on a model, and a tensor-parallel size, that you expect to serve repeatedly. Tuning something you are still evaluating is time spent on a shape set you may not keep.</li>
+        <li>It is block-FP8, per above.</li>
+        <li>You have a <a href="/benchmarks">benchmark</a> of it already. Without a before there is no way to tell whether the after is an improvement or noise, and on some shapes the honest answer is that the shipped defaults were already the best available.</li>
+    </ul>
+    <p>Worth re-running when the tensor-parallel size changes, when the GPU changes, or when you move to a model with different dimensions. Not worth re-running after a vLLM upgrade unless the kernel itself changed — the files are keyed by shape and device, not by version, and they survive a rebuild on the data volume.</p>
+    <p>One job runs at a time, with progress on the page as it goes. Expect it to take a while: it is a real benchmark of every candidate configuration for every shape.</p>
+
+    <h3>Where the results go</h3>
+    <ul>
+        <li>Written to the data volume, then symlinked into vLLM's own config directory at every startup — so they survive a container rebuild and are picked up without reinstalling anything.</li>
+        <li>Keyed by <em>the device name vLLM reports</em>, not by the marketing name or the architecture. That name is probed from the running vLLM at startup rather than guessed, because the image variants disagree about it — and a file written under the wrong name is correctly formatted and never read. The name in use is shown in <a href="/settings">Settings</a> under Environment.</li>
+    </ul>
     <h2 id="settings">Settings</h2>
     <dl>
         <dt>API &amp; Connection</dt><dd>The external URL shown to clients, an optional API key required as a Bearer token on <code>/v1/*</code>, and the HuggingFace token used for gated downloads.</dd>
