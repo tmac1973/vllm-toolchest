@@ -137,16 +137,17 @@ export gains the matching columns.
 4. The wider benchmark snapshot, one snapshot builder, comparison and CSV
    columns, and the `benchmarks.json` gate.
 
-## 8. Found along the way, not fixed here
+## 8. Found along the way
 
-**A `max_num_seqs` sweep does not change what is launched.** It is offered as a
-sweep parameter (`internal/benchmark/sweep.go`), and `applyOverrides` writes
+**A `max_num_seqs` sweep did not change what was launched.** It is offered as
+a sweep parameter (`internal/benchmark/sweep.go`), and `applyOverrides` writes
 the swept value into the cell's snapshot, but `vllmStartConfigFor`
-(`internal/api/jobs_env.go`) builds the launch from six snapshot fields and
-`MaxNumSeqs` is not one of them. Every cell of such a sweep runs at the model's
-saved value while its run records the swept one, so the comparison shows a
-difference that was never measured. It predates this phase; the fix is two
-lines in `vllmStartConfigFor` and wants its own commit and test.
+(`internal/api/jobs_env.go`) built the launch from six snapshot fields and
+`MaxNumSeqs` was not one of them. Every cell of such a sweep ran at the model's
+saved value while its run recorded the swept one, so the comparison showed a
+difference that was never measured. It predated this phase, and is fixed in its
+own commit with a test. Sweep results for `max_num_seqs` recorded before that
+fix measured the saved value in every cell and should not be trusted.
 
 ## 9. Out of scope
 
