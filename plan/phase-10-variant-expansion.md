@@ -40,7 +40,7 @@ Eleven variants, one manifest each in `variants/<id>.conf`.
 |---|---|---|---|
 | `cuda` | nvidia | `vllm/vllm-openai:v0.29.0` | community |
 | `cuda-source` | nvidia | `Dockerfile.cuda` (PyPI onto CUDA devel) | tested |
-| `rocm` | amd | `rocm/vllm:rocm7.14.1_rdna_…_vllm_0.23.0` | community |
+| `rocm` | amd | `rocm/vllm:rocm7.14.1_rdna_…_vllm_0.23.0` | **tested** |
 | `rocm-cdna` | amd | `rocm/vllm:rocm7.14.1_cdna_…_vllm_0.23.0` | community |
 | `rocm-source` | amd | `Dockerfile.rocm` (Fedora + ROCm, from source) | tested |
 | `radiance` | amd | `stilldeadcode/vllm-radiance:0.9.3` | tested |
@@ -54,9 +54,12 @@ Eleven rather than the eight originally proposed, for two reasons given in §2
 and §3.
 
 `tested` means someone on this project ran it on that hardware. Available here:
-RDNA4 (gfx1201), RDNA3 (RX 7900 XTX, gfx1100) and an NVIDIA card. Nothing has
-been through a real `docker build` on this branch yet, so the four `tested`
-tiers are inherited from the pre-existing paths, not earned by this work.
+RDNA4 (gfx1201), RDNA3 (RX 7900 XTX, gfx1100) and an NVIDIA card.
+
+Only `rocm` has been earned by this work: built and served on the RX 7900 XTX
+on 2026-09-11. The other three `tested` tiers are inherited from the
+pre-existing paths. Everything else is a registry config and an inference until
+somebody builds it.
 
 ---
 
@@ -148,7 +151,17 @@ discriminates, which is `gb10`.
 
 ### rocm / rocm-cdna
 
-See §2.2. `VARIANT_VENV_ROOT=/opt/python`.
+See §2.2. `VARIANT_VENV_ROOT=/opt/python`, confirmed by building.
+
+The tag reads `vllm_0.23.0` and the image reports
+`0.23.1.dev1+g9ddef7117.d20260901.rocm714` — a build from a commit between
+releases. The pin stays at the nearest real release and `VARIANT_TUNER_REF`
+names the commit, because there is no `v0.23.1` tag to fetch the tuner script
+from. `9ddef7117` is a real vllm-project commit (2026-07-14), so the script
+comes from the exact tree AMD built against rather than a nearby tag.
+
+`rocm-cdna` keeps the tag and no tuner ref: the minor matches either way, and
+the commit behind that image is unknown.
 
 ### rocm-source / cuda-source
 
@@ -382,12 +395,22 @@ the reasons given.
 Listed plainly, because the manifests read with more confidence than the
 evidence supports.
 
-1. **Nothing has been through a real `docker build` on this branch.** Every
-   base image, tag, architecture list and venv root came from a registry
-   config. The build assertions in `Dockerfile.prebuilt` will name the right
-   value if a pin or a venv root is wrong, but that is a good failure mode
-   rather than a passing test. `rocm` on the RX 7900 XTX is the cheapest first
-   check.
+1. **One variant has been built and served; ten have not.** `rocm` was built
+   and run on an RX 7900 XTX (gfx1100) on 2026-09-11 — a 4B AWQ model loaded
+   and answered — which proves `Dockerfile.prebuilt` works against a base it
+   was not written for, and that the `/opt/python` venv root read off the image
+   config was right. Everything else is still a registry config and an
+   inference.
+
+   That build found a real defect, which is worth recording because the
+   prediction here was only half right. The assertion did fire on a wrong pin,
+   and the value it suggested would have broken the build one step earlier:
+   `VLLM_VERSION` was both the git ref the tuner script is fetched from and the
+   version compared against, and AMD's image reports
+   `0.23.1.dev1+g9ddef7117.d20260901.rocm714` — not a ref, and `v0.23.1` does
+   not exist as a tag. Fixed by splitting `VARIANT_TUNER_REF` out of
+   `VARIANT_VLLM_PIN` and comparing on the minor. So: a good failure mode, with
+   bad advice attached, found within minutes of the first real build.
 
 2. **`xpu` and `gb10` cannot be validated by anyone here.** `gb10` is gated on
    `aarch64` so it cannot be offered by mistake. `xpu` carries the PCI id list
@@ -397,11 +420,19 @@ evidence supports.
    were not checked. Its `VARIANT_ATTENTION_BACKENDS` is empty, so it gets the
    AMD vendor list.
 
-4. **The support tiers are inherited, not earned.** No variant was promoted or
-   demoted on the strength of this work. `rocm` and `rdna4-clav` are the two
-   most likely to move to `tested` first, on the RDNA3 and RDNA4 hardware
-   available.
+4. **The support tiers are mostly inherited, not earned.** `rocm` was promoted
+   to `tested` on the strength of the build above; it is the only one this work
+   moved. `rdna4-clav` and `radiance` on the RDNA4 box are the next cheapest,
+   and `cuda` on the NVIDIA card after that.
 
-5. **`rdna4-clav` is a name this project chose.** The upstream repository is
+5. **Serving under SELinux logs an io_uring denial**, on Fedora and its
+   relatives. vLLM's engine asks for an io_uring instance, the container policy
+   refuses, and vLLM falls back silently — the model loads and serves, and the
+   engine log contains nothing about it. Observed on the `rocm` build. It is
+   documented in the README because the alert `setroubleshoot` raises suggests
+   an `audit2allow` module that would grant io_uring to every container on the
+   machine, which is a bad trade for a fallback that already works.
+
+6. **`rdna4-clav` is a name this project chose.** The upstream repository is
    `tcclaviger/vllm`; "clav" comes from the CLAV kernels the image itself
    names. If it acquires a name of its own, the manifest should follow it.

@@ -156,6 +156,33 @@ version:
 Since it is a probe and not a runtime check, this also disappears by itself the
 day a conformant image is published upstream.
 
+### SELinux and io_uring
+
+On a distribution with SELinux enforcing -- Fedora, RHEL and their derivatives
+-- starting a model logs an alert that looks alarming and is not:
+
+```
+SELinux is preventing vllm from create access on the anon_inode
+labeled io_uring_t
+```
+
+vLLM's engine asks the kernel for an io_uring instance, SELinux refuses, and
+vLLM falls back to ordinary syscalls. Nothing is lost: the model loads and
+serves, and vLLM does not consider the refusal worth logging. You will see a
+handful of alerts as the engine starts and then none, because it stops asking.
+
+**Do not run the `audit2allow` command the alert suggests.** `container_t` is
+the domain every container on the machine runs in, so that module would grant
+io_uring to all of them, permanently, to fix something that is not broken.
+io_uring is a large and historically CVE-prone kernel surface, and the
+container policy denies it deliberately -- note that Fedora ships no
+`container_use_io_uring` boolean, where it does ship one for the device access
+this tool actually needs (`container_use_devices`, which `setup.sh` enables for
+you).
+
+If you ever do want it -- and you should want a measurement first, not a
+notification -- scope it to this container rather than granting it globally.
+
 ## Development
 
 ```bash
