@@ -197,7 +197,13 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		v.ParserGroups = append(v.ParserGroups, g)
 	}
 
-	for _, opt := range attentionBackendOptions(s.vllmEnv.Descriptor()) {
+	// The configured value is passed in so a backend this image does not offer
+	// is kept rather than silently dropped on the next save.
+	backendOpts := func() []backendOption {
+		d, known := s.vllmEnv.Descriptor()
+		return backendOptionsFor(d, known, c.AttentionBackend)
+	}()
+	for _, opt := range backendOpts {
 		v.BackendOptions = append(v.BackendOptions, selectOption{opt.Val, opt.Label, c.AttentionBackend == opt.Val})
 	}
 	for _, opt := range []struct{ val, label string }{

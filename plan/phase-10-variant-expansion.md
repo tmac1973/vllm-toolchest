@@ -416,9 +416,20 @@ evidence supports.
    `aarch64` so it cannot be offered by mistake. `xpu` carries the PCI id list
    described in §3, and its host-stack pinning is unverified.
 
-3. **`strix-halo`'s attention-backend opinions are not encoded**, because they
-   were not checked. Its `VARIANT_ATTENTION_BACKENDS` is empty, so it gets the
-   AMD vendor list.
+3. **Only `rocm` and `radiance` declare attention backends.** The list moved
+   out of Go and into the manifests after the first real run showed the
+   hardcoded one was wrong twice over: it offered `FLASHINFER` on ROCm images,
+   and three of its five names — `ROCM_FLASH`, `TRITON_FLASH_ATTN`,
+   `XFORMERS` — do not exist in current vLLM at all. Which backends exist is a
+   property of the vLLM build inside a particular image, so it belongs next to
+   the version that image pins.
+
+   `rocm` declares `ROCM_ATTN` and `TRITON_ATTN`, read from the engine log on
+   an RX 7900 XTX. `radiance` declares `R4D`. Every other variant declares
+   none and offers "auto" alone until somebody runs one and reads the log line
+   `out of potential backends: [...]`. `strix-halo` in particular has claimed
+   opinions in §3 that remain unverified; they are written into its manifest
+   as a commented-out line rather than as fact.
 
 4. **The support tiers are mostly inherited, not earned.** `rocm` was promoted
    to `tested` on the strength of the build above; it is the only one this work

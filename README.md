@@ -281,6 +281,20 @@ KNOB_FAST_PATH_VALUES='- 1 0'         # "-" is "leave the image default alone"
 KNOB_FAST_PATH_RECOMMENDED='-'
 ```
 
+Attention backends are declared the same way, and only the ones the image
+actually has:
+
+```sh
+VARIANT_ATTENTION_BACKENDS='ROCM_ATTN TRITON_ATTN'
+BACKEND_ROCM_ATTN_LABEL='ROCM_ATTN — what vLLM picks here by default'
+```
+
+Leave it out if you do not know, and the picker offers "auto" alone. That is
+the right default: vLLM's own selection is usually correct, and naming a
+backend the stack does not have aborts the engine minutes into a load rather
+than falling back. To find the real list, start a model and read the engine log
+line `out of potential backends: [...]`.
+
 After adding a switch, run `make env-example` to regenerate its documentation,
 and add its variable to the vendor's compose file as a bare `- THEIR_FAST_PATH`
 entry so it reaches the container. Tests fail if you forget either.
