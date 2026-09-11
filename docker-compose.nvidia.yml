@@ -28,6 +28,7 @@ services:
         # treats empty as "latest"; Dockerfile.prebuilt reads it as the tag
         # the base was built against. Both take the same variable.
         VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-}"
+        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
     container_name: vllm-toolchest
     ports:
       - "${VLLMCTL_PORT:-3000}:3000"

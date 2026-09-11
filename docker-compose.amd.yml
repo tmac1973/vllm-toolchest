@@ -31,6 +31,7 @@ services:
         VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/opt/vllm}"
         STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
         VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-v0.27.1}"
+        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
 
         # From-source variants only. Harmless to the prebuilt Dockerfile,
         # which does not declare them: an unconsumed build arg is a warning,

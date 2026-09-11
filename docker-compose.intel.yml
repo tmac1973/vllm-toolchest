@@ -21,6 +21,7 @@ services:
         VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/opt/venv}"
         STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
         VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-v0.26.0}"
+        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
     container_name: vllm-toolchest
     ports:
       - "${VLLMCTL_PORT:-3000}:3000"

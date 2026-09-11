@@ -144,3 +144,42 @@ func TestPrebuiltVariantsArePinned(t *testing.T) {
 		})
 	}
 }
+
+// The vLLM pin doubles as the git ref the tuner benchmark script is fetched
+// from, unless the manifest names one separately. A version like
+// "0.23.1.dev1+g9ddef7117" has no tag behind it, so a pin in that shape would
+// 404 the fetch -- which is how this was found, halfway through a real build.
+func TestPinIsAFetchableRefOrTunerRefIsSet(t *testing.T) {
+	for _, d := range variants.All() {
+		if d.BaseImage == "" || d.VLLMPin == "" || d.VLLMPin == "main" {
+			continue
+		}
+		t.Run(d.ID, func(t *testing.T) {
+			if d.TunerRef != "" {
+				return // an explicit ref settles it
+			}
+			// Release tags look like v1.2.3. A "+" local-version segment or a
+			// ".dev" counter means this came from `pip show`, not from a tag.
+			for _, marker := range []string{"+", ".dev", ".post", ".rc"} {
+				if strings.Contains(d.VLLMPin, marker) {
+					t.Errorf("VARIANT_VLLM_PIN=%q contains %q, so it is a reported version rather than "+
+						"a git ref and the tuner fetch would 404. Set VARIANT_VLLM_PIN to the nearest "+
+						"release and VARIANT_TUNER_REF to the commit (the part after +g).",
+						d.VLLMPin, marker)
+				}
+			}
+		})
+	}
+}
+
+// A tuner ref is a git ref: a tag, a branch or a commit sha. Never a version.
+func TestTunerRefLooksLikeAGitRef(t *testing.T) {
+	for _, d := range variants.All() {
+		if d.TunerRef == "" {
+			continue
+		}
+		if strings.ContainsAny(d.TunerRef, "+ ") {
+			t.Errorf("%s: VARIANT_TUNER_REF=%q is not a git ref", d.ID, d.TunerRef)
+		}
+	}
+}

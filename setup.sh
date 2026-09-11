@@ -1431,7 +1431,7 @@ write_env_file() {
     local managed=(
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
         VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
-        VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN
+        VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN VLLMCTL_TUNER_REF
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
         HIP_VISIBLE_DEVICES
     )
@@ -1463,6 +1463,9 @@ write_env_file() {
         # "main" is the from-source marker, not a tag to pin a prebuilt base
         # against, so it is not written through.
         [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
+        local _tref
+        _tref="$(variant_field "$BUILD_VARIANT" TUNER_REF)"
+        [[ -n "$_tref" ]] && echo "VLLMCTL_TUNER_REF=${_tref}"
 
         [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
         [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"

@@ -39,6 +39,11 @@
 # them explicitly from the manifest.
 ARG BASE_IMAGE=docker.io/stilldeadcode/vllm-radiance:0.9.3
 ARG VLLM_VERSION=v0.27.1
+# Which vLLM source tree to take the tuner benchmark script from. Usually the
+# pin above, but a base built from a commit between releases reports a version
+# that is not a git ref at all -- "0.23.1.dev1+g9ddef7117" has no v0.23.1 tag
+# behind it. Where the manifest knows the commit, it names it here.
+ARG TUNER_REF=
 ARG GPU_ARCH=gfx1201
 ARG VARIANT_ID=radiance
 # Where vLLM lives inside the base, and the file proving this really is that
@@ -62,9 +67,12 @@ RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 # reference kernels this vLLM does not have.
 FROM docker.io/library/alpine:3.22 AS tuner-fetch
 ARG VLLM_VERSION
+ARG TUNER_REF
 RUN apk add --no-cache curl && \
+    ref="${TUNER_REF:-${VLLM_VERSION}}" && \
+    echo "fetching the tuner benchmark from vllm-project/vllm@${ref}" && \
     curl -fsSL -o /benchmark_w8a8_block_fp8.py \
-      "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_VERSION}/benchmarks/kernels/benchmark_w8a8_block_fp8.py" && \
+      "https://raw.githubusercontent.com/vllm-project/vllm/${ref}/benchmarks/kernels/benchmark_w8a8_block_fp8.py" && \
     head -c 200 /benchmark_w8a8_block_fp8.py
 
 # ── Stage 3: the runtime image ─────────────────────────────────────────────
@@ -78,6 +86,7 @@ ARG GPU_ARCH
 ARG VARIANT_ID
 ARG VENV_ROOT
 ARG STAMP_FILE
+ARG TUNER_REF
 
 # VLLMCTL_IMAGE_VARIANT is how the running binary knows which manifest
 # describes it, and therefore which feature knobs to offer.
@@ -149,10 +158,23 @@ RUN set -e; \
     command -v vllm >/dev/null || { echo "FATAL: vllm not on PATH"; exit 1; }; \
     installed="$(python -c 'import importlib.metadata as m; print(m.version("vllm"))')"; \
     want="${VLLM_VERSION#v}"; \
-    case "$installed" in "$want"*) ;; *) \
-      echo "FATAL: the tuner script was fetched from vLLM ${VLLM_VERSION} but this image has vLLM ${installed}."; \
-      echo "       Set VARIANT_VLLM_PIN in variants/${VARIANT_ID}.conf to v${installed}."; exit 1 ;; \
-    esac; \
+    imm="$(echo "$installed" | cut -d. -f1,2)"; \
+    wmm="$(echo "$want" | cut -d. -f1,2)"; \
+    if [ "$imm" != "$wmm" ]; then \
+      echo "FATAL: this image has vLLM ${installed}, but variants/${VARIANT_ID}.conf pins ${VLLM_VERSION}."; \
+      echo "       Those are different minor versions, so the tuner benchmark script"; \
+      echo "       fetched from ${TUNER_REF:-${VLLM_VERSION}} may reference kernels this vLLM"; \
+      echo "       does not have."; \
+      echo ""; \
+      echo "       Set VARIANT_VLLM_PIN to v${imm}.0 (the nearest release), and if that"; \
+      echo "       tag does not exist upstream, set VARIANT_TUNER_REF to the commit the"; \
+      echo "       image was built from -- for a version like 1.2.3.dev4+gabc123 that is"; \
+      echo "       abc123, the part after the +g."; \
+      exit 1; \
+    fi; \
+    if [ "$installed" != "$want" ]; then \
+      echo "note: image reports vllm ${installed}, manifest pins ${VLLM_VERSION} — same minor, so the tuner script matches"; \
+    fi; \
     echo "${VARIANT_ID} base OK: vllm ${installed}"
 
 VOLUME ["/data"]

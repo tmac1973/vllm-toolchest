@@ -118,6 +118,10 @@ type Descriptor struct {
 	Dockerfile   string
 	NeedsFlatten bool
 	VLLMPin      string
+	// TunerRef is the git ref the tuner benchmark script is fetched from,
+	// when the pin is not itself one. A base built between releases reports
+	// a version with no tag behind it.
+	TunerRef string
 
 	GFXTargets []string
 	HostArch   string
@@ -373,6 +377,7 @@ func parse(id string, src string) (Descriptor, error) {
 		Dockerfile:   kv["VARIANT_DOCKERFILE"],
 		NeedsFlatten: kv["VARIANT_NEEDS_FLATTEN"] == "1",
 		VLLMPin:      kv["VARIANT_VLLM_PIN"],
+		TunerRef:     kv["VARIANT_TUNER_REF"],
 		GFXTargets:   strings.Fields(kv["VARIANT_GFX_TARGETS"]),
 		HostArch:     kv["VARIANT_HOST_ARCH"],
 		VenvRoot:     kv["VARIANT_VENV_ROOT"],
