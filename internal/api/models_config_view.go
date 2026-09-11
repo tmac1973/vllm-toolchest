@@ -35,6 +35,15 @@ type modelConfigView struct {
 	TotalGB    float64
 	FitLabel   string
 
+	// Profiles. Banner is what the last profile action had to say, and
+	// ReadOnly is why nothing on the panel can be saved, when that is so.
+	Banner         panelBanner
+	ReadOnly       string
+	Profiles       []selectOption
+	ActiveProfile  string
+	ProfileDirty   bool
+	ProfileNameMax int
+
 	// Core
 	DtypeOptions []selectOption
 	MaxCtx       int
@@ -137,6 +146,13 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		ChatTemplate:           c.ChatTemplate,
 		Tokenizer:              c.Tokenizer,
 		ExtraFlags:             c.ExtraFlags,
+	}
+
+	v.ReadOnly = s.registry.ReadOnly()
+	v.ActiveProfile, v.ProfileDirty = s.registry.ActiveProfile(m.ID)
+	v.ProfileNameMax = models.MaxProfileNameLen
+	for _, p := range s.registry.Profiles(m.ID) {
+		v.Profiles = append(v.Profiles, selectOption{p.Name, profileLabel(p), p.Name == v.ActiveProfile})
 	}
 
 	for _, opt := range []string{"auto", "float16", "bfloat16", "float32"} {

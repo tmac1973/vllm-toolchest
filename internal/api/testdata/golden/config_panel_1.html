@@ -7,6 +7,28 @@
     <strong>VRAM Estimate:</strong> 23.0 GB weights + 0.5 GB overhead = <strong>23.5 GB</strong> &mdash; Fits single GPU
   </div>
   
+  <div class="model-profiles" hx-target="#config-TheBloke--Mixtral-8x7B-AWQ" hx-swap="innerHTML"
+       hx-on::before-request="window._cfgScrollY=window.scrollY"
+       hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})">
+    
+    <div role="group">
+      <select id="profile-pick-TheBloke--Mixtral-8x7B-AWQ" name="name" aria-label="Saved profiles" disabled><option value="">(no saved profiles)</option></select>
+      <button type="button" class="outline" disabled
+              hx-post="/api/models/profiles/apply?id=TheBloke/Mixtral-8x7B-AWQ" hx-include="#profile-pick-TheBloke--Mixtral-8x7B-AWQ">Restore</button>
+      <button type="button" class="outline secondary" disabled
+              hx-post="/api/models/profiles/delete?id=TheBloke/Mixtral-8x7B-AWQ" hx-include="#profile-pick-TheBloke--Mixtral-8x7B-AWQ"
+              hx-confirm="Delete this profile? The settings below are not changed.">Delete</button>
+    </div>
+    
+    <div role="group">
+      <input type="text" id="profile-name-TheBloke--Mixtral-8x7B-AWQ" name="name" maxlength="64" autocomplete="off"
+             placeholder="Name these settings" value=""
+             onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click();}">
+      <button type="button" class="outline"
+              hx-post="/api/models/profiles?id=TheBloke/Mixtral-8x7B-AWQ" hx-include="#profile-name-TheBloke--Mixtral-8x7B-AWQ">Save as profile</button>
+    </div>
+  </div>
+  
   <form hx-put="/api/models/config?id=TheBloke/Mixtral-8x7B-AWQ" hx-trigger="change delay:500ms" hx-target="#config-TheBloke--Mixtral-8x7B-AWQ" hx-swap="innerHTML" hx-include="closest form"
         hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
         hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"

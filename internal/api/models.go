@@ -148,9 +148,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-
-	respondHTML(w)
-	s.renderPartial(w, "model_config", s.newModelConfigView(m))
+	s.renderConfigPanel(w, m, panelBanner{})
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {

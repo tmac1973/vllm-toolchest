@@ -12,21 +12,22 @@
        hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})">
     
     <div role="group">
-      <select id="profile-pick-unsloth--Qwen3-8-27B-FP8" name="name" aria-label="Saved profiles" disabled><option value="">(no saved profiles)</option></select>
-      <button type="button" class="outline" disabled
+      <select id="profile-pick-unsloth--Qwen3-8-27B-FP8" name="name" aria-label="Saved profiles"><option value="long ctx">long ctx — saved 2026-03-02 on radiance</option><option value="tp2 baseline" selected>tp2 baseline — saved 2026-03-01 on rocm-source</option></select>
+      <button type="button" class="outline"
               hx-post="/api/models/profiles/apply?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-pick-unsloth--Qwen3-8-27B-FP8">Restore</button>
-      <button type="button" class="outline secondary" disabled
+      <button type="button" class="outline secondary"
               hx-post="/api/models/profiles/delete?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-pick-unsloth--Qwen3-8-27B-FP8"
               hx-confirm="Delete this profile? The settings below are not changed.">Delete</button>
     </div>
     
     <div role="group">
       <input type="text" id="profile-name-unsloth--Qwen3-8-27B-FP8" name="name" maxlength="64" autocomplete="off"
-             placeholder="Name these settings" value=""
+             placeholder="Name these settings" value="tp2 baseline"
              onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click();}">
       <button type="button" class="outline"
               hx-post="/api/models/profiles?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-name-unsloth--Qwen3-8-27B-FP8">Save as profile</button>
     </div>
+    <small class="mp-from">From profile <strong>tp2 baseline</strong> &mdash; edited since.</small>
   </div>
   
   <form hx-put="/api/models/config?id=unsloth/Qwen3.8-27B-FP8" hx-trigger="change delay:500ms" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML" hx-include="closest form"

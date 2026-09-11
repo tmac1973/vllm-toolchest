@@ -661,6 +661,19 @@
         .model-card-config button { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
         .model-card-config label { font-size: 0.85rem; }
         .model-card-config small { font-size: 0.8rem; }
+        /* Saved profiles of this config, above the autosaving form and
+           deliberately outside it. */
+        .model-profiles {
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--pico-muted-border-color);
+        }
+        .model-profiles [role="group"] { margin-bottom: 0.5rem; }
+        .model-profiles .mp-msg { margin: 0 0 0.5rem; font-size: 0.8rem; font-weight: 600; }
+        .model-profiles .mp-ok { color: var(--pico-ins-color); }
+        .model-profiles .mp-warn { color: var(--graphite-warn, var(--pico-primary)); }
+        .model-profiles .mp-error { color: var(--pico-del-color); }
+        .model-profiles .mp-from { color: var(--pico-muted-color); }
 
         /* Available Models card (on the Server page) — cap the list height so
            a large registry scrolls inside the card instead of stretching the

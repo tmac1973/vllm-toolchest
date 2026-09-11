@@ -1,6 +1,10 @@
 package api
 
-import "github.com/tmac1973/vllm-toolchest/variants"
+import (
+	"fmt"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
+)
 
 // backendOption is one entry in an attention-backend picker.
 // Fields are exported so html/template can read them.
@@ -62,4 +66,22 @@ func backendOptionsFor(d variants.Descriptor, known bool, configured string) []b
 		configured,
 		configured + " — configured here, but not one this image offers",
 	})
+}
+
+// unofferedBackendWarning says so when a restored profile's picker backend is
+// one this image does not offer — the case backendOptionsFor keeps as a
+// labelled option. Silent when the variant declares no backends, for the
+// reason validateNamedBackends is: a wrong name cannot then be told from one
+// there is simply no record of.
+func unofferedBackendWarning(d variants.Descriptor, known bool, configured string) string {
+	if configured == "" || !known || len(d.AttentionBackends) == 0 {
+		return ""
+	}
+	for _, b := range d.AttentionBackends {
+		if b.Value == configured {
+			return ""
+		}
+	}
+	return fmt.Sprintf("Its attention backend, %s, is not one the %s image offers. "+
+		"It is kept in the picker below; choose another before starting.", configured, d.ID)
 }

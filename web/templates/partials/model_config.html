@@ -7,6 +7,52 @@
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> {{printf "%.1f" .WeightGB}} GB weights + {{printf "%.1f" .OverheadGB}} GB overhead = <strong>{{printf "%.1f" .TotalGB}} GB</strong> &mdash; {{.FitLabel}}
   </div>
+  {{/* The profile controls sit OUTSIDE the config form below, and that is the
+       whole reason this block is here rather than in a fieldset. The form
+       autosaves on "change" with hx-include="closest form": a select inside
+       it would save the config every time the operator browsed the list, and
+       the name box would be posted with every save. */}}
+  <div class="model-profiles" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML"
+       hx-on::before-request="window._cfgScrollY=window.scrollY"
+       hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})">
+    {{- with .ReadOnly}}
+    <p class="mp-msg mp-error">models.json {{.}}, so nothing on this panel will be saved.</p>
+    {{- end}}
+    {{- with .Banner.OK}}
+    <p class="mp-msg mp-ok">{{.}}</p>
+    {{- end}}
+    {{- with .Banner.Warning}}
+    <p class="mp-msg mp-warn">&#9888; {{.}}</p>
+    {{- end}}
+    {{- with .Banner.Error}}
+    <p class="mp-msg mp-error">{{.}}</p>
+    {{- end}}
+    {{/* No confirm on Restore: replacing a config that was never saved is the
+         operator's business. Delete does confirm, because the live config can
+         be saved again from this panel and a deleted profile cannot. */}}
+    <div role="group">
+      <select id="profile-pick-{{.SafeID}}" name="name" aria-label="Saved profiles"{{if not .Profiles}} disabled{{end}}>
+        {{- range .Profiles}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{else}}<option value="">(no saved profiles)</option>{{end -}}
+      </select>
+      <button type="button" class="outline"{{if not .Profiles}} disabled{{end}}
+              hx-post="/api/models/profiles/apply?id={{.ID}}" hx-include="#profile-pick-{{.SafeID}}">Restore</button>
+      <button type="button" class="outline secondary"{{if not .Profiles}} disabled{{end}}
+              hx-post="/api/models/profiles/delete?id={{.ID}}" hx-include="#profile-pick-{{.SafeID}}"
+              hx-confirm="Delete this profile? The settings below are not changed.">Delete</button>
+    </div>
+    {{/* Pre-filled with the active profile, so restore, adjust, save again
+         under the same name is two clicks; the banner then says Replaced. */}}
+    <div role="group">
+      <input type="text" id="profile-name-{{.SafeID}}" name="name" maxlength="{{.ProfileNameMax}}" autocomplete="off"
+             placeholder="Name these settings" value="{{.ActiveProfile}}"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click();}">
+      <button type="button" class="outline"
+              hx-post="/api/models/profiles?id={{.ID}}" hx-include="#profile-name-{{.SafeID}}">Save as profile</button>
+    </div>
+    {{- if .ActiveProfile}}
+    <small class="mp-from">From profile <strong>{{.ActiveProfile}}</strong>{{if .ProfileDirty}} &mdash; edited since{{end}}.</small>
+    {{- end}}
+  </div>
   {{/* A rejected save leaves the form unswapped and htmx says nothing about
        it, so the panel just looks frozen — including for changes whose
        re-render would reveal new fields. Surface the response text, and put

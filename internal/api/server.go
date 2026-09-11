@@ -225,6 +225,12 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/config-panel", s.handleModelConfigPanel)
 			r.Put("/activate", s.handleActivateModel)
 			r.Put("/config", s.handleUpdateModelConfig)
+			// Profiles are all POST, delete included: htmx sends included
+			// parameters in the body for a DELETE, and ParseForm only reads
+			// a body for POST, PUT and PATCH — the name would arrive nowhere.
+			r.Post("/profiles", s.handleSaveModelProfile)
+			r.Post("/profiles/apply", s.handleApplyModelProfile)
+			r.Post("/profiles/delete", s.handleDeleteModelProfile)
 			r.Delete("/delete", s.handleDeleteModel)
 		})
 		r.Route("/hf", func(r chi.Router) {
