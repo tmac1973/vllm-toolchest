@@ -65,6 +65,40 @@ type QuantMeta struct {
 	Sym           bool    `json:"sym,omitempty"`
 	GGUFQuantType string  `json:"gguf_quant_type,omitempty"`
 	BytesPerParam float64 `json:"bytes_per_param"`
+
+	// WeightBlockSize is the [block_n, block_k] the weight scales are applied
+	// over, for checkpoints quantized blockwise. Empty for per-tensor,
+	// per-channel and per-group schemes.
+	//
+	// This is what decides whether kernel tuning can do anything: the tuner
+	// targets the block-FP8 GEMM, and only a blockwise checkpoint reaches it.
+	// "FP8" alone is not enough — a per-channel FP8 model takes a different
+	// code path entirely.
+	WeightBlockSize []int `json:"weight_block_size,omitempty"`
+}
+
+// IsBlockFP8 reports whether this checkpoint's linear layers run the
+// block-quantized FP8 GEMM, which is the only thing kernel tuning affects.
+//
+// Requires both a block shape and 8-bit float weights. A blockwise INT8
+// checkpoint has the first and not the second, and would gain nothing.
+func (q QuantMeta) IsBlockFP8() bool {
+	if len(q.WeightBlockSize) < 2 {
+		return false
+	}
+	for _, d := range q.WeightBlockSize {
+		if d <= 0 {
+			return false
+		}
+	}
+	switch q.Method {
+	case "fp8":
+		return true
+	case "compressed-tensors", "compressed_tensors":
+		// Bits is resolved from config_groups during detection.
+		return q.Bits == 8
+	}
+	return false
 }
 
 // ToolUseMeta holds tool/function calling detection info.

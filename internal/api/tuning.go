@@ -53,9 +53,13 @@ func (s *Server) buildTuningViews() []modelTuningView {
 	all := s.registry.List()
 	out := make([]modelTuningView, 0, len(all))
 	for _, m := range all {
-		isFP8 := m.Quantization.Method == "fp8" ||
-			m.Quantization.Method == "compressed-tensors" ||
-			m.Quantization.Method == "compressed_tensors"
+		// Eligibility is the kernel's own requirement, not an approximation
+		// of it. Matching on the method alone marked every FP8 and
+		// compressed-tensors checkpoint as tunable, including per-channel FP8
+		// and 4-bit weight-only data wearing the compressed-tensors label --
+		// both of which take a different code path and would have shown a
+		// shape count, run a tuning job, and change nothing.
+		isFP8 := m.Quantization.IsBlockFP8()
 		tp := m.VLLMConfig.TensorParallelSize
 		if tp < 1 {
 			tp = 1

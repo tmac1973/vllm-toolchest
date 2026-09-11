@@ -109,8 +109,8 @@ func TestHelpTuningCoversApplicabilityAndRisk(t *testing.T) {
 	for _, want := range []struct{ phrase, why string }{
 		{"stops the running vLLM server", "a tuning run takes the server down and that must be stated"},
 		{"block-quantized FP8", "the format it applies to"},
-		{"per tensor or per channel", "the FP8 checkpoints it does not apply to"},
-		{"looser test than the kernel", "the eligibility marker is coarser than the kernel's real requirement"},
+		{"block_structure", "how eligibility is actually determined, rather than by format label"},
+		{"per tensor, per channel or per group", "the FP8 scalings that do not qualify"},
 		{"tensor-parallel factor", "shapes depend on TP, so results do not carry across it"},
 		{"different subsystem from the attention backend", "the two are routinely confused"},
 		{"block size (128)", "why the shape count is smaller than the matmul count"},

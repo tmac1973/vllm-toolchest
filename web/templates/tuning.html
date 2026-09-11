@@ -77,7 +77,7 @@
     <thead>
       <tr>
         <th>Model</th>
-        <th>FP8?</th>
+        <th title="Only block-quantized FP8 reaches the kernel this tunes. Per-tensor, per-channel and per-group schemes take a different path, whatever their badge says.">Block-FP8?</th>
         <th>TP</th>
         <th>Shapes (tuned / total)</th>
         <th>Action</th>
@@ -105,7 +105,7 @@
           </details>
           {{end}}
         </td>
-        <td>{{if .IsFP8}}<mark>yes</mark>{{else}}<small>no</small>{{end}}</td>
+        <td>{{if .IsFP8}}<mark>yes</mark>{{else}}<small title="Not block-quantized FP8, so tuning would change nothing.">no</small>{{end}}</td>
         <td>{{.TPSize}}</td>
         <td>
           {{if .TotalCount}}
