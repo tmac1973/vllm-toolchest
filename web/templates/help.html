@@ -216,6 +216,7 @@
     </ul>
     <p>Worth re-running when the tensor-parallel size changes, when the GPU changes, or when you move to a model with different dimensions. Not worth re-running after a vLLM upgrade unless the kernel itself changed — the files are keyed by shape and device, not by version, and they survive a rebuild on the data volume.</p>
     <p>One job runs at a time, with progress on the page as it goes. Expect it to take a while: it is a real benchmark of every candidate configuration for every shape.</p>
+    <p>A <em>Tune</em> button also appears on the <a href="/models">Models</a> page, on the cards of models that qualify &mdash; and only those, so the absence of one is itself the answer to "would tuning help here?". It starts the same job and takes you to this page to watch it.</p>
 
     <h3>Where the results go</h3>
     <ul>

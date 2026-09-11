@@ -62,6 +62,17 @@
                         hx-on::before-request="let t=document.getElementById('config-{{.SafeID}}'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
                     Configure
                 </button>
+                {{- if .Tunable}}
+                {{/* Only for block-quantized FP8: those are the only checkpoints
+                     whose linear layers reach the kernel the tuner measures. The
+                     confirm is not optional politeness -- a tuning run stops the
+                     serving vLLM to take the GPU. */}}
+                <button type="button" class="outline secondary"
+                        title="Autotune the block-FP8 GEMM kernels for this model's {{.TunableShapes}} matmul shapes. Stops the running server."
+                        onclick="tuneModel('{{.ID}}')">
+                    Tune
+                </button>
+                {{- end}}
                 <button type="button" class="outline secondary"
                         onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
                     Remove

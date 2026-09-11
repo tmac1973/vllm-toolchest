@@ -50,5 +50,25 @@ function filterModels(q) {
         card.style.display = matches ? '' : 'none';
     });
 }
+
+// Kernel tuning, started from a model card. Same endpoint the Tuning page
+// uses, and the same confirmation: a run stops the serving vLLM to take the
+// GPU, which is not something to discover afterwards.
+//
+// On success we go to the Tuning page rather than reloading this one, because
+// that is where the progress and the log are — starting a job and being left
+// on an unchanged page reads as though nothing happened.
+function tuneModel(modelID) {
+    if (!confirm("Tuning " + modelID + " will stop the running vLLM server (if any) "
+               + "and measure kernel configurations for its matmul shapes.\n\nProceed?")) return;
+    fetch("/api/tuning/start", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({model_id: modelID}),
+    }).then(function (r) {
+        if (r.ok) { window.location = "/tuning"; return; }
+        r.text().then(function (t) { alert("Could not start tuning: " + t); });
+    });
+}
 </script>
 {{end}}
