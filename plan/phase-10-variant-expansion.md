@@ -412,11 +412,28 @@ evidence supports.
    `VARIANT_VLLM_PIN` and comparing on the minor. So: a good failure mode, with
    bad advice attached, found within minutes of the first real build.
 
-2. **`xpu` and `gb10` cannot be validated by anyone here.** `gb10` is gated on
+2. **Two vLLM pins are guesses, and one of them was already wrong.**
+   `rdna4-clav` was pinned `v0.28.0` because its tag reads `28.02.2`. That is
+   the author's own release numbering; the image actually carries
+   `0.27.0.dev0+g55c98e370a`, and the build assertion caught it on the first
+   real attempt. Now pinned from the built image, with the tuner fetched from
+   that commit.
+
+   `xpu` has the same shape and is still unverified: `0.26.0-b2` is Intel's
+   llm-scaler release number, and their release notes do not say which vLLM is
+   inside. It will fail the same assertion, with the same instructions, the
+   first time anyone builds it.
+
+   The rule this produced: a tag that merely *looks* like a version is not
+   evidence. Only a tag that names vLLM (`..._vllm_0.23.0`,
+   `...-vllm0.28.0`, `v0.29.0` on vLLM's own image) or a reading off the built
+   image counts. Each manifest now records which it was.
+
+3. **`xpu` and `gb10` cannot be validated by anyone here.** `gb10` is gated on
    `aarch64` so it cannot be offered by mistake. `xpu` carries the PCI id list
    described in §3, and its host-stack pinning is unverified.
 
-3. **Only `rocm` and `radiance` declare attention backends.** The list moved
+4. **Only `rocm` and `radiance` declare attention backends.** The list moved
    out of Go and into the manifests after the first real run showed the
    hardcoded one was wrong twice over: it offered `FLASHINFER` on ROCm images,
    and three of its five names — `ROCM_FLASH`, `TRITON_FLASH_ATTN`,
@@ -431,12 +448,12 @@ evidence supports.
    opinions in §3 that remain unverified; they are written into its manifest
    as a commented-out line rather than as fact.
 
-4. **The support tiers are mostly inherited, not earned.** `rocm` was promoted
+5. **The support tiers are mostly inherited, not earned.** `rocm` was promoted
    to `tested` on the strength of the build above; it is the only one this work
    moved. `rdna4-clav` and `radiance` on the RDNA4 box are the next cheapest,
    and `cuda` on the NVIDIA card after that.
 
-5. **Serving under SELinux logs an io_uring denial**, on Fedora and its
+6. **Serving under SELinux logs an io_uring denial**, on Fedora and its
    relatives. vLLM's engine asks for an io_uring instance, the container policy
    refuses, and vLLM falls back silently — the model loads and serves, and the
    engine log contains nothing about it. Observed on the `rocm` build. It is
@@ -444,6 +461,6 @@ evidence supports.
    an `audit2allow` module that would grant io_uring to every container on the
    machine, which is a bad trade for a fallback that already works.
 
-6. **`rdna4-clav` is a name this project chose.** The upstream repository is
+7. **`rdna4-clav` is a name this project chose.** The upstream repository is
    `tcclaviger/vllm`; "clav" comes from the CLAV kernels the image itself
    names. If it acquires a name of its own, the manifest should follow it.
