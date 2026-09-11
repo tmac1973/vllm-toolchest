@@ -150,6 +150,13 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	if snap.EnforceEager {
 		eager = true
 	}
+	// max_num_seqs is a sweep axis, and was once missing here: every cell of
+	// such a sweep launched at the model's saved value while its run recorded
+	// the swept one, and the comparison showed a difference never measured.
+	maxSeqs := v.MaxNumSeqs
+	if snap.MaxNumSeqs > 0 {
+		maxSeqs = snap.MaxNumSeqs
+	}
 	// Start from the model's own config so every flag it was configured with
 	// survives — including the served name — then apply the fields this job's
 	// snapshot overrides.
@@ -160,6 +167,7 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	cfg.GPUMemoryUtilization = gmu
 	cfg.EnforceEager = eager
 	cfg.KVCacheDtype = kv
+	cfg.MaxNumSeqs = maxSeqs
 	return cfg
 }
 
