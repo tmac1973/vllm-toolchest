@@ -1,6 +1,8 @@
 # Phase 11: Per-model config profiles
 
-**Status:** in progress on the `variant-manifests` branch.
+**Status:** implemented on the `variant-manifests` branch, in the four commits
+§7 lists, with unit, handler and golden tests. Not yet exercised in a browser
+against a live server.
 
 ## About this document
 
@@ -135,7 +137,18 @@ export gains the matching columns.
 4. The wider benchmark snapshot, one snapshot builder, comparison and CSV
    columns, and the `benchmarks.json` gate.
 
-## 8. Out of scope
+## 8. Found along the way, not fixed here
+
+**A `max_num_seqs` sweep does not change what is launched.** It is offered as a
+sweep parameter (`internal/benchmark/sweep.go`), and `applyOverrides` writes
+the swept value into the cell's snapshot, but `vllmStartConfigFor`
+(`internal/api/jobs_env.go`) builds the launch from six snapshot fields and
+`MaxNumSeqs` is not one of them. Every cell of such a sweep runs at the model's
+saved value while its run records the swept one, so the comparison shows a
+difference that was never measured. It predates this phase; the fix is two
+lines in `vllmStartConfigFor` and wants its own commit and test.
+
+## 9. Out of scope
 
 - Converting the autosave's rejection to the banner, so a refused save no
   longer replaces the panel with a bare error line. An obvious follow-up; it
@@ -145,3 +158,9 @@ export gains the matching columns.
   version.
 - Validating tool-call and reasoning parser names, which vary by vLLM version.
   The better source is `vllmctl` reading the installed parser registry at boot.
+- Showing a read-only `benchmarks.json` on the Benchmarks page. The store
+  refuses to write and logs why, but nothing in the UI says so yet; a run
+  recorded meanwhile is visible until the next restart and then gone. The
+  config panel does show a read-only `models.json`.
+- A test for the sweep clearing the profile label on its cells. It is one line
+  in `runCell`, and driving `runCell` needs a job-runner harness.
