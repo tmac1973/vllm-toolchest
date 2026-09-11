@@ -39,15 +39,7 @@ func (e *jobEnv) ResolveModel(modelID string) (benchmark.ModelInfo, error) {
 		// EnsureModelLoaded first; we re-resolve the served name here so
 		// the value is current.
 		ServedName: e.resolveServedName(m),
-		Config: benchmark.ConfigSnapshot{
-			MaxModelLen:          m.VLLMConfig.MaxModelLen,
-			TensorParallelSize:   m.VLLMConfig.TensorParallelSize,
-			GPUMemoryUtilization: m.VLLMConfig.GPUMemoryUtilization,
-			KVCacheDtype:         m.VLLMConfig.KVCacheDtype,
-			EnforceEager:         m.VLLMConfig.EnforceEager,
-			Dtype:                m.VLLMConfig.Dtype,
-			QuantMethod:          m.Quantization.Method,
-		},
+		Config:     e.s.configSnapshotFromModel(m),
 	}, nil
 }
 

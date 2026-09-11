@@ -16,7 +16,12 @@ import (
 var noTime time.Time
 
 // schemaVersion is the on-disk envelope version this build writes.
-const schemaVersion = 1
+//
+//	1  the original file
+//	2  the wider config snapshot (profile, speculative config, backend and
+//	   the rest), and the first version this build refuses to overwrite a
+//	   file it did not fully understand
+const schemaVersion = 2
 
 // benchmarksFileName is the on-disk location relative to the data dir's
 // config subdirectory.
@@ -42,6 +47,13 @@ type Store struct {
 	runs     []BenchmarkRun
 	jobs     []BenchmarkJob
 
+	// readOnlyReason is set when load() could not take responsibility for the
+	// file it found. save() rewrites the whole file, so a load that returned
+	// early used to mean the next run recorded replaced all of history with
+	// itself — and unlike the model registry, benchmark history cannot be
+	// rebuilt by rescanning anything. Set only during construction.
+	readOnlyReason string
+
 	timing *timingStore
 }
 
@@ -61,23 +73,48 @@ func (s *Store) load() {
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Error("failed to load benchmarks.json", "error", err)
+			s.readOnlyReason = fmt.Sprintf("could not be read (%v)", err)
+			slog.Error("failed to load benchmarks.json — benchmark history is read-only", "error", err, "path", s.filePath)
 		}
 		return
 	}
 
 	var bf benchmarkFile
 	if err := json.Unmarshal(data, &bf); err != nil {
-		slog.Error("failed to parse benchmarks.json", "error", err)
+		s.readOnlyReason = fmt.Sprintf("could not be parsed (%v)", err)
+		slog.Error("failed to parse benchmarks.json — benchmark history is read-only", "error", err, "path", s.filePath)
 		return
+	}
+	// A newer file carries fields this build would drop on rewrite. Version 0
+	// is a file written before the field existed, and is read as current.
+	if bf.Version > schemaVersion {
+		s.readOnlyReason = fmt.Sprintf("is schema version %d, and this build writes %d", bf.Version, schemaVersion)
+		slog.Error("benchmarks.json is newer than this build — benchmark history is read-only",
+			"file_version", bf.Version, "build_version", schemaVersion, "path", s.filePath)
 	}
 	s.runs = bf.Runs
 	s.jobs = bf.Jobs
 }
 
+// ReadOnly reports why the store refuses to write, or "" when it does not.
+func (s *Store) ReadOnly() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readOnlyReason
+}
+
 // save writes the current store state to disk atomically. Callers must
 // hold s.mu (read or write — we copy slices before serializing).
+//
+// A read-only store refuses here and nowhere earlier. That is enough for
+// history, unlike the model registry: what a refused save leaves in memory is
+// a run the operator can still see until the next restart, not a launch config
+// that silently takes effect.
 func (s *Store) save() error {
+	if s.readOnlyReason != "" {
+		return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart",
+			s.filePath, s.readOnlyReason)
+	}
 	bf := benchmarkFile{
 		Version: schemaVersion,
 		Jobs:    s.jobs,

@@ -40,6 +40,15 @@ var compareDimensions = []compareDimension{
 	{"kv_cache_dtype", "KV cache", func(r BenchmarkRun) string { return r.Config.KVCacheDtype }},
 	{"dtype", "dtype", func(r BenchmarkRun) string { return r.Config.Dtype }},
 	{"enforce_eager", "Eager", func(r BenchmarkRun) string { return strconv.FormatBool(r.Config.EnforceEager) }},
+	// These return "" for off rather than "false": BuildCompare drops a
+	// constant empty dimension, so a setting no selected run used adds no
+	// column, and one that some runs used shows exactly where.
+	{"profile", "Profile", func(r BenchmarkRun) string { return r.Config.ProfileLabel() }},
+	{"speculative_config", "Speculative", func(r BenchmarkRun) string { return r.Config.SpeculativeConfig }},
+	{"attention_backend", "Backend", func(r BenchmarkRun) string { return r.Config.AttentionBackend }},
+	{"prefix_caching", "Prefix cache", func(r BenchmarkRun) string { return onOrEmpty(r.Config.EnablePrefixCaching) }},
+	{"chunked_prefill", "Chunked prefill", func(r BenchmarkRun) string { return onOrEmpty(r.Config.EnableChunkedPrefill) }},
+	{"max_num_batched_tokens", "Batched tokens", func(r BenchmarkRun) string { return itoaOrEmpty(r.Config.MaxNumBatchedTokens) }},
 	{"prompt_sizes", "Prompt sizes", func(r BenchmarkRun) string { return intsText(r.PromptTokens) }},
 	{"gen_tokens", "Gen tokens", func(r BenchmarkRun) string { return itoaOrEmpty(r.GenTokens) }},
 	{"vllm_version", "vLLM", func(r BenchmarkRun) string { return r.VLLMVersion }},
@@ -50,6 +59,13 @@ var compareDimensions = []compareDimension{
 		}
 		return strings.Join(names, " + ")
 	}},
+}
+
+func onOrEmpty(b bool) string {
+	if b {
+		return "on"
+	}
+	return ""
 }
 
 // CompareColumn is one dimension's heading, and for a shared dimension the one

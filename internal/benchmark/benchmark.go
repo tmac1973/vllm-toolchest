@@ -63,8 +63,15 @@ type BenchmarkRun struct {
 }
 
 // ConfigSnapshot freezes the vLLM configuration that produced a run. Only
-// fields that meaningfully affect perf are captured; the full vllm_config
-// stays on the model registry entry.
+// fields that move the numbers are captured; the full vllm_config stays on the
+// model registry entry.
+//
+// The first block does two jobs: it is also what a job's ConfigOverrides can
+// set, where a zero value means "use the model's saved setting". Everything
+// after it is recorded only. The launch already carries those settings, since
+// a job starts the model from its whole saved config; putting one in the
+// overlay is a separate decision, and needs the pointer treatment
+// ConfigOverrides uses, because a bool here cannot say "explicitly off".
 type ConfigSnapshot struct {
 	MaxModelLen          int     `json:"max_model_len"`
 	TensorParallelSize   int     `json:"tensor_parallel_size"`
@@ -74,6 +81,61 @@ type ConfigSnapshot struct {
 	Dtype                string  `json:"dtype"`
 	QuantMethod          string  `json:"quant_method,omitempty"`
 	MaxNumSeqs           int     `json:"max_num_seqs,omitempty"`
+
+	// ProfileName is the model's active config profile when the run started,
+	// and ProfileModified says the live config had been edited away from it.
+	// Both, rather than one string: a run labelled "long-ctx" whose numbers
+	// came from something else is worse than an unlabelled run.
+	ProfileName     string `json:"profile_name,omitempty"`
+	ProfileModified bool   `json:"profile_modified,omitempty"`
+
+	// SpeculativeConfig is the largest factor this used to miss: MTP drafting
+	// can move generation throughput by half again or more, and two runs that
+	// differed only in it were indistinguishable in the history.
+	SpeculativeConfig string `json:"speculative_config,omitempty"`
+	// AttentionBackend swaps the decode kernel outright, and is the setting
+	// most likely to differ between two machines' runs of the "same" config.
+	AttentionBackend string `json:"attention_backend,omitempty"`
+	// CompilationConfig trims the CUDA-graph capture ladder. A batch size off
+	// the ladder runs eager for that step, so this shapes the latency curve.
+	CompilationConfig string `json:"compilation_config,omitempty"`
+	// EnablePrefixCaching collapses TTFT on any preset that reuses a prompt
+	// prefix, and MambaCacheMode is what lets it work at all on a hybrid, so
+	// the pair only means something together.
+	EnablePrefixCaching bool   `json:"enable_prefix_caching,omitempty"`
+	MambaCacheMode      string `json:"mamba_cache_mode,omitempty"`
+	// Chunked prefill and its token budget decide whether a long prompt
+	// monopolises a step: prompt throughput and inter-token latency under
+	// concurrency both move with them, in opposite directions.
+	EnableChunkedPrefill bool `json:"enable_chunked_prefill,omitempty"`
+	MaxNumBatchedTokens  int  `json:"max_num_batched_tokens,omitempty"`
+	// KVCacheMemory pins the pool, so a pinned run is not comparable with an
+	// unpinned one at the same gpu_memory_utilization.
+	KVCacheMemory int64 `json:"kv_cache_memory,omitempty"`
+	// DisableAsyncScheduling costs decode throughput, and some speculative
+	// configs require it, so it moves in step with one.
+	DisableAsyncScheduling bool `json:"disable_async_scheduling,omitempty"`
+	// Quantization is the method the engine was told to use, as against
+	// QuantMethod, which is what the checkpoint is. Forcing marlin over gptq
+	// is a kernel swap on identical weights.
+	Quantization string `json:"quantization,omitempty"`
+	// ExtraFlags can change anything at all, so it is recorded verbatim and
+	// never interpreted.
+	ExtraFlags string `json:"extra_flags,omitempty"`
+}
+
+// ProfileLabel is the profile a run's config came from, as a comparison should
+// read it. A config edited away from its profile says so rather than claiming
+// the name.
+func (c ConfigSnapshot) ProfileLabel() string {
+	switch {
+	case c.ProfileName == "":
+		return ""
+	case c.ProfileModified:
+		return c.ProfileName + " (edited)"
+	default:
+		return c.ProfileName
+	}
 }
 
 // GPUSnapshot captures GPU identity at run time. VRAM-used isn't recorded
