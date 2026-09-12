@@ -227,6 +227,14 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 		return
 	}
 
+	// A sweep overrides part of the config per cell, so at most one cell of it
+	// can match the profile the model was on, and the label would claim the
+	// rest too. ProfileModified cannot catch that: the divergence is in the
+	// overlay, not in the live config it was compared against.
+	if len(cell.SweepValues) > 0 {
+		cfg.ProfileName, cfg.ProfileModified = "", false
+	}
+
 	run := BenchmarkRun{
 		ID:        newID(),
 		JobID:     job.ID,

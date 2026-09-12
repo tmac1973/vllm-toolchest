@@ -213,12 +213,20 @@ func writeCSVExport(w http.ResponseWriter, filename string, runs []benchmark.Ben
 
 // runColumns are the identity and configuration columns both scopes share, so
 // a cells file and a summary file line up on the same keys.
+//
+// Index-aligned with runValues: the two change together, or every column after
+// the change is silently mislabelled.
 var runColumns = []string{
 	"run_id", "job_id", "created_at", "status",
 	"model_id", "model_name", "quant", "size_gb",
 	"preset", "sweep",
 	"max_model_len", "tensor_parallel_size", "gpu_memory_utilization",
 	"max_num_seqs", "kv_cache_dtype", "enforce_eager", "dtype",
+	"profile", "profile_edited",
+	"speculative_config", "attention_backend", "compilation_config",
+	"enable_prefix_caching", "mamba_cache_mode",
+	"enable_chunked_prefill", "max_num_batched_tokens",
+	"kv_cache_memory", "disable_async_scheduling", "quantization", "extra_flags",
 	"vllm_version", "gpus",
 }
 
@@ -231,6 +239,11 @@ func runValues(run benchmark.BenchmarkRun) []string {
 		strconv.Itoa(c.MaxModelLen), strconv.Itoa(c.TensorParallelSize),
 		formatFloat(c.GPUMemoryUtilization, 2),
 		strconv.Itoa(c.MaxNumSeqs), c.KVCacheDtype, strconv.FormatBool(c.EnforceEager), c.Dtype,
+		c.ProfileName, strconv.FormatBool(c.ProfileModified),
+		c.SpeculativeConfig, c.AttentionBackend, c.CompilationConfig,
+		strconv.FormatBool(c.EnablePrefixCaching), c.MambaCacheMode,
+		strconv.FormatBool(c.EnableChunkedPrefill), strconv.Itoa(c.MaxNumBatchedTokens),
+		strconv.FormatInt(c.KVCacheMemory, 10), strconv.FormatBool(c.DisableAsyncScheduling), c.Quantization, c.ExtraFlags,
 		run.VLLMVersion, gpuNames(run.GPUs),
 	}
 }

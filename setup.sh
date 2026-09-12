@@ -13,15 +13,12 @@ readonly QUADLET_USER_DIR="${HOME}/.config/containers/systemd"
 readonly QUADLET_SYSTEM_DIR="/etc/containers/systemd"
 readonly PODMAN_SERVICE_NAME="vllm-toolchest"
 
-# Base image for the radiance variant. KEEP IN SYNC with the defaults in
-# Dockerfile.radiance and docker-compose.radiance.yml.
-readonly RADIANCE_DEFAULT_IMAGE="docker.io/stilldeadcode/vllm-radiance:0.9.3"
-
 # ─── Global state (populated by detect_* functions) ──────────────────────────
 
 GPU_VENDOR=""           # cuda, rocm
 GPU_INFO=""             # human-readable GPU description
-BUILD_VARIANT=""        # generic, radiance — which image to build (rocm only)
+BUILD_VARIANT=""        # variant id from variants/*.conf — which image to build
+GPU_MODEL=""            # PCI device id or compute capability, for variant matching
 GPU_DEVICES=""          # HIP_VISIBLE_DEVICES value; empty = use every GPU
 AMD_GFX_TARGET=""       # detected gfx target (e.g. gfx1201) — passed as GPU_ARCH build arg
 AMD_GFX_VERSION=""      # HSA_OVERRIDE_GFX_VERSION value (empty = not needed)
@@ -95,6 +92,204 @@ prompt_confirm() {
     esac
 }
 
+# ─── Variant manifests ───────────────────────────────────────────────────────
+#
+# variants/<id>.conf describes one image this tool can be built on: its base
+# image, the hardware it runs on, and the feature switches ("knobs") its
+# Settings panel offers. Each fact is declared exactly once, there, and both
+# this script and the Go binary generate from it -- the binary go:embeds the
+# same files and parses the same grammar (see variants/variants.go).
+#
+# The grammar is a strict subset of bash on purpose, so this script can source
+# a manifest with no jq, yq or python on the host: NAME='value', one per line,
+# always single-quoted. That literalness is what lets a tooltip carry commas,
+# double quotes and em-dashes unescaped; the one character it cannot carry is
+# the ASCII apostrophe.
+#
+# Every key is VARIANT_-, GROUP_- or KNOB_-prefixed because these files land in
+# this script's own shell: a bare ID= or VENDOR= would clobber a global.
+
+readonly VARIANTS_DIR="${SCRIPT_DIR}/variants"
+
+# list_variants prints every declared variant id, one per line.
+#
+# Sorted byte-wise, not by locale. A glob expands in collation order, which in
+# most locales ignores punctuation and puts "rocm-cdna" before "rocm" -- while
+# Go sorts by byte value and puts "rocm" first. The two readers disagreeing
+# about order is the kind of thing that goes unnoticed until a menu numbers its
+# entries differently from the list somebody read.
+list_variants() {
+    local f base
+    for f in "${VARIANTS_DIR}"/*.conf; do
+        [[ -e "$f" ]] || continue
+        base="${f##*/}"
+        printf '%s\n' "${base%.conf}"
+    done | LC_ALL=C sort
+}
+
+# load_variant_manifest sources a manifest into the current shell.
+#
+# Sourcing a second manifest leaves the first one's KNOB_* variables behind,
+# because a manifest only assigns the keys it declares. Anything that walks
+# every variant must therefore do it in a subshell -- see variant_field.
+load_variant_manifest() {
+    local f="${VARIANTS_DIR}/$1.conf"
+    [[ -r "$f" ]] || return 1
+    # shellcheck source=/dev/null
+    . "$f"
+}
+
+# knob_attr SLUG ATTR prints one knob attribute, empty when undeclared.
+# The ${!var-} form matters under `set -u`: an absent attribute has to read as
+# empty, not abort the script.
+knob_attr() {
+    local var="KNOB_$1_$2"
+    printf '%s' "${!var-}"
+}
+
+# variant_field ID NAME prints one VARIANT_* field from a manifest without
+# leaving that manifest loaded, so callers can query several in a loop.
+variant_field() {
+    ( load_variant_manifest "$1" || exit 1
+      local var="VARIANT_$2"
+      printf '%s' "${!var-}" )
+}
+
+# knob_env_names prints the environment variables the loaded manifest's knobs
+# own, in declaration order. $KNOBS is deliberately unquoted: word splitting is
+# how the list is iterated.
+knob_env_names() {
+    local slug
+    # shellcheck disable=SC2086
+    for slug in ${KNOBS:-}; do
+        printf '%s\n' "$(knob_attr "$slug" ENV)"
+    done
+}
+
+# knob_recommended_env prints the KEY=VALUE lines an "apply recommended
+# settings" action would write. A recommendation of "-" means the manifest's
+# advice is to leave the image's own default alone, so it emits nothing.
+knob_recommended_env() {
+    local slug rec env
+    # shellcheck disable=SC2086
+    for slug in ${KNOBS:-}; do
+        rec="$(knob_attr "$slug" RECOMMENDED)"
+        [[ -n "$rec" && "$rec" != "-" ]] || continue
+        env="$(knob_attr "$slug" ENV)"
+        printf '%s=%s\n' "$env" "$rec"
+    done
+}
+
+# ─── Generated knob documentation ────────────────────────────────────────────
+#
+# The feature switches used to be written out by hand in .env.example, in the
+# Settings template, in the Go config layer and in three more places. They are
+# declared once in variants/<id>.conf now, so the documentation is generated
+# from the same declaration rather than kept in step with it.
+
+# knob_example_value SLUG — a value worth showing in an example line.
+# For a picker, the first real option; for free text, the placeholder or the
+# recommendation. Never the unset sentinel: an example that does nothing
+# teaches nothing.
+knob_example_value() {
+    local slug="$1" rec vals v
+    rec="$(knob_attr "$slug" RECOMMENDED)"
+    if [[ -n "$rec" && "$rec" != "-" ]]; then
+        printf '%s' "$rec"; return
+    fi
+    vals="$(knob_attr "$slug" VALUES)"
+    if [[ -n "$vals" ]]; then
+        # shellcheck disable=SC2086
+        for v in $vals; do
+            [[ "$v" == "-" ]] && continue
+            printf '%s' "$v"; return
+        done
+    fi
+    # A placeholder is grey hint text in the UI, which is sometimes a real
+    # value ("1:8,2:7,4:6") and sometimes prose ("off — try: auto"). Only the
+    # former belongs after an "=". Whitespace is the tell, and getting it wrong
+    # means shipping a .env line that sets a knob to a sentence.
+    v="$(knob_attr "$slug" PLACEHOLDER)"
+    if [[ -n "$v" && "$v" != *[[:space:]]* ]]; then
+        printf '%s' "$v"; return
+    fi
+    printf ''
+}
+
+# print_env_knobs writes the commented KEY=VALUE documentation for every
+# variant that declares switches, in .env format.
+print_env_knobs() {
+    local id first=1 slug label help example group last_group
+    for id in $(list_variants); do
+        ( load_variant_manifest "$id" || exit 0
+          [[ -n "${KNOBS:-}" ]] || exit 0
+
+          [[ $first -eq 1 ]] || echo ""
+          echo "# ── ${VARIANT_LABEL} — VLLMCTL_VARIANT=${VARIANT_ID} ──"
+          [[ -n "${VARIANT_DOC_URL:-}" ]] && echo "# ${VARIANT_DOC_URL}"
+
+          last_group=""
+          # shellcheck disable=SC2086
+          for slug in $KNOBS; do
+              group="$(knob_attr "$slug" GROUP)"
+              if [[ "$group" != "$last_group" ]]; then
+                  local gt gn
+                  gt="$(eval "printf '%s' \"\${GROUP_${group}_TITLE-}\"")"
+                  gn="$(eval "printf '%s' \"\${GROUP_${group}_NOTE-}\"")"
+                  if [[ -n "$gt" || -n "$gn" ]]; then
+                      echo "#"
+                      [[ -n "$gt" ]] && echo "# ${gt}."
+                      [[ -n "$gn" ]] && fold -s -w 70 <<<"$gn" | sed 's/^/# /; s/[[:space:]]*$//'
+                  fi
+                  last_group="$group"
+              fi
+
+              label="$(knob_attr "$slug" LABEL)"
+              help="$(knob_attr "$slug" HELP)"
+              example="$(knob_example_value "$slug")"
+
+              echo "#"
+              fold -s -w 70 <<<"${label}. ${help}" | sed 's/^/# /; s/[[:space:]]*$//'
+              echo "#$(knob_attr "$slug" ENV)=${example}"
+          done )
+        first=0
+    done
+}
+
+# write_env_example rewrites the generated block of a .env template in place,
+# leaving everything outside the markers alone. Splitting the file rather than
+# generating all of it keeps the hand-written parts -- ports, GPU selection,
+# storage -- hand-written, because those are prose about choices rather than a
+# list derived from the manifests.
+write_env_example() {
+    local target="$1" tmp
+    [[ -f "$target" ]] || fatal "no such file: $target"
+    tmp="$(mktemp)"
+
+    local in_block=0 line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            "# >>> BEGIN GENERATED KNOBS")
+                printf '%s\n' "$line" >> "$tmp"
+                print_env_knobs >> "$tmp"
+                in_block=1
+                continue
+                ;;
+            "# <<< END GENERATED KNOBS")
+                in_block=0
+                ;;
+        esac
+        [[ $in_block -eq 1 ]] && continue
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$target"
+
+    if ! grep -q '^# <<< END GENERATED KNOBS$' "$tmp"; then
+        rm -f "$tmp"
+        fatal "$target has no generated-knob markers to fill"
+    fi
+    mv "$tmp" "$target"
+}
+
 # ─── Detection: GPU ──────────────────────────────────────────────────────────
 
 # Detect host video/render group GIDs for container device access.
@@ -143,6 +338,24 @@ detect_amd_gfx_version() {
     esac
 }
 
+# Intel splits by generation and the split matters: Battlemage (B60/B70) has a
+# working vLLM path, Alchemist (A770) does not -- it needs a different image
+# lineage entirely. Enumerating the device is not enough; the device ID is.
+detect_intel_gpu() {
+    need_cmd lspci || return 1
+    local line id
+    while IFS= read -r line; do
+        # "VGA compatible controller [0300]: Intel ... [8086:e20b]"
+        id="$(sed -n 's/.*\[8086:\([0-9a-f]\{4\}\)\].*/\1/p' <<<"$line")"
+        [[ -n "$id" ]] || continue
+        GPU_VENDOR="xpu"
+        GPU_MODEL="$id"
+        GPU_INFO="$(sed 's/.*Intel/Intel/; s/ \[8086:.*//' <<<"$line")"
+        return 0
+    done < <(lspci -nn 2>/dev/null | grep -iE 'VGA|Display|3D controller' | grep -i '8086:')
+    return 1
+}
+
 detect_gpu() {
     # NVIDIA: check for nvidia-smi AND that it can talk to a GPU
     if need_cmd nvidia-smi; then
@@ -150,6 +363,12 @@ detect_gpu() {
             GPU_VENDOR="cuda"
             GPU_INFO="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
             GPU_INFO="${GPU_INFO%%$'\n'*}"
+            # Compute capability is what tells sm_121a (DGX Spark) apart from
+            # every other NVIDIA card. Paired with the machine architecture,
+            # because that variant is arm64 and nothing else is.
+            GPU_MODEL="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1)" || true
+            GPU_MODEL="${GPU_MODEL//./}"
+            [[ -n "$GPU_MODEL" ]] && GPU_MODEL="sm_${GPU_MODEL}"
             return
         fi
     fi
@@ -166,7 +385,7 @@ detect_gpu() {
         GPU_INFO="AMD GPU"
         if need_cmd rocminfo; then
             local name
-            name="$(rocminfo 2>/dev/null | grep 'Marketing Name' | sed 's/.*: *//' \
+            name="$(rocminfo 2>/dev/null | grep 'Marketing Name' | sed 's/.*: *//; s/[[:space:]]*$//' \
                 | grep -iE 'Radeon|Instinct|FirePro' | head -1)" || true
             [[ -n "$name" ]] && GPU_INFO="$name"
         elif [[ -d /sys/class/drm ]]; then
@@ -183,45 +402,248 @@ detect_gpu() {
         return
     fi
 
+    # Intel comes last: an Intel iGPU alongside a discrete AMD or NVIDIA card
+    # is common, and the discrete card is what someone wants to serve on.
+    if detect_intel_gpu; then
+        return
+    fi
+
     # No GPU — vLLM has no meaningful CPU inference path, so fall back to CUDA
-    # (the user probably just doesn't have drivers installed yet).
+    # (the user probably just doesn't have drivers installed yet). Said out
+    # loud in the menu rather than silently picking a vendor.
     GPU_VENDOR="cuda"
     GPU_INFO="No GPU detected (defaulting to CUDA)"
 }
 
-# vllm-radiance is compiled for a single GPU architecture and its prune step
-# asserts it, so the variant is only offered on RDNA4.
-radiance_supported() {
-    [[ "$GPU_VENDOR" == "rocm" ]] && [[ "$AMD_GFX_TARGET" == "gfx1201" ]]
+# ─── Variant matching ────────────────────────────────────────────────────────
+#
+# A variant matches this host when its vendor matches, its architecture list is
+# empty or contains what was found, and its host architecture matches. Among
+# the matches, the most specific wins: a variant naming one gfx target beats
+# one that runs on anything, because it was built for the card in the machine.
+
+# The manifests name vendors (amd/nvidia/intel); GPU_VENDOR names the compute
+# stack (rocm/cuda/xpu). One mapping, in one place.
+detected_vendor() {
+    case "$GPU_VENDOR" in
+        cuda) echo "nvidia" ;;
+        rocm) echo "amd" ;;
+        xpu)  echo "intel" ;;
+        *)    echo "$GPU_VENDOR" ;;
+    esac
 }
 
-# Choose the image variant. Explicit VARIANT= always wins; otherwise default to
-# the portable build and let install offer the RDNA4 one interactively.
+# variant_matches ID — true when this variant can run on what was detected.
+variant_matches() {
+    local id="$1"
+    ( load_variant_manifest "$id" || exit 1
+
+      [[ "$VARIANT_VENDOR" == "$(detected_vendor)" ]] || exit 1
+
+      # An empty target list means the variant is not tied to one architecture.
+      if [[ -n "${VARIANT_GFX_TARGETS:-}" ]]; then
+          local want found=1 probe="${AMD_GFX_TARGET:-$GPU_MODEL}"
+          for want in $VARIANT_GFX_TARGETS; do
+              [[ "$probe" == "$want" ]] && found=0
+          done
+          [[ $found -eq 0 ]] || exit 1
+      fi
+
+      if [[ -n "${VARIANT_HOST_ARCH:-}" ]]; then
+          [[ "$VARIANT_HOST_ARCH" == "$(uname -m)" ]] || exit 1
+      fi
+      exit 0 )
+}
+
+# variant_specificity ID — higher sorts first in the menu. A named architecture
+# beats a general one; ties break on the manifest's declared priority.
+variant_specificity() {
+    ( load_variant_manifest "$1" || exit 0
+      local score=0
+      [[ -n "${VARIANT_GFX_TARGETS:-}" ]] && score=$((score + 1000))
+      printf '%s' "$((score + ${VARIANT_PRIORITY:-0}))" )
+}
+
+# matching_variants prints every variant that runs here, best first.
+matching_variants() {
+    local id
+    for id in $(list_variants); do
+        variant_matches "$id" || continue
+        printf '%s %s\n' "$(variant_specificity "$id")" "$id"
+    done | sort -rn -k1,1 | awk '{print $2}'
+}
+
+# recommended_variant prints the single best match, or nothing.
+recommended_variant() {
+    matching_variants | head -1
+}
+
+# variant_exists ID — does a manifest by this name ship?
+variant_exists() {
+    [[ -r "${VARIANTS_DIR}/$1.conf" ]]
+}
+
+# Choose the image variant. An explicit VLLMCTL_VARIANT always wins; otherwise
+# a variant recorded by a previous install stands, and failing that the best
+# match for the detected hardware.
 detect_variant() {
     # VLLMCTL_VARIANT is the documented override, matching the key stored in
     # .env. Bare VARIANT is accepted as a convenience, but only when it names a
-    # real variant: VARIANT is also an /etc/os-release field, so a value we do
-    # not recognise belongs to somebody else and must not be a fatal error.
+    # real variant: VARIANT is also an /etc/os-release field (Ubuntu Server
+    # sets it to "Server Edition"), so a value we do not recognise belongs to
+    # somebody else and must not be a fatal error.
     local want="${VLLMCTL_VARIANT:-}"
-    if [[ -z "$want" && "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+    if [[ -z "$want" ]] && [[ -n "${VARIANT:-}" ]] && variant_exists "${VARIANT}"; then
         want="$VARIANT"
     fi
 
     if [[ -n "$want" ]]; then
-        case "$want" in
-            generic|radiance) BUILD_VARIANT="$want" ;;
-            *) fatal "Unknown VLLMCTL_VARIANT=$want (expected: generic or radiance)" ;;
-        esac
-        if [[ "$BUILD_VARIANT" == "radiance" && "$GPU_VENDOR" != "rocm" ]]; then
-            fatal "The radiance variant needs an AMD ROCm GPU (detected backend: $GPU_VENDOR)"
-        fi
+        variant_exists "$want" || fatal "Unknown VLLMCTL_VARIANT=$want. Known variants: $(list_variants | tr '\n' ' ')"
+        BUILD_VARIANT="$want"
         return
     fi
 
-    # Already chosen in a previous run — .env is the record of that decision.
+    # Already chosen in a previous run -- .env is the record of that decision.
     [[ -n "$BUILD_VARIANT" ]] && return
 
-    BUILD_VARIANT="generic"
+    BUILD_VARIANT="$(recommended_variant)"
+
+    # Nothing matched. That means hardware we have no manifest for, or a GPU
+    # we failed to detect; either way the install cannot proceed on a guess,
+    # because the wrong base image fails minutes into a build.
+    if [[ -z "$BUILD_VARIANT" ]]; then
+        err "No image variant matches this machine."
+        err "  Detected: ${GPU_INFO:-unknown} (${GPU_VENDOR}${AMD_GFX_TARGET:+, $AMD_GFX_TARGET}${GPU_MODEL:+, $GPU_MODEL}) on $(uname -m)"
+        err ""
+        err "  Known variants: $(list_variants | tr '\n' ' ')"
+        err "  Force one with VLLMCTL_VARIANT=<id> if you know it fits."
+        exit 1
+    fi
+}
+
+# ─── Host requirements ───────────────────────────────────────────────────────
+#
+# Each variant lists the checks its image needs, with a severity per check:
+#
+#   HOSTREQ_n='kind|block|warn|value|message'
+#
+# Severity lives in the manifest rather than in this code on purpose. Most of
+# these images run on hardware nobody here can test, so a check that turns out
+# to be wrong has to be a one-line manifest edit rather than a code change and
+# a release. VLLMCTL_SKIP_HOSTCHECK=1 bypasses all of them.
+
+# hostreq_gfx VALUE — the detected gfx target is one of VALUE's space list.
+hostreq_gfx() {
+    local want
+    for want in $1; do
+        [[ "$AMD_GFX_TARGET" == "$want" ]] && return 0
+    done
+    return 1
+}
+
+hostreq_arch() {
+    [[ "$(uname -m)" == "$1" ]]
+}
+
+hostreq_compute_cap() {
+    local want
+    for want in $1; do
+        [[ "$GPU_MODEL" == "$want" ]] && return 0
+    done
+    return 1
+}
+
+# hostreq_pci_id VALUE — the detected PCI device id is one of VALUE's list.
+# This is the Battlemage / Alchemist split: both are Intel graphics on
+# /dev/dri, and only one has a working vLLM path.
+hostreq_pci_id() {
+    local want
+    for want in $1; do
+        [[ "$GPU_MODEL" == "$want" ]] && return 0
+    done
+    return 1
+}
+
+# version_ge A B — is version A at least B? Pure sort -V, no bc or python.
+version_ge() {
+    [[ "$1" == "$2" ]] && return 0
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$2" ]]
+}
+
+hostreq_rocm_min() {
+    local have=""
+    if need_cmd hipconfig; then
+        have="$(hipconfig --version 2>/dev/null | head -1)" || true
+    fi
+    if [[ -z "$have" ]] && [[ -r /opt/rocm/.info/version ]]; then
+        have="$(cat /opt/rocm/.info/version 2>/dev/null)" || true
+    fi
+    # Undetectable is not the same as too old. Passing here is deliberate:
+    # the alternative blocks every host that installed ROCm somewhere we do
+    # not look, which is a worse failure than a version we could not read.
+    [[ -n "$have" ]] || return 0
+    have="${have%%-*}"
+    version_ge "$have" "$1"
+}
+
+hostreq_nvidia_driver_min() {
+    need_cmd nvidia-smi || return 0
+    local have
+    have="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)" || true
+    [[ -n "$have" ]] || return 0
+    version_ge "$have" "$1"
+}
+
+# check_host_requirements walks the selected variant's HOSTREQ_* entries in
+# order. Runs after the variant is chosen and before anything is built.
+check_host_requirements() {
+    if [[ "${VLLMCTL_SKIP_HOSTCHECK:-}" == "1" ]]; then
+        warn "VLLMCTL_SKIP_HOSTCHECK=1 — not checking host requirements for ${BUILD_VARIANT}"
+        return 0
+    fi
+
+    local reqs blocked=0
+    reqs="$( ( load_variant_manifest "$BUILD_VARIANT" || exit 0
+               local i=1 var
+               while :; do
+                   var="HOSTREQ_$i"
+                   [[ -n "${!var-}" ]] || break
+                   printf '%s\n' "${!var}"
+                   i=$((i + 1))
+               done ) )"
+    [[ -n "$reqs" ]] || return 0
+
+    local line kind severity value message
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        IFS='|' read -r kind severity value message <<<"$line"
+
+        # An unknown check kind is an authoring mistake in the manifest, not a
+        # property of the host. Say so rather than silently passing.
+        if ! declare -F "hostreq_${kind}" >/dev/null; then
+            warn "${BUILD_VARIANT}: unknown host check \"${kind}\" — skipping (manifest bug)"
+            continue
+        fi
+
+        if "hostreq_${kind}" "$value"; then
+            continue
+        fi
+
+        if [[ "$severity" == "block" ]]; then
+            err "${BUILD_VARIANT}: ${message}"
+            blocked=1
+        else
+            warn "${BUILD_VARIANT}: ${message}"
+        fi
+    done <<<"$reqs"
+
+    if [[ $blocked -eq 1 ]]; then
+        err ""
+        err "  Detected: ${GPU_INFO:-unknown}${AMD_GFX_TARGET:+ ($AMD_GFX_TARGET)}"
+        err "  Pick a different variant, or set VLLMCTL_SKIP_HOSTCHECK=1 if you"
+        err "  are sure this check is wrong -- and please report it."
+        exit 1
+    fi
 }
 
 # ─── Detection: Container runtime ────────────────────────────────────────────
@@ -385,16 +807,9 @@ check_prerequisites() {
         ACTIONS+=("Enable SELinux container_use_devices boolean")
     fi
 
-    # The radiance image is compiled for gfx1201 only; on anything else it
-    # will not run, so fail here rather than after a long pull.
-    if [[ "$BUILD_VARIANT" == "radiance" ]] && ! radiance_supported; then
-        if [[ -z "$AMD_GFX_TARGET" ]]; then
-            warn "Could not detect a gfx target (rocminfo missing?); the radiance"
-            warn "image only runs on gfx1201. Use VARIANT=generic if this is not RDNA4."
-        else
-            fatal "VARIANT=radiance requires gfx1201 (RDNA4); detected ${AMD_GFX_TARGET}. Use VARIANT=generic."
-        fi
-    fi
+    # What this variant needs of the host, from its manifest. Runs here so a
+    # mismatch fails before a long pull or a longer build, not after.
+    check_host_requirements
 
     ACTIONS+=("Build container image ($(dockerfile))")
     ACTIONS+=("Start vllm-toolchest service")
@@ -600,38 +1015,99 @@ prompt_models_dir() {
     echo "  → Models will be stored at: $path"
 }
 
+# tier_note explains a support tier in one clause, so the menu can be read
+# without going and finding the README.
+tier_note() {
+    case "$1" in
+        tested)       echo "run on this hardware by this project" ;;
+        community)    echo "published upstream, not validated here" ;;
+        experimental) echo "little upstream support, expect rough edges" ;;
+        *)            echo "$1" ;;
+    esac
+}
+
+# prompt_variant offers every variant that runs on the detected hardware, with
+# the best match preselected.
+#
+# A menu rather than the yes/no question this used to be: there is more than
+# one reasonable image for some cards now -- on gfx1201 the choice between
+# dense-FP8 and MoE-MXFP4 tuning is a real one, and it depends on which models
+# someone intends to serve, which this script cannot know.
 prompt_variant() {
     # Forced on the command line -- nothing to ask. Mirrors detect_variant's
     # handling, including ignoring an unrelated os-release VARIANT.
-    if [[ -n "${VLLMCTL_VARIANT:-}" ]] || [[ "${VARIANT:-}" =~ ^(generic|radiance)$ ]]; then
+    if [[ -n "${VLLMCTL_VARIANT:-}" ]]; then
         return
     fi
-    if ! radiance_supported; then
-        return  # not RDNA4 — only the generic image is buildable here
+    if [[ -n "${VARIANT:-}" ]] && variant_exists "${VARIANT}"; then
+        return
+    fi
+
+    local -a ids=()
+    local id
+    while IFS= read -r id; do
+        [[ -n "$id" ]] && ids+=("$id")
+    done < <(matching_variants)
+
+    # One option is not a choice. Say what was picked and move on.
+    if [[ "${#ids[@]}" -le 1 ]]; then
+        [[ "${#ids[@]}" -eq 1 ]] && BUILD_VARIANT="${ids[0]}"
+        return
     fi
 
     echo ""
-    echo -e "${BOLD}RDNA4 detected (${AMD_GFX_TARGET})${NC}"
+    echo -e "  ${BOLD}Detected:${NC} ${GPU_INFO}${AMD_GFX_TARGET:+ (${AMD_GFX_TARGET})}${GPU_MODEL:+ (${GPU_MODEL})}"
     echo ""
-    echo    "  There is a second image for this card: vllm-radiance, a from-source"
-    echo    "  vLLM stack hand-tuned for gfx1201 — custom attention, GEMM and"
-    echo    "  all-reduce kernels, tuned FP8 and MoE configs, and MTP drafting."
-    echo    "  It installs much faster too, since it pulls a prebuilt base instead"
-    echo    "  of compiling ROCm and vLLM from source."
-    echo ""
-    echo    "  The trade-off: it pins vLLM and transformers, so support for models"
-    echo    "  newer than that release is frozen. The generic image tracks vLLM main."
-    echo ""
-    echo    "  Third-party project, credited in README.md:"
-    echo    "  https://codeberg.org/StillDeadcode/vllm-radiance"
+    echo -e "  ${BOLD}Which image should this build on?${NC}"
     echo ""
 
-    if prompt_confirm "  Build the radiance variant?"; then
-        BUILD_VARIANT="radiance"
-    else
-        BUILD_VARIANT="generic"
+    local -a tiers=()
+    local i=1 label summary tier
+    for id in "${ids[@]}"; do
+        label="$(variant_field "$id" LABEL)"
+        summary="$(variant_field "$id" SUMMARY)"
+        tier="$(variant_field "$id" TIER)"
+        tiers+=("$tier")
+
+        local marker=""
+        [[ $i -eq 1 ]] && marker=" ${GREEN}← recommended${NC}"
+        printf "    %d) %-14s %-15s %s%b\n" "$i" "$id" "[${tier}]" "$summary" "$marker"
+        i=$((i + 1))
+    done
+
+    # Explain only the tiers actually on screen.
+    echo ""
+    local seen="" t
+    for t in "${tiers[@]}"; do
+        [[ "$seen" == *"|$t|"* ]] && continue
+        seen="${seen}|$t|"
+        printf "    %-15s %s\n" "[${t}]" "$(tier_note "$t")"
+    done
+    echo ""
+
+    local choice
+    while :; do
+        read -rp "$(echo -e "  ${BOLD}Choice${NC} [1]: ")" choice
+        choice="${choice:-1}"
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "${#ids[@]}" ]]; then
+            break
+        fi
+        echo "  Enter a number between 1 and ${#ids[@]}."
+    done
+
+    BUILD_VARIANT="${ids[$((choice - 1))]}"
+    echo ""
+    echo -e "  → Building ${BOLD}${BUILD_VARIANT}${NC}"
+
+    local pin
+    pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
+    if [[ -n "$pin" && "$pin" != "main" ]]; then
+        echo "    Pins vLLM ${pin}: models needing a newer vLLM will not load."
     fi
-    echo "  → Building the ${BUILD_VARIANT} image"
+    local url
+    url="$(variant_field "$BUILD_VARIANT" DOC_URL)"
+    [[ -n "$url" ]] && echo "    $url"
+    echo ""
 }
 
 # List AMD GPUs in HIP enumeration order, one per line as:
@@ -720,6 +1196,30 @@ prompt_gpus() {
     echo "  → Using GPU(s): ${GPU_DEVICES}"
 }
 
+# migrate_variant_name maps a variant recorded by an older install onto the one
+# that replaced it.
+#
+# "generic" was two variants wearing one name -- a ROCm source build and a CUDA
+# one -- with the GPU found at install time deciding which you got. Now they
+# are separate manifests, so the detected vendor resolves which of the two an
+# existing install has been running all along. Anything else passes through.
+#
+# This runs on every command, not just install, so `./setup.sh up` on an
+# untouched install keeps working rather than failing on a name nothing ships.
+migrate_variant_name() {
+    local name="$1"
+    if [[ "$name" != "generic" ]]; then
+        printf '%s' "$name"; return
+    fi
+    case "$(detected_vendor)" in
+        nvidia) printf 'cuda-source' ;;
+        amd)    printf 'rocm-source' ;;
+        # Undetectable vendor: leave the old name so the error names it,
+        # rather than picking one and building the wrong thing.
+        *)      printf '%s' "$name" ;;
+    esac
+}
+
 load_env_ports() {
     local env_file="${SCRIPT_DIR}/.env"
     if [[ -f "$env_file" ]]; then
@@ -733,13 +1233,17 @@ load_env_ports() {
         # The variant decides which compose/Dockerfile every later command
         # uses, so up/down/logs/rebuild must read it back, not re-ask.
         val="$(grep '^VLLMCTL_VARIANT=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
-        [[ -n "$val" ]] && BUILD_VARIANT="$val" || true
+        [[ -n "$val" ]] && BUILD_VARIANT="$(migrate_variant_name "$val")" || true
         val="$(grep '^HIP_VISIBLE_DEVICES=' "$env_file" 2>/dev/null | cut -d= -f2)" || true
         [[ -n "$val" ]] && GPU_DEVICES="$val" || true
     fi
 }
 
-# ─── Radiance base image ─────────────────────────────────────────────────────
+# ─── Prebuilt base images ────────────────────────────────────────────────────
+#
+# Variants that layer onto a published image name it in their manifest. Some of
+# those images need repairing before they can be built on, which is what the
+# rest of this section is about.
 #
 # vllm-radiance is published as an OCI manifest whose layers carry *Docker*
 # media types. Docker/BuildKit tolerates the mix; containers/image -- the
@@ -756,15 +1260,22 @@ load_env_ports() {
 # entrypoint across by hand.
 #
 # This is an upstream packaging bug, so it is behind a cheap probe: the day a
-# conformant image is published, the probe passes and none of this runs.
+# conformant image is published, the probe passes and none of this runs. It is
+# applied to every prebuilt variant, not just radiance -- several of these
+# bases publish to Docker Hub the same way, so the same bug is expected.
 
-radiance_base_ref() {
-    if [[ -n "${RADIANCE_IMAGE:-}" ]]; then
-        echo "$RADIANCE_IMAGE"; return
+# variant_base_ref prints the base image for the selected variant. An explicit
+# VLLMCTL_BASE_IMAGE wins (env, then .env) so an operator can pin a different
+# tag -- an alternate build of the same stack, say -- without editing the
+# manifest.
+variant_base_ref() {
+    if [[ -n "${VLLMCTL_BASE_IMAGE:-}" ]]; then
+        echo "$VLLMCTL_BASE_IMAGE"; return
     fi
     local val
-    val="$(grep '^RADIANCE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
-    echo "${val:-$RADIANCE_DEFAULT_IMAGE}"
+    val="$(grep '^VLLMCTL_BASE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    [[ -n "$val" ]] && { echo "$val"; return; }
+    variant_field "$BUILD_VARIANT" BASE_IMAGE
 }
 
 # Can the build actually use this image as a base? A LABEL-only build is enough
@@ -808,13 +1319,15 @@ flatten_image() {
     return $rc
 }
 
-# Make sure the radiance base is present and usable, flattening it if the
-# runtime cannot build on top of it. Exports RADIANCE_IMAGE for the build.
-ensure_radiance_base() {
-    [[ "$BUILD_VARIANT" == "radiance" ]] || return 0
-
+# Make sure a prebuilt base is present and usable, flattening it if the runtime
+# cannot build on top of it. Exports VLLMCTL_BASE_IMAGE for the build.
+#
+# A variant that builds vLLM from source declares no base image and returns
+# here immediately.
+ensure_base_image() {
     local src flat tag
-    src="$(radiance_base_ref)"
+    src="$(variant_base_ref)"
+    [[ -n "$src" ]] || return 0
 
     if ! image_exists "$src"; then
         log "Pulling ${src} (about 4 GB)..."
@@ -822,17 +1335,17 @@ ensure_radiance_base() {
     fi
 
     if base_is_buildable "$src"; then
-        export RADIANCE_IMAGE="$src"
+        export VLLMCTL_BASE_IMAGE="$src"
         return 0
     fi
 
     tag="${src##*:}"
     [[ "$tag" == "$src" ]] && tag="latest"
-    flat="localhost/vllm-radiance-flat:${tag}"
+    flat="localhost/vllmctl-${BUILD_VARIANT}-flat:${tag}"
 
     if image_exists "$flat"; then
         log "Using previously normalized base image ${flat}"
-        export RADIANCE_IMAGE="$flat"
+        export VLLMCTL_BASE_IMAGE="$flat"
         return 0
     fi
 
@@ -840,7 +1353,7 @@ ensure_radiance_base() {
     warn "it is an OCI manifest carrying Docker-typed layers, which"
     warn "containers/image refuses to rewrite. Normalizing it locally."
     echo ""
-    echo "  This flattens the image into a single layer, once per radiance"
+    echo "  This flattens the image into a single layer, once per base image"
     echo "  version. It needs roughly 10 GB of free space and a few minutes."
     echo ""
 
@@ -853,9 +1366,9 @@ ensure_radiance_base() {
     log "Normalizing ${src} -> ${flat} ..."
     if ! flatten_image "$src" "$flat"; then
         $CONTAINER_CMD rmi -f "$flat" >/dev/null 2>&1 || true
-        fatal "Could not normalize ${src}. Building the radiance variant needs
-       either a container runtime that accepts this image (Docker does) or
-       a conformant image published upstream."
+        fatal "Could not normalize ${src}. Building the ${BUILD_VARIANT} variant
+       needs either a container runtime that accepts this image (Docker does)
+       or a conformant image published upstream."
     fi
 
     if ! base_is_buildable "$flat"; then
@@ -863,29 +1376,30 @@ ensure_radiance_base() {
     fi
 
     ok "Normalized base image ready: ${flat}"
-    export RADIANCE_IMAGE="$flat"
+    export VLLMCTL_BASE_IMAGE="$flat"
 }
 
 # ─── Container operations ────────────────────────────────────────────────────
 
-# The radiance variant has its own image; every other combination is keyed by
-# GPU vendor. Keeping GPU_VENDOR as the hardware family (rather than folding
-# radiance into it) is what lets the ROCm prerequisite checks, GID detection
-# and SELinux handling apply unchanged to both ROCm images.
-image_key() {
-    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
-        echo "radiance"
-    else
-        echo "$GPU_VENDOR"
-    fi
+# Device wiring is a property of the GPU vendor, not of the vLLM stack on top
+# of it, so there is one compose file per vendor and every variant of that
+# vendor shares it. Falls back to what was detected only when no variant has
+# been chosen yet, which is what `./setup.sh detect` does before selection.
+variant_vendor() {
+    local v
+    v="$(variant_field "$BUILD_VARIANT" VENDOR)"
+    echo "${v:-$(detected_vendor)}"
 }
 
 compose_file() {
-    echo "docker-compose.$(image_key).yml"
+    echo "docker-compose.$(variant_vendor).yml"
 }
 
+# Which Dockerfile this variant builds with. Every manifest names one.
 dockerfile() {
-    echo "Dockerfile.$(image_key)"
+    local f
+    f="$(variant_field "$BUILD_VARIANT" DOCKERFILE)"
+    echo "${f:-Dockerfile.${GPU_VENDOR}}"
 }
 
 # compose_cmd builds the full compose command with all required -f flags.
@@ -907,10 +1421,17 @@ write_env_file() {
     local env_file="${SCRIPT_DIR}/.env"
 
     # Keys this script owns. Everything else in .env belongs to the user --
-    # HF_TOKEN, VLLMCTL_API_KEY, the RADIANCE_* switches -- and truncating the
-    # file would silently discard it on every install/rebuild.
+    # HF_TOKEN, VLLMCTL_API_KEY, the feature-knob switches -- and truncating
+    # the file would silently discard it on every install/rebuild.
+    #
+    # The VLLMCTL_BASE_IMAGE / DOCKERFILE / VENV_ROOT / STAMP_FILE / VLLM_PIN
+    # group is derived from the chosen variant's manifest and rewritten on
+    # every install, so hand-editing them does not stick. Change the manifest,
+    # or override VLLMCTL_BASE_IMAGE in the environment for a one-off build.
     local managed=(
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
+        VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
+        VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN VLLMCTL_TUNER_REF
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
         HIP_VISIBLE_DEVICES
     )
@@ -926,6 +1447,25 @@ write_env_file() {
         echo "VLLMCTL_PORT=${VLLMCTL_PORT}"
         echo "VLLMCTL_INFERENCE_PORT=${VLLMCTL_INFERENCE_PORT}"
         echo "VLLMCTL_VARIANT=${BUILD_VARIANT}"
+
+        # The variant's build inputs, so compose can substitute them without
+        # knowing which variant is selected.
+        echo "VLLMCTL_VENDOR=$(variant_vendor)"
+        echo "VLLMCTL_DOCKERFILE=$(dockerfile)"
+        local _base _venv _stamp _pin
+        _base="$(variant_base_ref)"
+        _venv="$(variant_field "$BUILD_VARIANT" VENV_ROOT)"
+        _stamp="$(variant_field "$BUILD_VARIANT" STAMP_FILE)"
+        _pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
+        [[ -n "$_base" ]]  && echo "VLLMCTL_BASE_IMAGE=${_base}"
+        [[ -n "$_venv" ]]  && echo "VLLMCTL_VENV_ROOT=${_venv}"
+        [[ -n "$_stamp" ]] && echo "VLLMCTL_STAMP_FILE=${_stamp}"
+        # "main" is the from-source marker, not a tag to pin a prebuilt base
+        # against, so it is not written through.
+        [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
+        local _tref
+        _tref="$(variant_field "$BUILD_VARIANT" TUNER_REF)"
+        [[ -n "$_tref" ]] && echo "VLLMCTL_TUNER_REF=${_tref}"
 
         [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
         [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
@@ -964,7 +1504,7 @@ container_down() {
 }
 
 container_install() {
-    ensure_radiance_base
+    ensure_base_image
     write_env_file
 
     # Remove any existing container before bringing one up. `up -d` alone does
@@ -991,7 +1531,7 @@ container_install() {
 }
 
 container_rebuild() {
-    ensure_radiance_base
+    ensure_base_image
     local quadlet_active=false
     has_quadlet && quadlet_active=true
 
@@ -1010,7 +1550,7 @@ container_rebuild() {
 
 # Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
 container_quick_rebuild() {
-    ensure_radiance_base
+    ensure_base_image
     container_down
     write_env_file
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
@@ -1080,13 +1620,14 @@ generate_quadlet() {
         if [[ -n "$AMD_GFX_VERSION" ]]; then
             hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
         fi
-        local extra_caps=""
-        if [[ "$BUILD_VARIANT" == "radiance" ]]; then
-            # py-spy profiling and the optional RADIANCE_NUMA_BIND mempolicy
-            # syscalls; both no-ops unless used.
-            extra_caps="AddCapability=SYS_PTRACE
-AddCapability=SYS_NICE"
-        fi
+        # Extra capabilities come from the variant's manifest. Unlike compose,
+        # a Quadlet unit is generated per install, so this can be per-variant
+        # rather than the union across a vendor.
+        local extra_caps="" cap
+        for cap in $(variant_field "$BUILD_VARIANT" CAPS); do
+            extra_caps+="AddCapability=${cap}"$'\n'
+        done
+        extra_caps="${extra_caps%$'\n'}"
         gpu_args="AddDevice=/dev/kfd
 AddDevice=/dev/dri
 SecurityLabelDisable=true
@@ -1315,10 +1856,14 @@ print_summary() {
     echo ""
     echo -e "  ${CYAN}GPU${NC}           ${GPU_INFO}"
     echo -e "  ${CYAN}Backend${NC}       ${GPU_VENDOR}"
-    if [[ "$BUILD_VARIANT" == "radiance" ]]; then
-        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT} (vllm-radiance, gfx1201-tuned)"
+    local _tier _pin
+    _tier="$(variant_field "$BUILD_VARIANT" TIER)"
+    _pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
+    echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT}${_tier:+ [${_tier}]}"
+    if [[ -n "$_pin" && "$_pin" != "main" ]]; then
+        echo -e "  ${CYAN}vLLM${NC}          pinned ${_pin} — newer models will not load"
     else
-        echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT}"
+        echo -e "  ${CYAN}vLLM${NC}          tracks main"
     fi
     echo -e "  ${CYAN}Runtime${NC}       ${CONTAINER_VERSION}"
     echo -e "  ${CYAN}Compose${NC}       ${COMPOSE_VERSION}"
@@ -1379,6 +1924,49 @@ print_summary() {
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
+# print_variants lists every variant and whether it fits this machine. Useful
+# before an install, and the only way to see the ones that do not match without
+# reading the manifests.
+print_variants() {
+    local -a fits=() others=()
+    local id
+    for id in $(list_variants); do
+        if variant_matches "$id"; then fits+=("$id"); else others+=("$id"); fi
+    done
+
+    echo ""
+    echo -e "  ${BOLD}Detected:${NC} ${GPU_INFO}${AMD_GFX_TARGET:+ (${AMD_GFX_TARGET})}${GPU_MODEL:+ (${GPU_MODEL})} on $(uname -m)"
+
+    local rec
+    rec="$(recommended_variant)"
+
+    echo ""
+    if [[ "${#fits[@]}" -gt 0 ]]; then
+        echo -e "  ${BOLD}Runs on this machine${NC}"
+        # Re-order to match what the install menu shows, best first.
+        local ordered
+        ordered="$(matching_variants)"
+        while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            printf "    %-14s %-15s %s%b\n" "$id" "[$(variant_field "$id" TIER)]" \
+                "$(variant_field "$id" SUMMARY)" \
+                "$([[ "$id" == "$rec" ]] && echo " ${GREEN}← recommended${NC}")"
+        done <<<"$ordered"
+    else
+        echo -e "  ${YELLOW}No variant matches this machine.${NC}"
+    fi
+
+    if [[ "${#others[@]}" -gt 0 ]]; then
+        echo ""
+        echo -e "  ${BOLD}For other hardware${NC}  (VLLMCTL_VARIANT=<id> to force one anyway)"
+        for id in "${others[@]}"; do
+            printf "    %-14s %-15s %s\n" "$id" "[$(variant_field "$id" TIER)]" \
+                "$(variant_field "$id" SUMMARY)"
+        done
+    fi
+    echo ""
+}
+
 usage() {
     cat <<'USAGE'
 vllm-toolchest setup — auto-detect GPU + container runtime, build & run
@@ -1413,27 +2001,26 @@ Auto-start:
 
 Info:
   status      Show detected environment and planned actions, then exit
-  detect      Print detected GPU backend (cuda/rocm) and image variant, exit
+  detect      Print detected GPU backend, image variant and vendor, exit
+  variants    List every image variant and whether it fits this machine, exit
   help        Show this help message
 
-Image variants (AMD only):
-  generic     Builds ROCm + vLLM from source, tracking vLLM main. Portable
-              across GPU generations, newest model support, long build.
-  radiance    Layers this UI on the third-party vllm-radiance image, a stack
-              hand-tuned for RDNA4 / gfx1201 (custom attention, GEMM and
-              all-reduce kernels, tuned FP8 + MoE configs, MTP drafting).
-              Fast to install, but vLLM and transformers are pinned, so model
-              support is frozen at that release.
-              https://codeberg.org/StillDeadcode/vllm-radiance
+Image variants:
+  Each variant is a different vLLM stack, described by one file in variants/.
+  `install` detects the GPU, offers the ones that fit and preselects the best
+  match; the answer is stored in .env and reused by every later command.
+  Run `./setup.sh variants` to see them all.
 
-  `install` offers the choice on an RDNA4 card; the answer is stored in .env
-  and reused by every later command. Force it with VLLMCTL_VARIANT= any time.
+  Support tiers: [tested] means someone on this project ran it on that
+  hardware; [community] means it is published upstream but not validated here;
+  [experimental] means little upstream support.
 
 Environment variables:
-  GPU=cuda|rocm                        Override GPU auto-detection
-  VLLMCTL_VARIANT=generic|radiance     Override image variant (skips the prompt)
+  GPU=cuda|rocm|xpu                    Override GPU auto-detection
+  VLLMCTL_VARIANT=<id>                 Override image variant (skips the prompt)
   RUNTIME=docker|podman                Override container runtime auto-detection
-  RADIANCE_IMAGE=<ref>                 Base image for the radiance variant
+  VLLMCTL_BASE_IMAGE=<ref>             Override a prebuilt variant's base image
+  VLLMCTL_SKIP_HOSTCHECK=1             Skip the variant's host requirement checks
 
   VARIANT= is accepted as a short form, but VLLMCTL_VARIANT is preferred:
   VARIANT is also an /etc/os-release field (Ubuntu Server sets it to
@@ -1451,8 +2038,8 @@ Examples:
   ./setup.sh quick                # fast rebuild (code changes only)
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
-  VLLMCTL_VARIANT=radiance ./setup.sh install   # build the RDNA4-tuned image
-  VLLMCTL_VARIANT=generic ./setup.sh rebuild    # switch back to the portable image
+  VLLMCTL_VARIANT=radiance ./setup.sh install   # build a specific variant
+  VLLMCTL_VARIANT=rocm-source ./setup.sh rebuild # switch to the from-source image
 USAGE
 }
 
@@ -1460,8 +2047,20 @@ main() {
     local command="${1:-help}"
     cd "$SCRIPT_DIR"
 
+    # Used by `make env-example` and the drift test. Not in usage: it exists
+    # to keep generated documentation in step with the manifests, and has no
+    # meaning to someone installing.
+    if [[ "$command" == "--print-env-knobs" ]]; then
+        print_env_knobs
+        exit 0
+    fi
+    if [[ "$command" == "--write-env-example" ]]; then
+        write_env_example "${2:-.env.example}"
+        exit 0
+    fi
+
     case "$command" in
-        install|uninstall|up|down|rebuild|quick|logs|detect|status|enable|disable) ;;
+        install|uninstall|up|down|rebuild|quick|logs|detect|variants|status|enable|disable) ;;
         -h|--help|help) usage; exit 0 ;;
         *)
             err "Unknown command: $command"
@@ -1488,7 +2087,12 @@ main() {
     if [[ "$command" == "detect" ]]; then
         load_env_ports
         detect_variant
-        echo "$GPU_VENDOR $BUILD_VARIANT"
+        echo "$GPU_VENDOR $BUILD_VARIANT $(variant_vendor)"
+        exit 0
+    fi
+
+    if [[ "$command" == "variants" ]]; then
+        print_variants
         exit 0
     fi
 
@@ -1570,4 +2174,10 @@ main() {
     echo ""
 }
 
-main "$@"
+# Run only when executed, not when sourced. Sourcing is how the manifest-reader
+# parity test gets at load_variant_manifest and friends: the bash reader and
+# the Go parser have to agree about every variants/*.conf, and the only way to
+# prove that is to exercise the same functions this script actually uses.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

@@ -1,3 +1,9 @@
+# vllm-toolchest on an NVIDIA GPU.
+#
+# One file for every NVIDIA variant — cuda, cuda-source, gb10 — because the
+# device wiring is a property of the vendor, not of the vLLM stack on top of
+# it. What differs per variant is the base image and the Dockerfile, and those
+# arrive through .env, which setup.sh writes from variants/<id>.conf.
 services:
   vllm-toolchest:
     # Tag the build deterministically. Without this, compose derives a
@@ -7,9 +13,22 @@ services:
     image: vllm-toolchest:latest
     build:
       context: .
-      dockerfile: Dockerfile.cuda
+      # Which Dockerfile depends on whether this variant builds vLLM from
+      # source or layers onto a published image.
+      dockerfile: ${VLLMCTL_DOCKERFILE:-Dockerfile.cuda}
       args:
-        VLLM_VERSION: "${VLLM_VERSION:-}"
+        # Prebuilt variants. See docker-compose.amd.yml for why the image
+        # reference is fully qualified and why these two move together.
+        BASE_IMAGE: "${VLLMCTL_BASE_IMAGE:-docker.io/vllm/vllm-openai:latest}"
+        VARIANT_ID: "${VLLMCTL_VARIANT:-cuda}"
+        VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/usr/local}"
+        STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
+
+        # Dockerfile.cuda reads VLLM_VERSION as a pip version specifier and
+        # treats empty as "latest"; Dockerfile.prebuilt reads it as the tag
+        # the base was built against. Both take the same variable.
+        VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-}"
+        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
     container_name: vllm-toolchest
     ports:
       - "${VLLMCTL_PORT:-3000}:3000"
@@ -41,6 +60,15 @@ services:
     # docker compose and podman-compose. Where ipc:host *is* applied the host's
     # /dev/shm wins and this is simply unused.
     shm_size: "${VLLMCTL_SHM_SIZE:-8gb}"
+    # SYS_PTRACE is py-spy profiling; inert unless used. No NVIDIA variant
+    # declares knobs yet, so there is no pass-through list here — when one
+    # does, add its variables as bare `- NAME` entries and the manifest drift
+    # test will hold them to the manifest.
+    cap_add:
+      - SYS_PTRACE
+    environment:
+      # Select your GPUs by CUDA index.
+      - CUDA_VISIBLE_DEVICES
     env_file:
       - path: .env
         required: false

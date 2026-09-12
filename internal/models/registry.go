@@ -29,6 +29,12 @@ type Model struct {
 	GenDefaults  GenDefaults  `json:"generation_defaults,omitempty"`
 	VRAMEstimate VRAMEstimate `json:"vram_estimate"`
 	VLLMConfig   VLLMConfig   `json:"vllm_config"`
+
+	// ActiveProfile is the profile the live VLLMConfig was last restored from
+	// or saved as. It is a label, not a link: the live config keeps
+	// autosaving, so it can drift away from the profile at any time, and
+	// Registry.ActiveProfile reports that drift rather than clearing this.
+	ActiveProfile string `json:"active_profile,omitempty"`
 }
 
 // HFConfig holds key fields from the model's config.json.
@@ -65,6 +71,40 @@ type QuantMeta struct {
 	Sym           bool    `json:"sym,omitempty"`
 	GGUFQuantType string  `json:"gguf_quant_type,omitempty"`
 	BytesPerParam float64 `json:"bytes_per_param"`
+
+	// WeightBlockSize is the [block_n, block_k] the weight scales are applied
+	// over, for checkpoints quantized blockwise. Empty for per-tensor,
+	// per-channel and per-group schemes.
+	//
+	// This is what decides whether kernel tuning can do anything: the tuner
+	// targets the block-FP8 GEMM, and only a blockwise checkpoint reaches it.
+	// "FP8" alone is not enough — a per-channel FP8 model takes a different
+	// code path entirely.
+	WeightBlockSize []int `json:"weight_block_size,omitempty"`
+}
+
+// IsBlockFP8 reports whether this checkpoint's linear layers run the
+// block-quantized FP8 GEMM, which is the only thing kernel tuning affects.
+//
+// Requires both a block shape and 8-bit float weights. A blockwise INT8
+// checkpoint has the first and not the second, and would gain nothing.
+func (q QuantMeta) IsBlockFP8() bool {
+	if len(q.WeightBlockSize) < 2 {
+		return false
+	}
+	for _, d := range q.WeightBlockSize {
+		if d <= 0 {
+			return false
+		}
+	}
+	switch q.Method {
+	case "fp8":
+		return true
+	case "compressed-tensors", "compressed_tensors":
+		// Bits is resolved from config_groups during detection.
+		return q.Bits == 8
+	}
+	return false
 }
 
 // ToolUseMeta holds tool/function calling detection info.
@@ -138,6 +178,14 @@ type VLLMConfig struct {
 	LanguageModelOnly bool `json:"language_model_only,omitempty"`
 }
 
+// schemaVersion is the envelope version this build writes.
+//
+//	1  the original file
+//	2  pending_configs, and the first version whose builds refuse to overwrite
+//	   a file they did not fully understand
+//	3  config_profiles, and active_profile on each model
+const schemaVersion = 3
+
 type registryFile struct {
 	Models        map[string]*Model `json:"models"`
 	SchemaVersion int               `json:"schema_version"`
@@ -145,6 +193,8 @@ type registryFile struct {
 	// PendingConfigs are launch configs restored from a backup for models
 	// that aren't installed here; see pending.go.
 	PendingConfigs []PendingConfig `json:"pending_configs,omitempty"`
+	// Profiles are named per-model config snapshots; see profiles.go.
+	Profiles []ConfigProfile `json:"config_profiles,omitempty"`
 }
 
 // Registry manages the model inventory.
@@ -157,8 +207,19 @@ type Registry struct {
 	// stays with the rest of the registry state.
 	modelsDir string
 	// pending holds configs waiting for their model to arrive.
-	pending  []PendingConfig
+	pending []PendingConfig
+	// profiles holds every model's named config snapshots, ordered by model
+	// ID and then folded name.
+	profiles []ConfigProfile
 	filePath string
+
+	// readOnlyReason is set when load() could not take responsibility for the
+	// file it found. save() rewrites the whole file, so a load that returned
+	// early used to mean the next save truncated a registry it had failed to
+	// read — a corrupt file, or one from a newer build, destroyed the lot.
+	// Set only during construction, so reading it needs no more than the lock
+	// the caller already holds.
+	readOnlyReason string
 }
 
 func NewRegistry(dataDir, modelsDir string) *Registry {
@@ -176,37 +237,87 @@ func (r *Registry) load() {
 	data, err := os.ReadFile(r.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return
+			return // a fresh install; the first save creates it
 		}
-		slog.Error("failed to load models.json", "error", err)
+		// Unreadable is not empty.
+		r.readOnlyReason = fmt.Sprintf("could not be read (%v)", err)
+		slog.Error("failed to load models.json — the registry is read-only", "error", err, "path", r.filePath)
 		return
 	}
 
 	var rf registryFile
 	if err := json.Unmarshal(data, &rf); err != nil {
-		slog.Error("failed to parse models.json", "error", err)
+		r.readOnlyReason = fmt.Sprintf("could not be parsed (%v)", err)
+		slog.Error("failed to parse models.json — the registry is read-only", "error", err, "path", r.filePath)
 		return
 	}
+
+	// A newer envelope carries fields this build has no struct for. They are
+	// already gone from rf, and rewriting would make that permanent. Version 0
+	// is not newer: it is a file written before the field existed, or by
+	// hand, and is read as current.
+	if rf.SchemaVersion > schemaVersion {
+		r.readOnlyReason = fmt.Sprintf("is schema version %d, and this build writes %d",
+			rf.SchemaVersion, schemaVersion)
+		slog.Error("models.json is newer than this build — the registry is read-only",
+			"file_version", rf.SchemaVersion, "build_version", schemaVersion, "path", r.filePath)
+	}
+
+	// Everything that did parse is loaded, read-only or not: the operator
+	// should see their models and the reason, not an empty page.
 	if rf.Models != nil {
 		r.models = rf.Models
 	}
 	r.pending = rf.PendingConfigs
+	r.profiles = rf.Profiles
+}
+
+// ReadOnly reports why the registry refuses to write, or "" when it does not.
+func (r *Registry) ReadOnly() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.readOnlyReason
+}
+
+// writableLocked is the check every mutator makes before it changes anything.
+// save() makes it again, but that alone is too late: the mutators change the
+// in-memory state first, so a refused write would leave this process launching
+// a config the panel reported as not saved — and Delete removes a model's
+// files before it ever reaches save().
+func (r *Registry) writableLocked() error {
+	if r.readOnlyReason == "" {
+		return nil
+	}
+	return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart",
+		r.filePath, r.readOnlyReason)
 }
 
 func (r *Registry) save() error {
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 	rf := registryFile{
 		Models:         r.models,
-		SchemaVersion:  2,
+		SchemaVersion:  schemaVersion,
 		LastScan:       time.Now(),
 		PendingConfigs: r.pending,
+		Profiles:       r.profiles,
 	}
 	data, err := json.MarshalIndent(rf, "", "  ")
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(r.filePath)
-	os.MkdirAll(dir, 0o755)
-	return os.WriteFile(r.filePath, data, 0o644)
+	if err := os.MkdirAll(filepath.Dir(r.filePath), 0o755); err != nil {
+		return err
+	}
+	// Write-then-rename, as the benchmark store does. os.WriteFile truncates
+	// first, so a crash or a full disk mid-write left a half-file that the
+	// next load could not parse.
+	tmp := r.filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.filePath)
 }
 
 // List returns every registered model, ordered by ID.
@@ -238,6 +349,9 @@ func (r *Registry) Get(id string) (*Model, bool) {
 func (r *Registry) Register(m *Model) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 	// Both the download path and the directory scan land here, which makes it
 	// the one place a restored-but-unmatched config can be claimed.
 	r.claimPendingLocked(m)
@@ -249,6 +363,9 @@ func (r *Registry) Register(m *Model) error {
 func (r *Registry) Delete(id string, deleteFiles bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 
 	m, ok := r.models[id]
 	if !ok {
@@ -267,6 +384,9 @@ func (r *Registry) Delete(id string, deleteFiles bool) error {
 func (r *Registry) UpdateConfig(id string, cfg VLLMConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 
 	m, ok := r.models[id]
 	if !ok {
@@ -280,6 +400,9 @@ func (r *Registry) UpdateConfig(id string, cfg VLLMConfig) error {
 func (r *Registry) SetEnabled(id string, enabled bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
 
 	m, ok := r.models[id]
 	if !ok {
@@ -349,7 +472,9 @@ func (r *Registry) Maintenance() {
 	r.backfillMetadata()
 
 	r.mu.Lock()
-	r.save()
+	if err := r.save(); err != nil {
+		slog.Error("registry maintenance was not saved", "error", err)
+	}
 	r.mu.Unlock()
 }
 

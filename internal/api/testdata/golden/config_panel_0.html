@@ -7,6 +7,28 @@
     <strong>VRAM Estimate:</strong> 28.8 GB weights + 1.0 GB overhead = <strong>29.8 GB</strong> &mdash; Needs TP=2
   </div>
   
+  <div class="model-profiles" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML"
+       hx-on::before-request="window._cfgScrollY=window.scrollY"
+       hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})">
+    
+    <div role="group">
+      <select id="profile-pick-unsloth--Qwen3-8-27B-FP8" name="name" aria-label="Saved profiles" disabled><option value="">(no saved profiles)</option></select>
+      <button type="button" class="outline" disabled
+              hx-post="/api/models/profiles/apply?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-pick-unsloth--Qwen3-8-27B-FP8">Restore</button>
+      <button type="button" class="outline secondary" disabled
+              hx-post="/api/models/profiles/delete?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-pick-unsloth--Qwen3-8-27B-FP8"
+              hx-confirm="Delete this profile? The settings below are not changed.">Delete</button>
+    </div>
+    
+    <div role="group">
+      <input type="text" id="profile-name-unsloth--Qwen3-8-27B-FP8" name="name" maxlength="64" autocomplete="off"
+             placeholder="Name these settings" value=""
+             onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click();}">
+      <button type="button" class="outline"
+              hx-post="/api/models/profiles?id=unsloth/Qwen3.8-27B-FP8" hx-include="#profile-name-unsloth--Qwen3-8-27B-FP8">Save as profile</button>
+    </div>
+  </div>
+  
   <form hx-put="/api/models/config?id=unsloth/Qwen3.8-27B-FP8" hx-trigger="change delay:500ms" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML" hx-include="closest form"
         hx-on::before-request="window._cfgScrollY=window.scrollY; var e=this.querySelector('.cfg-save-error'); if(e){e.style.display='none';}"
         hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})"
@@ -29,7 +51,7 @@
     <fieldset><legend>Performance</legend>
       <div class="grid">
         <label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"> Enforce eager mode</label>
-        <label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"> Prefix caching</label>
+        <label title="Reuse the KV blocks of a shared prefix — a system prompt, a conversation so far — instead of recomputing them every turn.&#10;&#10;UNTICKED does not mean off. vLLM decides per model, and enables it for ordinary decoder models. It declines only where the feature is still experimental: hybrid linear-attention (gated-delta-net / mamba) models, attention-free models, and encoder-decoder ones.&#10;&#10;TICKED forces it on. On a model vLLM declined, it warns that this may crash the engine or produce incorrect output — and on a hybrid model you also need the mamba cache mode below set to align."><input type="checkbox" name="enable_prefix_caching" role="switch"> Force prefix caching</label>
       </div>
       <label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs"><option value="1">1</option><option value="4">4</option><option value="8">8</option><option value="16" selected>16</option><option value="32">32</option><option value="64">64</option><option value="128">128</option><option value="256">256</option></select></label>
       
@@ -58,7 +80,7 @@
       <label title="Execute custom Python code from the model's HF repo. Required by some models (Yi, InternLM) but is a security risk."><input type="checkbox" name="trust_remote_code" role="switch"> Trust remote code</label>
       <small style="display:block;margin-top:-0.5rem;margin-bottom:0.5rem;opacity:0.7;">Warning: executes arbitrary code from the model repo</small>
       <div class="grid">
-        <label title="Override vLLM's attention backend. Leave on auto unless a model or image needs a specific one.">Attention backend <select name="attention_backend"><option value="" selected>(auto — let vLLM choose)</option><option value="TRITON_ATTN">TRITON_ATTN</option><option value="TRITON_FLASH_ATTN">TRITON_FLASH_ATTN</option><option value="FLASH_ATTN">FLASH_ATTN</option><option value="ROCM_FLASH">ROCM_FLASH</option><option value="ROCM_AITER_UNIFIED_ATTN">ROCM_AITER_UNIFIED_ATTN</option><option value="FLASHINFER">FLASHINFER (CUDA)</option><option value="XFORMERS">XFORMERS</option></select></label>
+        <label title="Override vLLM's attention backend. Leave on auto unless a model or image needs a specific one.">Attention backend <select name="attention_backend"><option value="" selected>(auto — let vLLM choose)</option></select></label>
         <label title="Parser for models that emit a separate reasoning/thinking channel, e.g. qwen3 or deepseek_r1.">Reasoning parser <input type="text" name="reasoning_parser" value="" placeholder="(none)"></label>
       </div>
       <div class="grid">

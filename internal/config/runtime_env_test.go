@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // The curated table is data, and a wrong entry there is a control that does
@@ -40,8 +42,13 @@ func TestCuratedOptionsAreNotRisky(t *testing.T) {
 		if _, bad := riskyEnvVars[o.Name]; bad {
 			t.Errorf("%s is both curated and listed as risky", o.Name)
 		}
-		if strings.HasPrefix(o.Name, radiancePrefix) {
-			t.Errorf("%s is owned by the Radiance section and must not be curated here", o.Name)
+		// Exact ownership across every variant, not a name prefix. This
+		// also catches a collision the prefix check never could: a future
+		// variant declaring a knob for a VLLM_* variable already curated
+		// here would give the operator two controls for one setting, one
+		// of which silently loses.
+		if where, owned := variants.EnvNameSet()[o.Name]; owned {
+			t.Errorf("%s is curated here and also declared as knob %s; one variable, two controls", o.Name, where)
 		}
 	}
 }
@@ -140,10 +147,22 @@ func TestWarnings(t *testing.T) {
 	if !strings.Contains(joined, "HIP_VISIBLE_DEVICES") {
 		t.Error("risky variable not reported")
 	}
-	// A RADIANCE_* variable is not in riskyEnvVars; it warns because the
-	// Radiance section is applied after this one and therefore wins.
+	// RADIANCE_USE_R4D is not in riskyEnvVars; it warns because a variant's
+	// feature-knob section declares it and is applied after this one.
 	if !strings.Contains(joined, "RADIANCE_USE_R4D") || !strings.Contains(joined, "wins") {
-		t.Errorf("radiance override not explained: %v", w)
+		t.Errorf("knob override not explained: %v", w)
+	}
+}
+
+// Ownership is by exact name, not by prefix. RADIANCE_IMAGE and
+// RADIANCE_VERSION are compose build args that no settings section reads, and
+// the old prefix rule told the operator a section would override them.
+func TestNonKnobVariablesSharingAPrefixDoNotWarn(t *testing.T) {
+	for _, name := range []string{"RADIANCE_IMAGE", "RADIANCE_VERSION"} {
+		w := EnvSet{Extra: name + "=x"}.Warnings()
+		if len(w) != 0 {
+			t.Errorf("%s is not a knob, so nothing should claim to override it; got %v", name, w)
+		}
 	}
 }
 

@@ -39,15 +39,7 @@ func (e *jobEnv) ResolveModel(modelID string) (benchmark.ModelInfo, error) {
 		// EnsureModelLoaded first; we re-resolve the served name here so
 		// the value is current.
 		ServedName: e.resolveServedName(m),
-		Config: benchmark.ConfigSnapshot{
-			MaxModelLen:          m.VLLMConfig.MaxModelLen,
-			TensorParallelSize:   m.VLLMConfig.TensorParallelSize,
-			GPUMemoryUtilization: m.VLLMConfig.GPUMemoryUtilization,
-			KVCacheDtype:         m.VLLMConfig.KVCacheDtype,
-			EnforceEager:         m.VLLMConfig.EnforceEager,
-			Dtype:                m.VLLMConfig.Dtype,
-			QuantMethod:          m.Quantization.Method,
-		},
+		Config:     e.s.configSnapshotFromModel(m),
 	}, nil
 }
 
@@ -158,6 +150,13 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	if snap.EnforceEager {
 		eager = true
 	}
+	// max_num_seqs is a sweep axis, and was once missing here: every cell of
+	// such a sweep launched at the model's saved value while its run recorded
+	// the swept one, and the comparison showed a difference never measured.
+	maxSeqs := v.MaxNumSeqs
+	if snap.MaxNumSeqs > 0 {
+		maxSeqs = snap.MaxNumSeqs
+	}
 	// Start from the model's own config so every flag it was configured with
 	// survives — including the served name — then apply the fields this job's
 	// snapshot overrides.
@@ -168,6 +167,7 @@ func vllmStartConfigFor(m *models.Model, snap benchmark.ConfigSnapshot) process.
 	cfg.GPUMemoryUtilization = gmu
 	cfg.EnforceEager = eager
 	cfg.KVCacheDtype = kv
+	cfg.MaxNumSeqs = maxSeqs
 	return cfg
 }
 

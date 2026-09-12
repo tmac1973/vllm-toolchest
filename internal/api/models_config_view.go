@@ -35,6 +35,15 @@ type modelConfigView struct {
 	TotalGB    float64
 	FitLabel   string
 
+	// Profiles. Banner is what the last profile action had to say, and
+	// ReadOnly is why nothing on the panel can be saved, when that is so.
+	Banner         panelBanner
+	ReadOnly       string
+	Profiles       []selectOption
+	ActiveProfile  string
+	ProfileDirty   bool
+	ProfileNameMax int
+
 	// Core
 	DtypeOptions []selectOption
 	MaxCtx       int
@@ -139,6 +148,13 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		ExtraFlags:             c.ExtraFlags,
 	}
 
+	v.ReadOnly = s.registry.ReadOnly()
+	v.ActiveProfile, v.ProfileDirty = s.registry.ActiveProfile(m.ID)
+	v.ProfileNameMax = models.MaxProfileNameLen
+	for _, p := range s.registry.Profiles(m.ID) {
+		v.Profiles = append(v.Profiles, selectOption{p.Name, profileLabel(p), p.Name == v.ActiveProfile})
+	}
+
 	for _, opt := range []string{"auto", "float16", "bfloat16", "float32"} {
 		v.DtypeOptions = append(v.DtypeOptions, selectOption{opt, opt, c.Dtype == opt})
 	}
@@ -164,7 +180,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 	}
 
 	v.BatchedAdvice, v.BatchedAdviceWarn = batchedTokenAdvice(
-		s.vllmEnv.IsRadiance(), m.HFConfig.HiddenSize,
+		s.vllmEnv.Has(capR4DAllReduce), m.HFConfig.HiddenSize,
 		c.TensorParallelSize, c.MaxNumBatchedTokens,
 	)
 
@@ -197,7 +213,13 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		v.ParserGroups = append(v.ParserGroups, g)
 	}
 
-	for _, opt := range attentionBackendOptions(s.vllmEnv.IsRadiance()) {
+	// The configured value is passed in so a backend this image does not offer
+	// is kept rather than silently dropped on the next save.
+	backendOpts := func() []backendOption {
+		d, known := s.vllmEnv.Descriptor()
+		return backendOptionsFor(d, known, c.AttentionBackend)
+	}()
+	for _, opt := range backendOpts {
 		v.BackendOptions = append(v.BackendOptions, selectOption{opt.Val, opt.Label, c.AttentionBackend == opt.Val})
 	}
 	for _, opt := range []struct{ val, label string }{

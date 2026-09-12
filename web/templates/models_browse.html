@@ -1,6 +1,71 @@
 {{define "content"}}
 <h1>Search HuggingFace</h1>
 
+<style>
+.quant-key { margin-bottom: 1rem; }
+.quant-key summary { cursor: pointer; font-size: 0.9rem; opacity: 0.75; }
+.quant-key summary:hover { opacity: 1; }
+.quant-key table { margin: 0.75rem 0 0.5rem 0; font-size: 0.85rem; }
+.quant-key td, .quant-key th { padding: 0.3rem 0.5rem; vertical-align: top; }
+</style>
+
+<details class="quant-key">
+    <summary>What do the format badges mean?</summary>
+
+    <p><small>Quantization does two different jobs, and treating them as one
+    causes most of the disappointment. <strong>Making a model fit</strong> is
+    about the size of the weights on disk and in VRAM.
+    <strong>Making it fast</strong> is about what the matrix units execute. A
+    format that only does the first will save you memory and run at the same
+    speed, or slower.</small></p>
+
+    <table>
+        <thead><tr><th>Badge</th><th>Weights</th><th>Compute runs at</th><th>Notes</th></tr></thead>
+        <tbody>
+        <tr>
+            <td><code>FP16</code></td><td>16-bit</td><td>bf16/fp16</td>
+            <td>Unquantized. The reference for both quality and speed.</td>
+        </tr>
+        <tr>
+            <td><code>FP8</code></td><td>8-bit</td><td><strong>fp8, where the hardware has it</strong></td>
+            <td>Weights <em>and</em> activations. The one common format that can genuinely speed up compute &mdash; but only on parts with FP8 matrix units (RDNA4, Hopper/Ada/Blackwell, MI300+). On older parts it saves memory and computes at bf16.</td>
+        </tr>
+        <tr>
+            <td><code>AWQ</code>, <code>GPTQ</code></td><td>4-bit</td><td>bf16</td>
+            <td>Weight-only: the weights are dequantized back to bf16 before the matmul. Quarters weight memory on any card, speeds up compute on none. Pick these to fit, never to go faster.</td>
+        </tr>
+        <tr>
+            <td><code>MXFP4</code>, <code>NVFP4</code></td><td>4-bit block float</td><td>depends</td>
+            <td>Newer formats with real hardware support on some parts and an emulated path on others. Measure rather than assume.</td>
+        </tr>
+        <tr>
+            <td><code>compressed-tensors</code></td><td>varies</td><td>varies</td>
+            <td>A container, not a scheme. It may hold an FP8 w8a8 checkpoint or a 4-bit weight-only one, and they behave completely differently. Check the detected width shown beside it.</td>
+        </tr>
+        <tr>
+            <td><code>BnB-4bit</code>, <code>BnB-8bit</code>, <code>BitsAndBytes</code></td><td>4- or 8-bit</td><td>bf16</td>
+            <td>bitsandbytes, quantized as it loads &mdash; the bare <code>BitsAndBytes</code> badge means the repo did not say which width. Convenient, and consistently the slowest option. Only usable on images that ship the library.</td>
+        </tr>
+        <tr>
+            <td><code>Quark</code>, <code>AutoRound</code>, <code>ModelOpt</code></td><td>varies</td><td>varies</td>
+            <td>Vendor toolkits (AMD, Intel, NVIDIA) that emit their own metadata. What you get depends on what the producer chose; vLLM support varies by version.</td>
+        </tr>
+        <tr>
+            <td><code>GGUF</code></td><td>varies</td><td>&mdash;</td>
+            <td>llama.cpp&rsquo;s format. vLLM&rsquo;s support is partial and it is not the thing to reach for here.</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <p><small><strong>If a model already fits, a 4-bit version of it will not be
+    faster.</strong> It will usually be slightly slower, and slightly worse. Reach
+    for 4-bit when the alternative is not running the model at all &mdash; and for
+    FP8 when your GPU can execute it. The <a href="/help#models">Help</a> page
+    has the same table with the RDNA4 specifics, and the
+    <a href="/benchmarks">Benchmarks</a> page will tell you what any of this
+    actually does on your hardware.</small></p>
+</details>
+
 <div id="downloads-panel"
      hx-get="/api/hf/downloads"
      hx-trigger="load, every 3s, downloadsChanged from:body"

@@ -225,6 +225,12 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/config-panel", s.handleModelConfigPanel)
 			r.Put("/activate", s.handleActivateModel)
 			r.Put("/config", s.handleUpdateModelConfig)
+			// Profiles are all POST, delete included: htmx sends included
+			// parameters in the body for a DELETE, and ParseForm only reads
+			// a body for POST, PUT and PATCH — the name would arrive nowhere.
+			r.Post("/profiles", s.handleSaveModelProfile)
+			r.Post("/profiles/apply", s.handleApplyModelProfile)
+			r.Post("/profiles/delete", s.handleDeleteModelProfile)
 			r.Delete("/delete", s.handleDeleteModel)
 		})
 		r.Route("/hf", func(r chi.Router) {
@@ -328,13 +334,18 @@ func (s *Server) handleModelsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "help.html", struct {
 		pageData
-		// IsRadiance gates the sections that only make sense on the RDNA4
-		// image — the all-reduce ceiling in particular, which is a property of
-		// a kernel library the generic image does not ship.
-		IsRadiance bool
+		// Gates the section explaining the all-reduce token ceiling. It is a
+		// property of a kernel library, not of one image, so it is keyed on
+		// the capability: a second variant adopting that kernel gets the
+		// explanation without a change here.
+		HasR4DAllReduce bool
+		// Gates the glossary entry for the feature-knob panel, so the help
+		// page does not describe a Settings section this image has not got.
+		KnobSection *knobSectionView
 	}{
-		pageData:   pageData{Title: "Help", Nav: "help"},
-		IsRadiance: s.vllmEnv.IsRadiance(),
+		pageData:        pageData{Title: "Help", Nav: "help"},
+		HasR4DAllReduce: s.vllmEnv.Has(capR4DAllReduce),
+		KnobSection:     s.knobSection(),
 	})
 }
 
@@ -408,12 +419,12 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		Theme               string
 
 		Variant           string
-		RadianceVersion   string
-		IsRadiance        bool
+		VariantVersion    string
+		HasR4DAllReduce   bool
 		VLLMDeviceName    string
 		VenvRoot          string
 		AttentionBackends []backendOption
-		Radiance          config.RadianceConfig
+		KnobSection       *knobSectionView
 
 		RuntimeEnvRows  []runtimeEnvRow
 		RuntimeEnvExtra string
@@ -444,12 +455,12 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		Theme:               c.Theme,
 
 		Variant:           s.vllmEnv.Variant,
-		RadianceVersion:   s.vllmEnv.RadianceVersion,
-		IsRadiance:        s.vllmEnv.IsRadiance(),
+		VariantVersion:    s.vllmEnv.VariantVersion,
+		HasR4DAllReduce:   s.vllmEnv.Has(capR4DAllReduce),
 		VLLMDeviceName:    s.deviceName(),
 		VenvRoot:          s.vllmEnv.VenvRoot,
-		AttentionBackends: attentionBackendOptions(s.vllmEnv.IsRadiance()),
-		Radiance:          c.Radiance,
+		AttentionBackends: attentionBackendOptions(s.vllmEnv.Descriptor()),
+		KnobSection:       s.knobSection(),
 
 		RuntimeEnvRows:  s.runtimeEnvRows(),
 		RuntimeEnvExtra: c.RuntimeEnvExtra,
@@ -486,6 +497,18 @@ type dashboardTiming struct {
 	AvgGenTPS float64
 	Count     int
 	LastSeen  string
+}
+
+// timingsView is what the Live Performance panel renders.
+//
+// Pending is carried separately from Rows because a model still gathering
+// samples is not the same as no traffic at all, and the panel used to show
+// both as "nothing captured yet" — which reads as broken when it is in fact
+// working.
+type timingsView struct {
+	Rows       []dashboardTiming
+	Pending    []dashboardTiming
+	MinSamples int
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {

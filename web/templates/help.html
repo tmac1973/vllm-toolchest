@@ -95,8 +95,8 @@
 
     <h3>Tensor parallelism</h3>
     <p><code>--tensor-parallel-size</code> splits a model's weights across several GPUs, so each holds a fraction of the parameters and a fraction of the KV cache. It is how a model larger than one card gets served at all. TP must divide the model's attention head count evenly, and every layer's output has to be summed across the GPUs — an <em>all-reduce</em> — on every forward pass. That communication is the cost: two GPUs do not give you twice the speed, and on consumer boards without fast peer-to-peer links they can be slower than one.</p>
-    {{if .IsRadiance}}
-    <h3>The all-reduce token ceiling (radiance image)</h3>
+    {{if .HasR4DAllReduce}}
+    <h3>The all-reduce token ceiling</h3>
     <p>The radiance image replaces the all-reduce with a hand-written peer-to-peer kernel, and that kernel takes a message only up to 48 MiB. A prefill chunk's message is <code>max_num_batched_tokens × hidden_size × 2</code> bytes, so there is a per-model ceiling on the batched-token setting above which the custom kernel stops being used.</p>
     <div class="callout warn">
         Exceeding it is <strong>silent</strong>. Nothing errors, nothing is logged; vLLM falls back to RCCL at roughly 2.3&times; the cost and everything keeps working. This is why the model config panel computes the ceiling for the model in front of you and shows it under the batched-token field — it is not information you can recover from the logs afterwards.
@@ -151,7 +151,9 @@
     <p>Every field here becomes a <code>vllm serve</code> flag, shown in full under <em>Effective command</em> at the bottom of the panel — worth reading once, because it makes the mapping between this UI and vLLM's own documentation obvious.</p>
     <dl>
         <dt>Core</dt><dd>Data type, context length, tensor parallel size, and GPU memory utilization — the four settings that decide whether the model loads.</dd>
-        <dt>Performance</dt><dd>Eager mode (skips graph capture: faster to start, slower to run), prefix caching, chunked prefill and the batched-token budget, and maximum concurrent sequences.</dd>
+        <dt>Performance</dt><dd>Eager mode (skips graph capture: faster to start, slower to run), prefix caching, chunked prefill and the batched-token budget, and maximum concurrent sequences.
+            <div class="callout"><strong>Force prefix caching</strong> is a three-state setting wearing a checkbox. Left alone, vLLM decides per model, and it enables prefix caching for ordinary decoder models — so an unticked box usually means it is already on. It declines only where the feature is still experimental: hybrid linear-attention (gated-delta-net / mamba), attention-free, and encoder-decoder models. Ticking the box overrides that refusal, which vLLM warns may crash the engine or produce incorrect output; on a hybrid model it also needs the mamba cache mode set to <code>align</code>, so the recurrent state is snapshotted at block boundaries and those layers become cacheable too. Check the startup log for <code>enable_prefix_caching</code> to see what actually applied.</div>
+        </dd>
         <dt>Quantization</dt><dd>The detected method and the KV cache data type. Setting the KV cache to <code>fp8</code> roughly halves cache memory, which buys context length at little quality cost.</dd>
         <dt>Tool Use</dt><dd>OpenAI-style function calling and the parser to use. The parser is auto-detected from the chat template; override it only if detection got it wrong.</dd>
         <dt>Advanced</dt><dd>Speculative decoding config, compilation config, attention backend override, and a free-text flags box for anything this UI does not model.</dd>
@@ -191,12 +193,38 @@
 
     <h2 id="tuning">Tuning</h2>
     <p>An autotuner for block-FP8 GEMM kernels. For a chosen model and tensor-parallel size it derives the unique weight-matmul shapes that model's decoder layers will execute, benchmarks kernel configurations for each, and writes the winners as JSON files that vLLM loads at run time.</p>
-    <p>Two things to know:</p>
+
+    <h3>What it actually tunes</h3>
+    <p>The <em>linear</em> layers, not attention. Every decoder layer runs a handful of matmuls — the Q/K/V and output projections, and the MLP's gate, up and down projections — and on a block-quantized FP8 checkpoint those go through a Triton kernel whose tile sizes, warp count and pipeline depth are configurable. vLLM ships defaults tuned on other people's hardware. Tuning measures the alternatives on <em>your</em> GPU, for <em>your</em> model's shapes, and keeps the winners.</p>
+    <p>This is a different subsystem from the attention backend on the model config panel. Choosing <code>TRITON_ATTN</code> or <code>ROCM_ATTN</code> or <code>R4D</code> changes how attention is computed and has no bearing on whether these tuned configs are used. Nothing you pick there enables or disables tuning.</p>
+
+    <h3>When it applies</h3>
+    <p>Three things have to line up, and the shape count on the Tuning page already reflects the third:</p>
     <ul>
-        <li>It only helps models with <strong>block-quantized FP8</strong> weights. Other formats never reach the kernel being tuned.</li>
-        <li>Tuned configs are keyed by <em>the device name vLLM reports</em>, not by the marketing name or the architecture. That name is probed from the running vLLM at startup rather than guessed, because the image variants disagree about it — and a file written under the wrong name is correctly formatted and never read. The name in use is shown in <a href="/settings">Settings</a> under Environment.</li>
+        <li><strong>The checkpoint must be block-quantized FP8.</strong> That is narrower than "FP8", and narrower than the badge on the Models page: a checkpoint whose scales apply per tensor, per channel or per group takes a different code path and never touches this kernel. The Tuning page reads the block shape out of the checkpoint — <code>weight_block_size</code> for a native FP8 model, the <code>block_structure</code> of a <code>compressed-tensors</code> group — and answers <em>Block-FP8?</em> from that rather than from the format label. So a per-channel <code>FP8</code> model and a <code>compressed-tensors</code> repo holding 4-bit weight-only data both correctly show <em>no</em>. <code>AWQ</code>, <code>GPTQ</code>, <code>bitsandbytes</code> and unquantized <code>FP16</code> are never candidates.</li>
+        <li><strong>Shapes come from the model and the TP size.</strong> They are computed from hidden size, intermediate size, head count, KV-head count and head dimension, each divided by the tensor-parallel factor. Tuning at TP=1 does nothing for the same model at TP=2 — the matrices are a different width. Two different models that happen to share dimensions do share results, because the files are keyed by shape rather than by model name.</li>
+        <li><strong>Only shapes the kernel can take.</strong> Both dimensions must divide by the block size (128). Shapes that do not are skipped rather than counted as untuned — they use a fallback path with nothing to tune. A model showing "6 of 6" is fully tuned even though it has more matmuls than six.</li>
     </ul>
 
+    <h3>When to run it</h3>
+    <div class="callout warn">
+        Tuning <strong>stops the running vLLM server</strong> before it starts, because it needs the whole GPU. Do not start a run on a machine that is serving something you care about.
+    </div>
+    <p>Worth doing when all of these hold:</p>
+    <ul>
+        <li>You have settled on a model, and a tensor-parallel size, that you expect to serve repeatedly. Tuning something you are still evaluating is time spent on a shape set you may not keep.</li>
+        <li>It is block-FP8, per above.</li>
+        <li>You have a <a href="/benchmarks">benchmark</a> of it already. Without a before there is no way to tell whether the after is an improvement or noise, and on some shapes the honest answer is that the shipped defaults were already the best available.</li>
+    </ul>
+    <p>Worth re-running when the tensor-parallel size changes, when the GPU changes, or when you move to a model with different dimensions. Not worth re-running after a vLLM upgrade unless the kernel itself changed — the files are keyed by shape and device, not by version, and they survive a rebuild on the data volume.</p>
+    <p>One job runs at a time, with progress on the page as it goes. Expect it to take a while: it is a real benchmark of every candidate configuration for every shape.</p>
+    <p>A <em>Tune</em> button also appears on the <a href="/models">Models</a> page, on the cards of models that qualify &mdash; and only those, so the absence of one is itself the answer to "would tuning help here?". It starts the same job and takes you to this page to watch it.</p>
+
+    <h3>Where the results go</h3>
+    <ul>
+        <li>Written to the data volume, then symlinked into vLLM's own config directory at every startup — so they survive a container rebuild and are picked up without reinstalling anything.</li>
+        <li>Keyed by <em>the device name vLLM reports</em>, not by the marketing name or the architecture. That name is probed from the running vLLM at startup rather than guessed, because the image variants disagree about it — and a file written under the wrong name is correctly formatted and never read. The name in use is shown in <a href="/settings">Settings</a> under Environment.</li>
+    </ul>
     <h2 id="settings">Settings</h2>
     <dl>
         <dt>API &amp; Connection</dt><dd>The external URL shown to clients, an optional API key required as a Bearer token on <code>/v1/*</code>, and the HuggingFace token used for gated downloads.</dd>
@@ -205,10 +233,10 @@
         <dt>Runtime environment</dt><dd>Environment variables applied to the vLLM process, taking effect at the next start. The curated table is short on purpose — vLLM defines nearly 300 variables, most for hardware or topologies this tool never runs on. The <em>Extra environment</em> box takes anything else, one <code>KEY=VALUE</code> per line, and applies last. Variables that fight a mechanism this tool depends on (device-visibility overrides, <code>HSA_OVERRIDE_GFX_VERSION</code>, HuggingFace cache paths) are saved with a warning rather than refused.
             <div class="callout">These are applied <em>after</em> the container's own environment, so a value set here <strong>replaces</strong> what the image exports — the opposite of how the equivalent works in llama-toolchest. The <em>Effective environment</em> preview marks every line that overrides an image value.</div>
         </dd>
-        {{if .IsRadiance}}
-        <dt>Radiance</dt><dd>The RDNA4 image's feature switches. Every one defaults to <em>image default</em>, which leaves the image's own value alone rather than pinning one here that would then drift as radiance is updated. These are applied after the runtime environment, so the switch you can see wins over a <code>RADIANCE_*</code> line typed into the extra box.</dd>
+        {{if .KnobSection}}
+        <dt>Feature knobs</dt><dd>The switches specific to this container's image variant, drawn from that variant's own description of itself. Every one defaults to <em>image default</em>, which leaves the image's own value alone rather than pinning one here that would then drift as the image is updated. They are applied after the runtime environment, so a switch you can see wins over the same variable typed into the extra box. Switches belonging to a variant you are not running are kept, not discarded, so rebuilding onto a different image and back does not lose them.</dd>
         {{end}}
-        <dt>Backup &amp; Restore</dt><dd>Exports settings, the runtime environment, the Radiance switches and every model's launch config as one versioned JSON file. Model configs are keyed by HuggingFace repo ID rather than by path, so a backup restores onto a different machine; a config for a model not installed there is held as <em>pending</em> and attaches by itself when that model is downloaded, however much later. Restore is per-section and is a merge — it never deletes. Tensor parallel size is reduced to fit the target's GPU count, with a warning, because a config asking for more GPUs than exist fails minutes into a load rather than at restore. Secrets travel only via the explicit checkbox, in plaintext. Deployment identity (listen address, ports, paths) is recorded for reference and never applied. For scripting: <code>GET /api/backup</code> (add <code>?secrets=1</code>) and <code>POST /api/restore</code>. Benchmark history is not included — export that from the Benchmarks page.</dd>
+        <dt>Backup &amp; Restore</dt><dd>Exports settings, the runtime environment, the image variant's feature knobs and every model's launch config as one versioned JSON file. Model configs are keyed by HuggingFace repo ID rather than by path, so a backup restores onto a different machine; a config for a model not installed there is held as <em>pending</em> and attaches by itself when that model is downloaded, however much later. Restore is per-section and is a merge — it never deletes. Tensor parallel size is reduced to fit the target's GPU count, with a warning, because a config asking for more GPUs than exist fails minutes into a load rather than at restore. Secrets travel only via the explicit checkbox, in plaintext. Deployment identity (listen address, ports, paths) is recorded for reference and never applied. For scripting: <code>GET /api/backup</code> (add <code>?secrets=1</code>) and <code>POST /api/restore</code>. Benchmark history is not included — export that from the Benchmarks page.</dd>
         <dt>Storage</dt><dd>The data directory is set at install time and shown for reference. The models directory can be pointed elsewhere — an absolute path to an existing directory <em>inside the container</em>, which means a mounted volume. Restart after changing it: the registry and the downloader read it once, at startup.</dd>
         <dt>Theme</dt><dd>Applied immediately in this browser and saved as the default other browsers start from.</dd>
     </dl>

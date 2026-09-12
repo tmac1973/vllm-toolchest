@@ -21,21 +21,40 @@ func TestSettingsPageRendersPerVariant(t *testing.T) {
 		skip []string
 	}{
 		{
-			name: "generic",
-			env:  vllmenv.Env{Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv"},
-			want: []string{"Image variant", "generic", "attention_backend"},
-			// The radiance panel and its R4D backend must not appear on an
-			// image that has neither.
-			skip: []string{"radiance_use_r4d", `value="R4D"`},
+			name: "rocm-source",
+			env:  vllmenv.Env{Variant: "rocm-source", VenvRoot: "/opt/vllm-venv"},
+			want: []string{"Image variant", "rocm-source", "attention_backend"},
+			// A from-source image declares no knobs, so the whole panel is
+			// absent rather than an empty box. It declares no attention
+			// backends either, so only "auto" is offered -- R4D belongs to
+			// radiance, and naming a backend the stack lacks aborts the
+			// engine minutes into a load.
+			skip: []string{"knob_", `value="R4D"`, `value="FLASHINFER"`, `value="ROCM_ATTN"`},
 		},
 		{
 			name: "radiance",
 			env: vllmenv.Env{
-				Variant:         vllmenv.VariantRadiance,
-				RadianceVersion: "0.9.3",
-				VenvRoot:        "/opt/vllm",
+				Variant:        "radiance",
+				VariantVersion: "0.9.3",
+				VenvRoot:       "/opt/vllm",
 			},
-			want: []string{"radiance_use_r4d", "radiance_draft_tau", "0.9.3", `value="R4D"`},
+			want: []string{"knob_use_r4d", "knob_draft_tau", "0.9.3", `value="R4D"`,
+
+				// Rendered from the manifest, not from template markup:
+				// the four-state select and a per-option label.
+				`value="all"`, "all shapes"},
+		},
+		{
+			// An image whose variant no manifest describes — built before
+			// its manifest existed, or an operator override naming
+			// something we do not ship. The panel must be absent rather
+			// than empty, and the page must still render.
+			name: "unknown variant",
+			env:  vllmenv.Env{Variant: "some-future-image", VenvRoot: "/opt/vllm-venv"},
+			want: []string{"Image variant", "some-future-image"},
+			// No manifest means no knobs and no declared backends, so the
+			// picker offers "auto" alone.
+			skip: []string{"knob_", `value="ROCM_ATTN"`, `value="FLASHINFER"`, `value="R4D"`},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

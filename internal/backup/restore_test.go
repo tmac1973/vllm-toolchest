@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
@@ -14,7 +13,7 @@ import (
 type recorder struct {
 	settings     *Settings
 	env          *RuntimeEnv
-	radiance     *config.RadianceConfig
+	knobs        map[string]map[string]string
 	configs      map[string]models.VLLMConfig
 	pending      []MissingModel
 	installed    map[string]bool
@@ -42,8 +41,11 @@ func (r *recorder) deps(numGPUs int) Deps {
 		CurrentEnv: func() RuntimeEnv {
 			return RuntimeEnv{Curated: map[string]string{"VLLM_LOGGING_LEVEL": "INFO"}, Extra: "EXISTING=1"}
 		},
-		ApplyEnv:       func(e RuntimeEnv) error { r.env = &e; return nil },
-		ApplyRadiance:  func(c config.RadianceConfig) error { r.radiance = &c; return nil },
+		ApplyEnv: func(e RuntimeEnv) error { r.env = &e; return nil },
+		CurrentKnobs: func() map[string]map[string]string {
+			return map[string]map[string]string{"radiance": {"run_bwtest": "1"}}
+		},
+		ApplyKnobs:     func(m map[string]map[string]string) error { r.knobs = m; return nil },
 		InstalledModel: func(id string) bool { return r.installed[id] },
 		ApplyModelConfig: func(id string, cfg models.VLLMConfig) error {
 			r.configs[id] = cfg
@@ -61,7 +63,7 @@ func (r *recorder) deps(numGPUs int) Deps {
 }
 
 func allSections() Selections {
-	return Selections{Settings: true, RuntimeEnv: true, Radiance: true, ModelConfigs: true}
+	return Selections{Settings: true, RuntimeEnv: true, Knobs: true, ModelConfigs: true}
 }
 
 // A restore merges; it never removes what the target already had. A variable
@@ -238,18 +240,18 @@ func TestUnselectedSectionsAreReported(t *testing.T) {
 		Version:      Version,
 		Settings:     &Settings{},
 		RuntimeEnv:   &RuntimeEnv{},
-		Radiance:     &config.RadianceConfig{},
+		Knobs:        map[string]map[string]string{"radiance": {"use_r4d": "1"}},
 		ModelConfigs: []ModelConfigExport{{ModelID: "a/b"}},
 	}
 	rep := Apply(f, Selections{}, r.deps(1))
 
 	joined := strings.Join(rep.NotSelected, ",")
-	for _, want := range []string{"settings", "runtime env", "radiance", "model configs"} {
+	for _, want := range []string{"settings", "runtime env", "knobs", "model configs"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%q missing from %q", want, joined)
 		}
 	}
-	if r.settings != nil || r.env != nil || r.radiance != nil || len(r.configs) != 0 {
+	if r.settings != nil || r.env != nil || r.knobs != nil || len(r.configs) != 0 {
 		t.Error("an unselected section was applied anyway")
 	}
 }
@@ -288,7 +290,103 @@ func TestSelectionsNone(t *testing.T) {
 	if !(Selections{}).None() {
 		t.Error("an empty selection should report None")
 	}
-	if (Selections{Radiance: true}).None() {
+	if (Selections{Knobs: true}).None() {
 		t.Error("one ticked section is not None")
+	}
+}
+
+// ── Variant feature knobs ───────────────────────────────────────────────────
+
+// The merge behaves like the runtime-env one: a knob the target already had
+// and the backup does not mention has to survive.
+func TestKnobMergeNeverDeletes(t *testing.T) {
+	r := newRecorder()
+	f := &File{
+		Version: Version,
+		Knobs:   map[string]map[string]string{"radiance": {"use_r4d": "1"}},
+	}
+	rep := Apply(f, allSections(), r.deps(1))
+
+	if r.knobs == nil {
+		t.Fatalf("knobs were not applied: %+v", rep)
+	}
+	got := r.knobs["radiance"]
+	if got["use_r4d"] != "1" {
+		t.Errorf("use_r4d = %q, want 1 from the backup", got["use_r4d"])
+	}
+	// run_bwtest is what the target already had; the backup never mentions it.
+	if got["run_bwtest"] != "1" {
+		t.Errorf("an existing knob was deleted by the merge: %v", got)
+	}
+}
+
+// Knobs travel per variant, so a backup taken on one image and restored onto
+// another lands under that image's key and waits there rather than being
+// applied to whatever happens to be running.
+func TestKnobsForAnotherVariantAreKeptNotApplied(t *testing.T) {
+	r := newRecorder()
+	f := &File{
+		Version: Version,
+		Knobs:   map[string]map[string]string{"radiance": {"preshuffle": "1"}},
+	}
+	Apply(f, allSections(), r.deps(1))
+
+	if _, wrong := r.knobs["generic"]; wrong {
+		t.Error("radiance knobs leaked onto another variant")
+	}
+	if r.knobs["radiance"]["preshuffle"] != "1" {
+		t.Errorf("knobs did not land under their own variant: %v", r.knobs)
+	}
+}
+
+// A file from a newer build may carry a knob this one has retired, or a whole
+// variant it does not ship. Persisting those would turn vllmctl.yaml into a
+// place stale settings accumulate and quietly disagree with the UI.
+func TestUnknownKnobsAreSkippedNotStored(t *testing.T) {
+	r := newRecorder()
+	f := &File{
+		Version: Version,
+		Knobs: map[string]map[string]string{
+			"radiance":    {"use_r4d": "1", "invented_knob": "1"},
+			"not-a-image": {"whatever": "1"},
+		},
+	}
+	rep := Apply(f, allSections(), r.deps(1))
+
+	if r.knobs["radiance"]["use_r4d"] != "1" {
+		t.Error("a valid knob alongside an invalid one should still apply")
+	}
+	if _, stored := r.knobs["radiance"]["invented_knob"]; stored {
+		t.Error("an undeclared knob was stored")
+	}
+	if _, stored := r.knobs["not-a-image"]; stored {
+		t.Error("knobs for an unknown variant were stored")
+	}
+
+	var reasons []string
+	for _, sk := range rep.Skipped {
+		reasons = append(reasons, sk.Reason)
+	}
+	joined := strings.Join(reasons, "; ")
+	if !strings.Contains(joined, "invented_knob") || !strings.Contains(joined, "not-a-image") {
+		t.Errorf("both problems should be reported, got: %v", rep.Skipped)
+	}
+}
+
+// A select knob carrying a value outside its option list is refused for that
+// variant rather than written through: it would render as no selection at all.
+func TestKnobValueOutsideOptionListIsRefused(t *testing.T) {
+	r := newRecorder()
+	f := &File{
+		Version: Version,
+		Knobs:   map[string]map[string]string{"radiance": {"use_r4d": "perhaps"}},
+	}
+	rep := Apply(f, allSections(), r.deps(1))
+
+	if _, stored := r.knobs["radiance"]; stored {
+		t.Errorf("an invalid value was applied: %v", r.knobs)
+	}
+	if len(rep.Skipped) == 0 {
+		t.Error("the refusal should be reported")
 	}
 }

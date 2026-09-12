@@ -61,7 +61,7 @@ func main() {
 	}
 
 	slog.Info("vLLM environment", "variant", env.Variant, "venv", env.VenvRoot,
-		"launcher", strings.Join(env.Launcher, " "), "radiance_version", env.RadianceVersion)
+		"launcher", strings.Join(env.Launcher, " "), "variant_version", env.VariantVersion)
 
 	// Hot-link any operator-tuned kernel configs into vLLM's site-packages
 	// so vLLM picks them up on next launch. No-op when nothing's been tuned

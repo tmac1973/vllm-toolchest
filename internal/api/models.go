@@ -9,6 +9,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 )
 
 // modelRow is one card on the models page.
@@ -34,6 +35,15 @@ type modelRow struct {
 	// SearchText is what the filter box matches against, lowercased once here
 	// rather than on every keystroke.
 	SearchText string
+	// Tunable reports whether kernel tuning could do anything for this model:
+	// a block-quantized FP8 checkpoint with at least one shape the block
+	// kernel will take. Derived from the model alone, deliberately — the
+	// button appears for a property of the checkpoint, not for the state of
+	// the tuner, and the start endpoint rejects a second concurrent job.
+	Tunable bool
+	// TunableShapes is how many distinct matmul shapes tuning would measure,
+	// shown in the button's tooltip so the cost is visible before clicking.
+	TunableShapes int
 }
 
 func (s *Server) modelRows() []modelRow {
@@ -60,6 +70,16 @@ func (s *Server) modelRows() []modelRow {
 		}
 		if m.ToolUse.HasToolSupport {
 			row.ToolParser = m.ToolUse.ToolCallParser
+		}
+		// Same test the Tuning page applies, so the two pages cannot disagree
+		// about which models are worth tuning.
+		if m.Quantization.IsBlockFP8() {
+			tp := m.VLLMConfig.TensorParallelSize
+			if tp < 1 {
+				tp = 1
+			}
+			row.TunableShapes = len(tuning.DeriveShapes(m.HFConfig, tp, 128, 128))
+			row.Tunable = row.TunableShapes > 0
 		}
 		// Only worth flagging while something is actually running: with the
 		// server stopped, Start will pick up the choice anyway.
@@ -128,9 +148,7 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-
-	respondHTML(w)
-	s.renderPartial(w, "model_config", s.newModelConfigView(m))
+	s.renderConfigPanel(w, m, panelBanner{})
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +211,21 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 	// Clear parser when tool use is disabled
 	if !cfg.EnableAutoToolChoice {
 		cfg.ToolCallParser = ""
+	}
+
+	// The attention backend named in the speculative config or the extra
+	// flags gets the same check the picker does. Refused rather than saved
+	// with a warning: unlike a risky environment variable, this one does not
+	// degrade, it aborts the engine minutes into a load.
+	d, known := s.vllmEnv.Descriptor()
+	if err := validateNamedBackends(d, known, cfg.SpeculativeConfig, cfg.ExtraFlags); err != nil {
+		if isHTMX(r) {
+			respondHTML(w)
+			s.renderPartial(w, "error_message", err.Error())
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if err := s.registry.UpdateConfig(id, cfg); err != nil {

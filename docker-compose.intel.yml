@@ -1,0 +1,66 @@
+# vllm-toolchest on an Intel GPU.
+#
+# Intel needs far less container wiring than AMD -- the render node is the
+# whole story -- and far more host preparation. The image pins vLLM, PyTorch,
+# oneAPI, oneCCL and the drivers to each other, so the kernel, firmware and
+# user-mode driver on the host have to match the release. Intel installer
+# handles that; nothing here can.
+services:
+  vllm-toolchest:
+    # Tag the build deterministically. Without this, compose derives a
+    # project-based name that neither `setup.sh uninstall` nor the Quadlet
+    # unit (which expects localhost/vllm-toolchest:latest) can find. Podman
+    # stores an unqualified name under an implicit localhost/ prefix.
+    image: vllm-toolchest:latest
+    build:
+      context: .
+      dockerfile: ${VLLMCTL_DOCKERFILE:-Dockerfile.prebuilt}
+      args:
+        BASE_IMAGE: "${VLLMCTL_BASE_IMAGE:-docker.io/intel/llm-scaler-vllm:0.26.0-b2}"
+        VARIANT_ID: "${VLLMCTL_VARIANT:-xpu}"
+        VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/opt/venv}"
+        STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
+        VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-v0.26.0}"
+        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
+    container_name: vllm-toolchest
+    ports:
+      - "${VLLMCTL_PORT:-3000}:3000"
+      - "${VLLMCTL_INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - vllmctl-data:/data:z
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${HOST_VIDEO_GID:-video}"
+      - "${HOST_RENDER_GID:-render}"
+    ipc: host
+    # REQUIRED, and not redundant with ipc:host. vLLM's multiprocess executor
+    # puts its inter-process message queue in /dev/shm, and needs a few hundred
+    # MiB of it; the container default is 64 MB, which fails engine startup at
+    # any tensor-parallel size > 1. podman-compose (1.6.0) silently ignores
+    # ipc:host, so shm_size is what actually applies there.
+    shm_size: "${VLLMCTL_SHM_SIZE:-8gb}"
+    cap_add:
+      - SYS_PTRACE   # py-spy; inert unless used
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Bare `- NAME` so an unset variable stays unset rather than becoming an
+    # empty string. xpu declares no feature knobs yet; when it does, add them
+    # here and the manifest drift test will hold the two together.
+    environment:
+      # Which Intel GPUs to expose, by Level Zero index.
+      - ZE_AFFINITY_MASK
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  vllmctl-data:
+    name: vllmctl-data
+    driver: local

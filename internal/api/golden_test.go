@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -163,18 +164,18 @@ func goldenFixtureModels() []*models.Model {
 // goldenEnvGeneric is the default image the recordings render against: a
 // generic install that does carry bitsandbytes, as the CUDA one does.
 var goldenEnvGeneric = vllmenv.Env{
-	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv", HasBitsAndBytes: true,
+	Variant: "rocm-source", VenvRoot: "/opt/vllm-venv", HasBitsAndBytes: true,
 }
 
 // goldenEnvRadiance is the RDNA4 image, which has never shipped bitsandbytes.
 var goldenEnvRadiance = vllmenv.Env{
-	Variant: vllmenv.VariantRadiance, RadianceVersion: "0.9.3", VenvRoot: "/opt/vllm",
+	Variant: "radiance", VariantVersion: "0.9.3", VenvRoot: "/opt/vllm",
 }
 
 // goldenEnvNoBNB is an image whose venv lacks bitsandbytes — the ROCm one,
 // since its only ROCm fork stopped compiling for wave32.
 var goldenEnvNoBNB = vllmenv.Env{
-	Variant: vllmenv.VariantGeneric, VenvRoot: "/opt/vllm-venv",
+	Variant: "rocm-source", VenvRoot: "/opt/vllm-venv",
 }
 
 // newGoldenServer builds a Server whose every dependency is local and
@@ -317,6 +318,8 @@ type goldenCase struct {
 	method  string
 	target  string
 	handler func(*Server, http.ResponseWriter, *http.Request)
+	// setup, when set, runs against the built server before the request.
+	setup func(*testing.T, *Server)
 }
 
 // TestGoldenFragments renders every HTML fragment that can be produced from
@@ -365,10 +368,21 @@ func TestGoldenFragments(t *testing.T) {
 		target:  "/api/models/config-panel?id=" + url.QueryEscape(`evil/model "x><script>`),
 		handler: (*Server).handleModelConfigPanel,
 	})
+	// With saved profiles: pins the picker's labels, the selected entry, and
+	// the "edited since" line.
+	cases = append(cases, goldenCase{
+		name:    "config_panel_profiles",
+		target:  "/api/models/config-panel?id=" + url.QueryEscape("unsloth/Qwen3.8-27B-FP8"),
+		handler: (*Server).handleModelConfigPanel,
+		setup:   seedGoldenProfiles,
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newGoldenServer(t, tc.env)
+			if tc.setup != nil {
+				tc.setup(t, s)
+			}
 			method := tc.method
 			if method == "" {
 				method = "GET"
@@ -385,4 +399,58 @@ func TestGoldenFragments(t *testing.T) {
 			assertGolden(t, tc.name, w.Body.String())
 		})
 	}
+}
+
+// seedGoldenProfiles gives the FP8 fixture two profiles and reloads the
+// registry. Written into models.json rather than through SaveProfile, because
+// SaveProfile stamps the current time and the picker prints the date.
+//
+// The active profile is deliberately the one the live config has drifted from,
+// and the other was saved on a different image, so both of the picker's
+// provenance cues render.
+func seedGoldenProfiles(t *testing.T, s *Server) {
+	t.Helper()
+	const id = "unsloth/Qwen3.8-27B-FP8"
+	path := filepath.Join(s.cfg.DataDir, "config", "models.json")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	var ms map[string]*models.Model
+	if err := json.Unmarshal(file["models"], &ms); err != nil {
+		t.Fatal(err)
+	}
+
+	m := ms[id]
+	m.ActiveProfile = "tp2 baseline"
+	baseline := m.VLLMConfig
+	baseline.MaxModelLen = 16384
+	long := m.VLLMConfig
+	long.MaxModelLen = 131072
+	long.TensorParallelSize = 4
+
+	profiles := []models.ConfigProfile{
+		{ModelID: id, Name: "long ctx", Config: long,
+			SavedAt: time.Date(2026, 3, 2, 8, 0, 0, 0, time.UTC), Variant: "radiance", VariantVersion: "0.9.3"},
+		{ModelID: id, Name: "tp2 baseline", Config: baseline,
+			SavedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC), Variant: "rocm-source"},
+	}
+	if file["models"], err = json.Marshal(ms); err != nil {
+		t.Fatal(err)
+	}
+	if file["config_profiles"], err = json.Marshal(profiles); err != nil {
+		t.Fatal(err)
+	}
+	if data, err = json.Marshal(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.registry = models.NewRegistry(s.cfg.DataDir, filepath.Join(s.cfg.DataDir, "models"))
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // Parse is the structural gate: shape errors reject the whole file, while
@@ -21,7 +22,16 @@ func Parse(data []byte) (*File, error) {
 		return nil, fmt.Errorf("not a valid backup file: %w", err)
 	}
 	if f.Version != Version {
-		return nil, fmt.Errorf("backup version %d is not supported by this build (want %d)", f.Version, Version)
+		// Name both versions and say what to do about it. The alternative
+		// wording ("unsupported version") reads like file corruption, and a
+		// backup is exactly the thing someone reaches for when they are
+		// already having a bad day.
+		return nil, fmt.Errorf(
+			"this backup is version %d and this build writes version %d; "+
+				"version 1 files predate the image-variant manifests and cannot be "+
+				"translated safely, so export a fresh backup from the server that "+
+				"produced this one if it is still running",
+			f.Version, Version)
 	}
 	var shape []string
 	for i, mc := range f.ModelConfigs {
@@ -40,13 +50,13 @@ func Parse(data []byte) (*File, error) {
 type Selections struct {
 	Settings     bool
 	RuntimeEnv   bool
-	Radiance     bool
+	Knobs        bool
 	ModelConfigs bool
 }
 
 // None reports an empty selection.
 func (s Selections) None() bool {
-	return !s.Settings && !s.RuntimeEnv && !s.Radiance && !s.ModelConfigs
+	return !s.Settings && !s.RuntimeEnv && !s.Knobs && !s.ModelConfigs
 }
 
 // SkippedItem is one item that failed to apply, with the reason.
@@ -90,8 +100,11 @@ type Deps struct {
 	CurrentEnv func() RuntimeEnv
 	// ApplyEnv stores the engine-built, engine-validated merged set.
 	ApplyEnv func(RuntimeEnv) error
-	// ApplyRadiance stores the Radiance switches.
-	ApplyRadiance func(config.RadianceConfig) error
+	// ApplyKnobs stores the merged variant feature knobs.
+	ApplyKnobs func(map[string]map[string]string) error
+	// CurrentKnobs returns the target's live knobs, so the engine can build
+	// the never-deletes merge the same way it does for runtime env.
+	CurrentKnobs func() map[string]map[string]string
 	// InstalledModel reports whether a model with this ID is registered.
 	InstalledModel func(modelID string) bool
 	// ApplyModelConfig writes one model's launch config.
@@ -171,16 +184,59 @@ func Apply(f *File, sel Selections, deps Deps) Report {
 		note("runtime env", f.RuntimeEnv != nil)
 	}
 
-	// ── Radiance switches ──
-	if sel.Radiance && f.Radiance != nil {
-		if err := deps.ApplyRadiance(*f.Radiance); err != nil {
-			rep.Skipped = append(rep.Skipped, SkippedItem{"radiance", err.Error()})
-		} else {
-			rep.Applied = append(rep.Applied, "radiance switches")
-			restartReminder = true
+	// ── Variant feature knobs: per-variant, per-knob merge ──
+	//
+	// A knob the running build's manifests do not declare is dropped rather
+	// than stored. A newer build may have retired it, or the file may come
+	// from a variant this build does not ship; either way, persisting a key
+	// nothing reads turns vllmctl.yaml into a place stale settings accumulate
+	// and quietly disagree with the UI.
+	if sel.Knobs && len(f.Knobs) > 0 {
+		merged := map[string]map[string]string{}
+		for variant, vals := range deps.CurrentKnobs() {
+			copied := map[string]string{}
+			for id, v := range vals {
+				copied[id] = v
+			}
+			merged[variant] = copied
 		}
-	} else if !sel.Radiance {
-		note("radiance", f.Radiance != nil)
+
+		applied := 0
+		for variant, vals := range f.Knobs {
+			d, known := variants.Get(variant)
+			if !known {
+				rep.Skipped = append(rep.Skipped, SkippedItem{
+					"knobs", fmt.Sprintf("no manifest describes variant %q in this build", variant)})
+				continue
+			}
+			for id, v := range vals {
+				if _, ok := d.Knob(id); !ok {
+					rep.Skipped = append(rep.Skipped, SkippedItem{
+						"knobs", fmt.Sprintf("%s has no knob %q", variant, id)})
+					continue
+				}
+				if merged[variant] == nil {
+					merged[variant] = map[string]string{}
+				}
+				merged[variant][id] = v
+				applied++
+			}
+			if set := (config.KnobSet{Variant: variant, Values: merged[variant]}); set.Validate() != nil {
+				rep.Skipped = append(rep.Skipped, SkippedItem{"knobs", set.Validate().Error()})
+				delete(merged, variant)
+			}
+		}
+
+		if applied > 0 {
+			if err := deps.ApplyKnobs(merged); err != nil {
+				rep.Skipped = append(rep.Skipped, SkippedItem{"knobs", err.Error()})
+			} else {
+				rep.Applied = append(rep.Applied, fmt.Sprintf("feature knobs: %d switches", applied))
+				restartReminder = true
+			}
+		}
+	} else if !sel.Knobs {
+		note("knobs", len(f.Knobs) > 0)
 	}
 
 	// ── Model configs ──

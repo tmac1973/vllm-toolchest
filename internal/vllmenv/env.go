@@ -1,14 +1,11 @@
 // Package vllmenv discovers the vLLM installation vllmctl is managing.
 //
-// vllmctl ships in more than one image variant, and the variants do not agree
-// on where things live:
-//
-//	generic (Dockerfile.rocm / Dockerfile.cuda)  venv at /opt/vllm-venv
-//	radiance (Dockerfile.radiance)               venv at /opt/vllm
-//
-// Everything that used to be a hardcoded path is resolved here once at boot so
-// the same binary works in either image (and degrades to a harmless no-op when
-// run outside a container during development).
+// vllmctl ships in a dozen image variants and they do not agree on where
+// anything lives: the venv root, the launcher to start a server with, the file
+// that proves which image this is. Each variant states its own layout in
+// variants/<id>.conf, and this package resolves it once at boot, so the same
+// binary works in every image and degrades to a harmless no-op when run
+// outside a container during development.
 package vllmenv
 
 import (
@@ -19,22 +16,25 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
-// Variant names the image this binary is running inside.
-const (
-	VariantGeneric  = "generic"
-	VariantRadiance = "radiance"
-)
+// VariantUnknown is what Detect reports when nothing identifies the image: a
+// development checkout, or a container built before its manifest existed.
+// Every consumer treats it as "no variant-specific behaviour", which is the
+// safe reading — offering a tuned backend on an image that lacks it produces a
+// startup abort minutes after someone picks it.
+const VariantUnknown = ""
 
 // Env is the resolved layout of the vLLM install.
 type Env struct {
 	// Variant is "generic" or "radiance".
 	Variant string
 
-	// RadianceVersion is the version string from /opt/radiance_version,
-	// empty on a generic image.
-	RadianceVersion string
+	// VariantVersion is the version string from the variant's stamp file,
+	// empty when the variant does not ship one.
+	VariantVersion string
 
 	// VenvRoot is the virtualenv prefix (e.g. /opt/vllm-venv), empty if no
 	// vLLM install was found.
@@ -69,43 +69,99 @@ type Env struct {
 	HasBitsAndBytes bool
 }
 
-// venvCandidates are probed in order. VIRTUAL_ENV comes first so an operator
-// can point vllmctl at a venv we don't know about.
-func venvCandidates() []string {
+// venvCandidates are probed in order: the explicit override first, so an
+// operator can point vllmctl at a venv nothing knows about, then the variant's
+// own declared root, then every other variant's, then the two historical
+// defaults.
+//
+// The wide net is deliberate. Getting this wrong means every tuned-kernel
+// path, the bitsandbytes check and the tuner all silently target the wrong
+// interpreter, so it is worth probing a few directories that will not exist.
+func venvCandidates(d variants.Descriptor, known bool) []string {
 	var c []string
-	if v := os.Getenv("VLLMCTL_VLLM_VENV"); v != "" {
+	add := func(v string) {
+		if v == "" {
+			return
+		}
+		for _, seen := range c {
+			if seen == v {
+				return
+			}
+		}
 		c = append(c, v)
 	}
-	if v := os.Getenv("VIRTUAL_ENV"); v != "" {
-		c = append(c, v)
+
+	add(os.Getenv("VLLMCTL_VLLM_VENV"))
+	add(os.Getenv("VIRTUAL_ENV"))
+	if known {
+		add(d.VenvRoot)
 	}
-	return append(c, "/opt/vllm-venv", "/opt/vllm")
+	for _, other := range variants.All() {
+		add(other.VenvRoot)
+	}
+	add("/opt/vllm-venv")
+	add("/opt/vllm")
+	return c
+}
+
+// detectVariant works out which image this is.
+//
+// The explicit override wins: Dockerfile.prebuilt stamps VLLMCTL_IMAGE_VARIANT
+// from the manifest, which makes it the normal path rather than an escape
+// hatch. Failing that, a variant is identified by its stamp file -- a marker
+// its base image ships, which no other image has.
+func detectVariant() (string, string) {
+	if v := os.Getenv("VLLMCTL_IMAGE_VARIANT"); v != "" {
+		if d, ok := variants.Get(v); ok {
+			return v, stampVersion(d.StampFile)
+		}
+		// Honour an unrecognised name rather than silently reporting
+		// something else: the operator set it, and the UI says so.
+		return v, ""
+	}
+	for _, d := range variants.All() {
+		if d.StampFile == "" {
+			continue
+		}
+		if version := stampVersion(d.StampFile); version != "" {
+			return d.ID, version
+		}
+	}
+	return VariantUnknown, ""
+}
+
+// stampVersion reads a variant's stamp file. A stamp with no readable content
+// still identifies the image, so an empty-but-present file reports a space
+// rather than nothing -- callers test the version for display, not identity.
+func stampVersion(path string) string {
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if v := strings.TrimSpace(string(b)); v != "" {
+		return v
+	}
+	return " "
 }
 
 // Detect resolves the environment. It only touches the filesystem — no GPU is
 // initialized and no Python is executed, so it is safe to call at boot.
 func Detect() Env {
 	e := Env{
-		Variant:  VariantGeneric,
 		Python:   "python",
 		Launcher: []string{"vllm", "serve"},
 	}
 
-	// A radiance image stamps its version into /opt. RADIANCE_VERSION is the
-	// same value as an env var, and VLLMCTL_IMAGE_VARIANT is the explicit
-	// operator override for anything the two miss.
-	if b, err := os.ReadFile("/opt/radiance_version"); err == nil {
-		e.Variant = VariantRadiance
-		e.RadianceVersion = strings.TrimSpace(string(b))
-	} else if v := os.Getenv("RADIANCE_VERSION"); v != "" {
-		e.Variant = VariantRadiance
-		e.RadianceVersion = v
+	e.Variant, e.VariantVersion = detectVariant()
+	if strings.TrimSpace(e.VariantVersion) == "" {
+		e.VariantVersion = ""
 	}
-	if v := os.Getenv("VLLMCTL_IMAGE_VARIANT"); v != "" {
-		e.Variant = v
-	}
+	d, known := variants.Get(e.Variant)
 
-	for _, root := range venvCandidates() {
+	for _, root := range venvCandidates(d, known) {
 		sp, ok := sitePackagesWithVLLM(root)
 		if !ok {
 			continue
@@ -121,12 +177,13 @@ func Detect() Env {
 		break
 	}
 
-	// The radiance entrypoint takes the same arguments `vllm serve` does and
-	// execs it, so using it as the launcher keeps the arch/P2P/version banner
-	// and the bandwidth sweep in our log stream. Fall back to plain `vllm`
-	// if it isn't there (e.g. someone ran vllmctl against a stock image).
-	if e.Variant == VariantRadiance && isExecutable("/opt/radiance_entrypoint.sh") {
-		e.Launcher = []string{"/opt/radiance_entrypoint.sh"}
+	// A variant may ship a launcher that takes the same arguments `vllm serve`
+	// does and execs it. Using it keeps whatever that script contributes --
+	// an arch/P2P banner, NUMA binding, a bandwidth sweep -- in our log
+	// stream. Fall back to plain `vllm` if it is not there, which is what
+	// happens when vllmctl is run against a stock image.
+	if known && len(d.Launcher) > 0 && isExecutable(d.Launcher[0]) {
+		e.Launcher = d.Launcher
 	}
 
 	if p := "/opt/vllm-tuner/tune_fp8_wrapper.py"; fileExists(p) {
@@ -136,14 +193,25 @@ func Detect() Env {
 	return e
 }
 
-// IsRadiance reports whether this is the radiance image variant.
-func (e Env) IsRadiance() bool { return e.Variant == VariantRadiance }
+// Descriptor returns the manifest describing this image, if one does.
+func (e Env) Descriptor() (variants.Descriptor, bool) { return variants.Get(e.Variant) }
+
+// Has reports whether this image's variant declares a capability. An image no
+// manifest describes has none, which is what makes the UI degrade to its
+// generic form rather than offering something the stack cannot do.
+func (e Env) Has(capability string) bool {
+	d, ok := variants.Get(e.Variant)
+	return ok && d.Has(capability)
+}
 
 // Describe returns a one-line human-readable summary for logs and the UI.
 func (e Env) Describe() string {
 	s := e.Variant
-	if e.RadianceVersion != "" {
-		s += " " + e.RadianceVersion
+	if s == "" {
+		s = "unknown"
+	}
+	if e.VariantVersion != "" {
+		s += " " + e.VariantVersion
 	}
 	if e.VenvRoot != "" {
 		s += " (" + e.VenvRoot + ")"

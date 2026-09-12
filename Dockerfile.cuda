@@ -51,6 +51,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 
 ENV HF_HOME=/data/cache/huggingface
 
+# ── Variant identity ──────────────────────────────────────────────
+# This image ships no stamp file, so it names itself. vllmctl reads this
+# to find its manifest and therefore which knobs and backends to offer.
+ENV VLLMCTL_IMAGE_VARIANT=cuda-source
+
 # ── Go management binary ──────────────────────────────────────────
 COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
 

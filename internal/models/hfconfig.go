@@ -141,6 +141,9 @@ func DetectQuantization(modelDir, modelID string) QuantMeta {
 				GroupSize    int                        `json:"group_size"`
 				Format       string                     `json:"format"`
 				ConfigGroups map[string]json.RawMessage `json:"config_groups"`
+				// Native fp8 checkpoints state their block shape here.
+				// compressed-tensors puts it inside config_groups instead.
+				WeightBlockSize []int `json:"weight_block_size"`
 			} `json:"quantization_config"`
 		}
 		if json.Unmarshal(data, &cfg) == nil && cfg.QuantizationConfig != nil && cfg.QuantizationConfig.QuantMethod != "" {
@@ -150,8 +153,12 @@ func DetectQuantization(modelDir, modelID string) QuantMeta {
 			// compressed-tensors (RedHatAI / llm-compressor format) stores
 			// the actual quant scheme inside config_groups[*].weights.
 			// Parse it so we get the right bytes/param for FP8, INT8, INT4.
+			q.WeightBlockSize = cfg.QuantizationConfig.WeightBlockSize
 			if q.Method == "compressed-tensors" || q.Method == "compressed_tensors" {
 				q.Bits, _ = compressedTensorsBits(cfg.QuantizationConfig.ConfigGroups, cfg.QuantizationConfig.Format)
+				if len(q.WeightBlockSize) == 0 {
+					q.WeightBlockSize = compressedTensorsBlockSize(cfg.QuantizationConfig.ConfigGroups)
+				}
 			}
 			q.BytesPerParam = bytesPerParam(q.Method, q.Bits, q.GroupSize)
 			return q
@@ -521,6 +528,35 @@ func compressedTensorsBits(groups map[string]json.RawMessage, format string) (in
 		return 8, "int"
 	}
 	return 0, ""
+}
+
+// compressedTensorsBlockSize reads the weight block shape from a
+// compressed-tensors config, which states it per group rather than at the top
+// level.
+//
+// Only a "block" strategy counts. The other strategies name the axis the
+// scales apply over -- "tensor", "channel", "group", "token" -- and none of
+// them reaches the block-FP8 kernel, so treating them as blockwise would
+// promise a tuning win that cannot happen.
+func compressedTensorsBlockSize(groups map[string]json.RawMessage) []int {
+	for _, raw := range groups {
+		var grp struct {
+			Weights struct {
+				Strategy       string `json:"strategy"`
+				BlockStructure []int  `json:"block_structure"`
+			} `json:"weights"`
+		}
+		if json.Unmarshal(raw, &grp) != nil {
+			continue
+		}
+		if strings.ToLower(grp.Weights.Strategy) != "block" {
+			continue
+		}
+		if len(grp.Weights.BlockStructure) >= 2 {
+			return grp.Weights.BlockStructure
+		}
+	}
+	return nil
 }
 
 func detectGGUFQuantType(dir string) string {

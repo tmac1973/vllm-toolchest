@@ -7,6 +7,52 @@
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong> {{printf "%.1f" .WeightGB}} GB weights + {{printf "%.1f" .OverheadGB}} GB overhead = <strong>{{printf "%.1f" .TotalGB}} GB</strong> &mdash; {{.FitLabel}}
   </div>
+  {{/* The profile controls sit OUTSIDE the config form below, and that is the
+       whole reason this block is here rather than in a fieldset. The form
+       autosaves on "change" with hx-include="closest form": a select inside
+       it would save the config every time the operator browsed the list, and
+       the name box would be posted with every save. */}}
+  <div class="model-profiles" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML"
+       hx-on::before-request="window._cfgScrollY=window.scrollY"
+       hx-on::after-settle="window.scrollTo({top:window._cfgScrollY,behavior:'instant'})">
+    {{- with .ReadOnly}}
+    <p class="mp-msg mp-error">models.json {{.}}, so nothing on this panel will be saved.</p>
+    {{- end}}
+    {{- with .Banner.OK}}
+    <p class="mp-msg mp-ok">{{.}}</p>
+    {{- end}}
+    {{- with .Banner.Warning}}
+    <p class="mp-msg mp-warn">&#9888; {{.}}</p>
+    {{- end}}
+    {{- with .Banner.Error}}
+    <p class="mp-msg mp-error">{{.}}</p>
+    {{- end}}
+    {{/* No confirm on Restore: replacing a config that was never saved is the
+         operator's business. Delete does confirm, because the live config can
+         be saved again from this panel and a deleted profile cannot. */}}
+    <div role="group">
+      <select id="profile-pick-{{.SafeID}}" name="name" aria-label="Saved profiles"{{if not .Profiles}} disabled{{end}}>
+        {{- range .Profiles}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{else}}<option value="">(no saved profiles)</option>{{end -}}
+      </select>
+      <button type="button" class="outline"{{if not .Profiles}} disabled{{end}}
+              hx-post="/api/models/profiles/apply?id={{.ID}}" hx-include="#profile-pick-{{.SafeID}}">Restore</button>
+      <button type="button" class="outline secondary"{{if not .Profiles}} disabled{{end}}
+              hx-post="/api/models/profiles/delete?id={{.ID}}" hx-include="#profile-pick-{{.SafeID}}"
+              hx-confirm="Delete this profile? The settings below are not changed.">Delete</button>
+    </div>
+    {{/* Pre-filled with the active profile, so restore, adjust, save again
+         under the same name is two clicks; the banner then says Replaced. */}}
+    <div role="group">
+      <input type="text" id="profile-name-{{.SafeID}}" name="name" maxlength="{{.ProfileNameMax}}" autocomplete="off"
+             placeholder="Name these settings" value="{{.ActiveProfile}}"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click();}">
+      <button type="button" class="outline"
+              hx-post="/api/models/profiles?id={{.ID}}" hx-include="#profile-name-{{.SafeID}}">Save as profile</button>
+    </div>
+    {{- if .ActiveProfile}}
+    <small class="mp-from">From profile <strong>{{.ActiveProfile}}</strong>{{if .ProfileDirty}} &mdash; edited since{{end}}.</small>
+    {{- end}}
+  </div>
   {{/* A rejected save leaves the form unswapped and htmx says nothing about
        it, so the panel just looks frozen — including for changes whose
        re-render would reveal new fields. Surface the response text, and put
@@ -49,7 +95,7 @@
     <fieldset><legend>Performance</legend>
       <div class="grid">
         <label title="Disable HIP/CUDA graph compilation. Slower steady-state but faster startup. Enable if you get graph compilation errors."><input type="checkbox" name="enforce_eager" role="switch"{{if .EnforceEager}} checked{{end}}> Enforce eager mode</label>
-        <label title="Cache KV blocks for shared prefixes (system prompts). Speeds up requests sharing the same prefix. Safe for most workloads."><input type="checkbox" name="enable_prefix_caching" role="switch"{{if .EnablePrefixCaching}} checked{{end}}> Prefix caching</label>
+        <label title="Reuse the KV blocks of a shared prefix — a system prompt, a conversation so far — instead of recomputing them every turn.&#10;&#10;UNTICKED does not mean off. vLLM decides per model, and enables it for ordinary decoder models. It declines only where the feature is still experimental: hybrid linear-attention (gated-delta-net / mamba) models, attention-free models, and encoder-decoder ones.&#10;&#10;TICKED forces it on. On a model vLLM declined, it warns that this may crash the engine or produce incorrect output — and on a hybrid model you also need the mamba cache mode below set to align."><input type="checkbox" name="enable_prefix_caching" role="switch"{{if .EnablePrefixCaching}} checked{{end}}> Force prefix caching</label>
       </div>
       <label title="Max concurrent sequences (requests). Lower = less memory, more predictable latency. Single user: 1-4. Multi-user: 16-64.">Max concurrent sequences <select name="max_num_seqs">
         {{- range .MaxNumSeqsOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}

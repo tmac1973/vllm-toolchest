@@ -26,18 +26,25 @@ func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := make([]dashboardTiming, 0, len(avgs))
-	for _, a := range avgs {
-		rows = append(rows, dashboardTiming{
+	toRow := func(a benchmark.RunningAverage) dashboardTiming {
+		return dashboardTiming{
 			ModelID:   a.ModelID,
 			AvgGenTPS: a.AvgGenTPS,
 			Count:     a.Count,
 			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
-		})
+		}
+	}
+
+	view := timingsView{MinSamples: benchmark.MinSamplesForAverage()}
+	for _, a := range avgs {
+		view.Rows = append(view.Rows, toRow(a))
+	}
+	for _, a := range s.bench.PendingAverages() {
+		view.Pending = append(view.Pending, toRow(a))
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "timings_list", rows)
+	s.renderPartial(w, "timings_list", view)
 }
 
 // handleTimingsForModel returns recent timing samples plus the running
@@ -286,7 +293,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		Quant:     model.Quantization.Method,
 		SizeGB:    float64(model.TotalSizeBytes) / (1024 * 1024 * 1024),
 
-		Config: configSnapshotFromModel(model),
+		Config: s.configSnapshotFromModel(model),
 
 		GPUs: benchmark.GPUSnapshotsFromMetrics(s.monitor.Current()),
 
@@ -614,10 +621,15 @@ func (s *Server) renderRunDetail(w http.ResponseWriter, run *benchmark.Benchmark
 	s.renderPartial(w, "run_detail", view)
 }
 
-// configSnapshotFromModel extracts the 7 perf-relevant fields from a
-// model's saved vLLM config.
-func configSnapshotFromModel(m *models.Model) benchmark.ConfigSnapshot {
+// configSnapshotFromModel freezes the part of a model's saved config that moves
+// benchmark numbers, and which profile it came from.
+//
+// It is the one builder for ad-hoc runs and job cells alike. There used to be
+// two, and they had already drifted: neither set MaxNumSeqs, though the
+// snapshot had the field and a job could sweep it.
+func (s *Server) configSnapshotFromModel(m *models.Model) benchmark.ConfigSnapshot {
 	v := m.VLLMConfig
+	profile, modified := s.registry.ActiveProfile(m.ID)
 	return benchmark.ConfigSnapshot{
 		MaxModelLen:          v.MaxModelLen,
 		TensorParallelSize:   v.TensorParallelSize,
@@ -626,6 +638,22 @@ func configSnapshotFromModel(m *models.Model) benchmark.ConfigSnapshot {
 		EnforceEager:         v.EnforceEager,
 		Dtype:                v.Dtype,
 		QuantMethod:          m.Quantization.Method,
+		MaxNumSeqs:           v.MaxNumSeqs,
+
+		ProfileName:     profile,
+		ProfileModified: modified,
+
+		SpeculativeConfig:      v.SpeculativeConfig,
+		AttentionBackend:       v.AttentionBackend,
+		CompilationConfig:      v.CompilationConfig,
+		EnablePrefixCaching:    v.EnablePrefixCaching,
+		MambaCacheMode:         v.MambaCacheMode,
+		EnableChunkedPrefill:   v.EnableChunkedPrefill,
+		MaxNumBatchedTokens:    v.MaxNumBatchedTokens,
+		KVCacheMemory:          v.KVCacheMemory,
+		DisableAsyncScheduling: v.DisableAsyncScheduling,
+		Quantization:           v.Quantization,
+		ExtraFlags:             v.ExtraFlags,
 	}
 }
 
