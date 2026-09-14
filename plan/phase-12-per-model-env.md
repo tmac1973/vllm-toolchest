@@ -188,8 +188,11 @@ The same investigation found `variants/rdna4-clav.conf` pinned to
 `tcclaviger/vllm:28.02.2` (8 Sep) while the author's newest is `28.04.9`
 (13 Sep), and the offload flags that model needs — `--enable-expert-offload`,
 `--ple-nvme-offload` and their sizing options — only exist from `28.03.1` on.
-Bumping a pin means re-verifying `VARIANT_VLLM_PIN` and `VARIANT_TUNER_REF`
-against the new image, which is its own change. `VLLMCTL_BASE_IMAGE` already
+Bumped on the `clav-28.04.9` branch, 2026-09-14. Re-verifying the pin against
+the new image turned out to change nothing: 28.04.9 reports the same vLLM
+build, `0.27.0.dev0+g55c98e370a`, as 28.02.2 did four releases earlier — which
+is exactly why that field is read from the image and never inferred from the
+tag. `VLLMCTL_BASE_IMAGE` already
 overrides a variant's base image for a one-off test without touching the
 manifest. A staleness check belongs in `setup.sh` — compare the manifest pin
 against the registry and report — which `plan/todo.md` already carries as
