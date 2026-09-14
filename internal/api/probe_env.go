@@ -80,7 +80,7 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 		[]string{"--host", e.probeHost, "--port", fmt.Sprintf("%d", e.probePort)},
 		process.BuildArgs(cfg)...,
 	))
-	env := e.s.launchEnv(m.Quantization.Method)
+	env := e.s.launchEnv(m)
 
 	cmdCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

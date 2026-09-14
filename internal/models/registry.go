@@ -176,6 +176,18 @@ type VLLMConfig struct {
 
 	// LanguageModelOnly serves a vision-language checkpoint text-only.
 	LanguageModelOnly bool `json:"language_model_only,omitempty"`
+
+	// Env is this model's own launch environment, KEY=VALUE per line. It is
+	// applied after the machine-wide runtime environment and overrides it by
+	// name, because a variable like VLLM_PLE_CPU_OFFLOAD describes a
+	// checkpoint rather than a host.
+	//
+	// A string rather than a map, and that is load-bearing: VLLMConfig is
+	// compared with == to detect profile drift (see Registry.ActiveProfile),
+	// and a map or slice field would stop this package compiling. The
+	// machine-wide equivalent, Config.RuntimeEnvExtra, stores its free-form
+	// block the same way, so config.EnvSet parses and validates both.
+	Env string `json:"env,omitempty"`
 }
 
 // schemaVersion is the envelope version this build writes.
