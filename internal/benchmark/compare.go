@@ -49,6 +49,7 @@ var compareDimensions = []compareDimension{
 	{"prefix_caching", "Prefix cache", func(r BenchmarkRun) string { return onOrEmpty(r.Config.EnablePrefixCaching) }},
 	{"chunked_prefill", "Chunked prefill", func(r BenchmarkRun) string { return onOrEmpty(r.Config.EnableChunkedPrefill) }},
 	{"max_num_batched_tokens", "Batched tokens", func(r BenchmarkRun) string { return itoaOrEmpty(r.Config.MaxNumBatchedTokens) }},
+	{"env", "Environment", func(r BenchmarkRun) string { return r.Config.EnvSummary() }},
 	{"prompt_sizes", "Prompt sizes", func(r BenchmarkRun) string { return intsText(r.PromptTokens) }},
 	{"gen_tokens", "Gen tokens", func(r BenchmarkRun) string { return itoaOrEmpty(r.GenTokens) }},
 	{"vllm_version", "vLLM", func(r BenchmarkRun) string { return r.VLLMVersion }},

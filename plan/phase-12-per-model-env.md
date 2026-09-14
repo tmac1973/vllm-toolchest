@@ -1,6 +1,8 @@
 # Phase 12: Per-model environment variables
 
-**Status:** planned. Nothing implemented.
+**Status:** implemented on the `per-model-env` branch, 2026-09-14, in the three
+commits §8 lists. The row-editor question in §2 is still open and does not
+block anything; the textarea shipped.
 
 ## About this document
 
@@ -139,10 +141,23 @@ as absent, so runs that set nothing add no column.
 
 1. `VLLMConfig.Env`, parsing and the launch layer, with tests for precedence
    and for a name set in several layers at once.
-2. `effectiveEnvLines` generalized to take the model's pairs; the config panel
-   renders the effective environment.
-3. The textarea, validation, warnings, golden regeneration.
-4. The benchmark snapshot field, compare dimension and CSV column.
+2. The panel: textarea, the effective-environment preview, validation and
+   warnings, golden regeneration.
+3. The benchmark snapshot field, compare dimension and CSV column.
+
+Planned as four; the effective-environment view and the textarea became one
+commit because both change the config panel, and splitting them would
+regenerate the golden recordings twice for one visible change.
+
+Two things this turned up while being built:
+
+- `effectiveEnvLines` re-implemented the same layering `launchEnv` builds.
+  Adding a fifth layer to one of them would have let the preview drift from
+  what actually launches, so both now read from one `configuredEnvPairs`.
+- `launchEnv` took a quantization method; it takes the model now. The
+  environment and the quant method have to come from the same record, and a
+  caller that passed one and forgot the other would serve a model under an
+  environment it was never configured with.
 
 ## 9. Testing
 
