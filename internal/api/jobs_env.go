@@ -75,7 +75,7 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 
 	startCfg := vllmStartConfigFor(m, cfg)
 	args := process.BuildArgs(startCfg)
-	env := e.s.launchEnv(m.Quantization.Method)
+	env := e.s.launchEnv(m)
 
 	// Already serving this model with these exact arguments: nothing to do.
 	//

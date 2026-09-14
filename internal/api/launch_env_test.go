@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
@@ -25,7 +26,7 @@ func envValue(env []string, name string) (string, bool) {
 // bake -- which for radiance means AITER paths that crash on gfx1201.
 func TestVariantImageEnvIsApplied(t *testing.T) {
 	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
-	env := s.launchEnv("")
+	env := s.launchEnv(&models.Model{})
 
 	d, _ := variants.Get("radiance")
 	if len(d.ImageEnv) == 0 {
@@ -56,7 +57,7 @@ func TestOperatorSettingsOverrideTheImageEnv(t *testing.T) {
 	cfg := &config.Config{RuntimeEnvExtra: name + "=operator-wins"}
 	s := &Server{cfg: cfg, vllmEnv: vllmenv.Env{Variant: "radiance"}}
 
-	got, ok := envValue(s.launchEnv(""), name)
+	got, ok := envValue(s.launchEnv(&models.Model{}), name)
 	if !ok {
 		t.Fatalf("%s missing entirely", name)
 	}
@@ -73,7 +74,7 @@ func TestOperatorSettingsOverrideTheImageEnv(t *testing.T) {
 // tries -- but check the resulting environment too, since that is what breaks.
 func TestProcessManagerRequirementsSurvive(t *testing.T) {
 	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
-	env := s.launchEnv("")
+	env := s.launchEnv(&models.Model{})
 	for name, want := range map[string]string{
 		"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
 		"PYTHONUNBUFFERED":             "1",
@@ -91,7 +92,7 @@ func TestUnknownVariantContributesNoImageEnv(t *testing.T) {
 	if got := s.variantImageEnv(); got != nil {
 		t.Errorf("got %v, want nothing", got)
 	}
-	if len(s.launchEnv("")) == 0 {
+	if len(s.launchEnv(&models.Model{})) == 0 {
 		t.Error("the process manager's own defaults should still be there")
 	}
 }
@@ -108,5 +109,79 @@ func TestVariantImageEnvIsCopied(t *testing.T) {
 
 	if second := s.variantImageEnv(); second[0] == "CLOBBERED=1" {
 		t.Error("the manifest's slice was handed out directly and got mutated")
+	}
+}
+
+// The case per-model environment exists for: a variable that describes one
+// checkpoint must beat the machine-wide value of the same name, and must not
+// disturb the names that model says nothing about.
+func TestModelEnvOverridesTheMachineWideOne(t *testing.T) {
+	s := &Server{
+		cfg:     &config.Config{RuntimeEnvExtra: "VLLM_PLE_CPU_OFFLOAD=0\nNCCL_DEBUG=WARN"},
+		vllmEnv: vllmenv.Env{Variant: "radiance"},
+	}
+	m := &models.Model{VLLMConfig: models.VLLMConfig{Env: "VLLM_PLE_CPU_OFFLOAD=1"}}
+
+	env := s.launchEnv(m)
+	if got, _ := envValue(env, "VLLM_PLE_CPU_OFFLOAD"); got != "1" {
+		t.Errorf("VLLM_PLE_CPU_OFFLOAD = %q, want the model's 1", got)
+	}
+	if got, _ := envValue(env, "NCCL_DEBUG"); got != "WARN" {
+		t.Errorf("NCCL_DEBUG = %q, want the machine-wide WARN", got)
+	}
+}
+
+// The model sits above the image manifest as well, which is the layer a
+// model-specific variable most often has to argue with.
+func TestModelEnvOverridesTheImageManifest(t *testing.T) {
+	d, _ := variants.Get("radiance")
+	if len(d.ImageEnv) == 0 {
+		t.Skip("radiance declares no image env")
+	}
+	name, imageValue, _ := strings.Cut(d.ImageEnv[0], "=")
+
+	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
+	m := &models.Model{VLLMConfig: models.VLLMConfig{Env: name + "=model-wins"}}
+
+	got, ok := envValue(s.launchEnv(m), name)
+	if !ok {
+		t.Fatalf("%s missing entirely", name)
+	}
+	if got == imageValue {
+		t.Errorf("%s = %q: the image default beat the model", name, got)
+	}
+	if got != "model-wins" {
+		t.Errorf("%s = %q, want the model's value", name, got)
+	}
+}
+
+// Comments and malformed lines are dropped rather than breaking the launch,
+// the same way the machine-wide block treats them. The panel warns; the launch
+// carries on with what parsed.
+func TestModelEnvDropsMalformedLines(t *testing.T) {
+	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
+	m := &models.Model{VLLMConfig: models.VLLMConfig{
+		Env: "# the drafter needs this\nnot a pair\nCLAV_GDN=1\n",
+	}}
+
+	env := s.launchEnv(m)
+	if got, _ := envValue(env, "CLAV_GDN"); got != "1" {
+		t.Errorf("CLAV_GDN = %q, want 1 despite the junk line above it", got)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "not a pair") || strings.HasPrefix(kv, "#") {
+			t.Errorf("a malformed line reached the launch environment: %q", kv)
+		}
+	}
+}
+
+// launchEnv now takes the model rather than a quantization method, so check
+// the quant-derived part still arrives: AWQ needs the Triton kernel switch.
+func TestQuantMethodStillReachesTheEnvironment(t *testing.T) {
+	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
+	m := &models.Model{Quantization: models.QuantMeta{Method: "awq"}}
+
+	if got, ok := envValue(s.launchEnv(m), "VLLM_USE_TRITON_AWQ"); !ok || got != "1" {
+		t.Errorf("VLLM_USE_TRITON_AWQ = %q (present=%v), want 1 for an AWQ model", got, ok)
 	}
 }

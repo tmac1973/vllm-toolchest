@@ -113,7 +113,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	modelPath := process.ResolveModelPath(m.LocalPath)
 	startCfg := m.StartConfig()
 	args := process.BuildArgs(startCfg)
-	env := s.launchEnv(m.Quantization.Method)
+	env := s.launchEnv(m)
 
 	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
 		if isHTMX(r) {
@@ -196,7 +196,7 @@ func (s *Server) startModel(m *models.Model) error {
 		m.ID,
 		process.ResolveModelPath(m.LocalPath),
 		process.BuildArgs(m.StartConfig()),
-		s.launchEnv(m.Quantization.Method),
+		s.launchEnv(m),
 	)
 }
 

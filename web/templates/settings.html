@@ -217,10 +217,10 @@
         {{end}}
         </tbody>
     </table>
-    <label style="margin-top:1rem;" title="Variables outside the table above, one KEY=VALUE per line. Lines starting with # are ignored. A name set both here and above takes this value. Anything is accepted, but variables that fight a mechanism this tool relies on are saved with a warning.">
-        Extra environment
+    <label style="margin-top:1rem;" title="Variables outside the table above. One KEY=VALUE per line — a comma does not separate entries, it becomes part of the value. Lines starting with # are ignored. A name set both here and above takes this value. Anything is accepted, but variables that fight a mechanism this tool relies on are saved with a warning.">
+        Extra environment <small>(one KEY=VALUE per line)</small>
         <textarea name="runtime_env_extra" rows="3"
-                  placeholder="KEY=VALUE &mdash; one per line, # comments allowed"
+                  placeholder="VLLM_LOGGING_LEVEL=DEBUG&#10;MY_VAR=1"
                   class="mono" style="font-size:0.85em;">{{.RuntimeEnvExtra}}</textarea>
     </label>
     {{range .EnvWarnings}}

@@ -95,6 +95,13 @@ type modelConfigView struct {
 	Tokenizer              string
 	ExtraFlags             string
 
+	// Env is this model's own environment block, and EffectiveEnv is what the
+	// launch works out to once the image, machine-wide and knob layers are
+	// applied under it. The preview is the point: a name set in two places is
+	// otherwise invisible until the engine behaves oddly.
+	Env          string
+	EffectiveEnv []envLine
+
 	EffectiveCommand string
 }
 
@@ -146,6 +153,8 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		ChatTemplate:           c.ChatTemplate,
 		Tokenizer:              c.Tokenizer,
 		ExtraFlags:             c.ExtraFlags,
+		Env:                    c.Env,
+		EffectiveEnv:           s.effectiveEnvLines(m),
 	}
 
 	v.ReadOnly = s.registry.ReadOnly()

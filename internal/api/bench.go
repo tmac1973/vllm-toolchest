@@ -654,6 +654,7 @@ func (s *Server) configSnapshotFromModel(m *models.Model) benchmark.ConfigSnapsh
 		DisableAsyncScheduling: v.DisableAsyncScheduling,
 		Quantization:           v.Quantization,
 		ExtraFlags:             v.ExtraFlags,
+		Env:                    v.Env,
 	}
 }
 

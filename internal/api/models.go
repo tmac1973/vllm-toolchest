@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
@@ -192,6 +193,7 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 			Tokenizer:              r.FormValue("tokenizer"),
 			ChatTemplate:           r.FormValue("chat_template"),
 			ExtraFlags:             r.FormValue("extra_flags"),
+			Env:                    strings.TrimSpace(r.FormValue("env")),
 		}
 		if cfg.LoadFormat == "" {
 			cfg.LoadFormat = "auto"
@@ -240,10 +242,31 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 
 	if isHTMX(r) {
 		// Re-render the full config panel so effective command updates
-		s.handleModelConfigPanel(w, r)
+		s.renderConfigPanel(w, m, panelBanner{Warning: envBlockWarning(cfg.Env)})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// envBlockWarning is what to say about a model's environment block, or "" when
+// there is nothing to say.
+//
+// It warns and never refuses, for two reasons. The panel autosaves on every
+// change, so refusing a half-typed line would decline to save the whole config
+// and lose the operator's other edits. And a variable that silently fails to
+// apply is the worse outcome: the launch drops a malformed line either way,
+// so the only question is whether anyone is told.
+func envBlockWarning(env string) string {
+	if strings.TrimSpace(env) == "" {
+		return ""
+	}
+	set := config.EnvSet{Extra: env}
+	var notes []string
+	if err := set.Validate(); err != nil {
+		notes = append(notes, err.Error()+" — that line is ignored")
+	}
+	notes = append(notes, set.Warnings()...)
+	return strings.Join(notes, " · ")
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {

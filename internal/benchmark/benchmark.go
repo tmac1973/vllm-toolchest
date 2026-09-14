@@ -6,6 +6,7 @@
 package benchmark
 
 import (
+	"strings"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
@@ -122,6 +123,25 @@ type ConfigSnapshot struct {
 	// ExtraFlags can change anything at all, so it is recorded verbatim and
 	// never interpreted.
 	ExtraFlags string `json:"extra_flags,omitempty"`
+	// Env is the model's own launch environment, recorded for the reason the
+	// attention backend is: it changes the numbers. A kernel path switched on
+	// for one run and not another is invisible in every other field here.
+	// Kept verbatim, newlines and all; EnvSummary flattens it for display.
+	Env string `json:"env,omitempty"`
+}
+
+// EnvSummary is the environment block on one line, for a table cell or a CSV
+// field. Empty stays empty, so a run that set nothing adds no column.
+func (c ConfigSnapshot) EnvSummary() string {
+	var kept []string
+	for _, line := range strings.Split(c.Env, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "; ")
 }
 
 // ProfileLabel is the profile a run's config came from, as a comparison should

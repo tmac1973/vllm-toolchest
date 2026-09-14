@@ -99,6 +99,10 @@
         <label title="Load the tokenizer from a different path or HF repo than the model.">Tokenizer <input type="text" name="tokenizer" value="" placeholder="(use the model's own)"></label>
       </div>
       <label title="Raw CLI flags appended to vllm serve. Quoted values are kept together, so JSON with spaces survives. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="" placeholder="--disable-log-requests --swap-space 4"></label>
+      
+      <label title="Environment variables for this model only. One KEY=VALUE per line — a comma does not separate entries, it becomes part of the value. Applied after the machine-wide runtime environment in Settings, so a name set here overrides it for this model. Blank lines and #-comments are ignored. Takes effect at the next restart.">Environment <small>(this model only &mdash; one KEY=VALUE per line)</small>
+        <textarea name="env" rows="3" spellcheck="false" placeholder="VLLM_PLE_CPU_OFFLOAD=1&#10;CLAV_GDN=1"></textarea>
+      </label>
     </fieldset>
 
     <fieldset><legend>Effective Command</legend>

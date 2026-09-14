@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
 // envLine is one row of the effective-environment preview: the KEY=VALUE pair
@@ -28,14 +29,16 @@ type envLine struct {
 // effectiveEnvLines renders the configured runtime environment as the launch
 // will apply it, annotating entries that replace a value the image exports.
 //
-// It reports the same two layers the launch does, in the same order, so the
-// preview cannot disagree with what actually runs: the runtime environment
-// first, then the running variant's feature knobs. See launchEnv.
-func (s *Server) effectiveEnvLines() []envLine {
-	pairs := append(s.variantImageEnv(), s.cfg.RuntimeEnvPairs()...)
-	pairs = append(pairs, s.cfg.KnobEnv(s.vllmEnv.Variant)...)
+// It reads the layers from configuredEnvPairs, the same function the launch
+// builds from, so the preview cannot disagree with what actually runs.
+//
+// A nil model gives the machine-wide environment alone, which is what the
+// Settings page shows; passing a model adds that model's own layer on top and
+// is what the config panel shows.
+func (s *Server) effectiveEnvLines(m *models.Model) []envLine {
+	pairs := s.configuredEnvPairs(m)
 
-	// Later wins, exactly as os/exec resolves it, so a name set in both
+	// Later wins, exactly as os/exec resolves it, so a name set in several
 	// layers appears once with the value that will actually apply.
 	order := []string{}
 	value := map[string]string{}

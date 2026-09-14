@@ -465,7 +465,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		RuntimeEnvRows:  s.runtimeEnvRows(),
 		RuntimeEnvExtra: c.RuntimeEnvExtra,
 		EnvWarnings:     c.EnvSet().Warnings(),
-		EffectiveEnv:    s.effectiveEnvLines(),
+		EffectiveEnv:    s.effectiveEnvLines(nil),
 
 		DataDir:          c.DataDir,
 		ModelsDir:        c.ModelDir,

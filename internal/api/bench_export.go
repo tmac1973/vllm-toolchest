@@ -226,7 +226,7 @@ var runColumns = []string{
 	"speculative_config", "attention_backend", "compilation_config",
 	"enable_prefix_caching", "mamba_cache_mode",
 	"enable_chunked_prefill", "max_num_batched_tokens",
-	"kv_cache_memory", "disable_async_scheduling", "quantization", "extra_flags",
+	"kv_cache_memory", "disable_async_scheduling", "quantization", "extra_flags", "env",
 	"vllm_version", "gpus",
 }
 
@@ -244,6 +244,7 @@ func runValues(run benchmark.BenchmarkRun) []string {
 		strconv.FormatBool(c.EnablePrefixCaching), c.MambaCacheMode,
 		strconv.FormatBool(c.EnableChunkedPrefill), strconv.Itoa(c.MaxNumBatchedTokens),
 		strconv.FormatInt(c.KVCacheMemory, 10), strconv.FormatBool(c.DisableAsyncScheduling), c.Quantization, c.ExtraFlags,
+		c.EnvSummary(),
 		run.VLLMVersion, gpuNames(run.GPUs),
 	}
 }

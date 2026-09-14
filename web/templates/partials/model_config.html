@@ -172,6 +172,19 @@
         <label title="Load the tokenizer from a different path or HF repo than the model.">Tokenizer <input type="text" name="tokenizer" value="{{.Tokenizer}}" placeholder="(use the model's own)"></label>
       </div>
       <label title="Raw CLI flags appended to vllm serve. Quoted values are kept together, so JSON with spaces survives. e.g. --disable-log-requests --swap-space 4">Extra flags <input type="text" name="extra_flags" value="{{.ExtraFlags}}" placeholder="--disable-log-requests --swap-space 4"></label>
+      {{/* A plain field inside the form, so it autosaves with everything else.
+           Applied after the machine-wide runtime environment, so a name set
+           here wins for this model and leaves every other model alone. */}}
+      <label title="Environment variables for this model only. One KEY=VALUE per line — a comma does not separate entries, it becomes part of the value. Applied after the machine-wide runtime environment in Settings, so a name set here overrides it for this model. Blank lines and #-comments are ignored. Takes effect at the next restart.">Environment <small>(this model only &mdash; one KEY=VALUE per line)</small>
+        <textarea name="env" rows="3" spellcheck="false" placeholder="VLLM_PLE_CPU_OFFLOAD=1&#10;CLAV_GDN=1">{{.Env}}</textarea>
+      </label>
+      {{- if .EffectiveEnv}}
+      <details>
+        <summary style="font-size:0.85rem;cursor:pointer;">Effective environment</summary>
+        <pre class="effective-env">{{template "effective_env" .EffectiveEnv}}</pre>
+        <small style="opacity:0.7;">The image's own environment, then Settings, then the feature knobs, then this model &mdash; later wins.</small>
+      </details>
+      {{- end}}
     </fieldset>
 
     <fieldset><legend>Effective Command</legend>
