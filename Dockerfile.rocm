@@ -231,12 +231,12 @@ ENV VLLM_TARGET_DEVICE=rocm \
     CC=/opt/rocm/llvm/bin/clang \
     CXX=/opt/rocm/llvm/bin/clang++
 
-COPY scripts/patch_vllm.py /tmp/patch_vllm.py
+COPY scripts/rocm_vllm_patches.py /tmp/rocm_vllm_patches.py
 
 RUN git clone --depth 1 -b ${VLLM_VERSION} \
         https://github.com/vllm-project/vllm.git /tmp/vllm && \
     cd /tmp/vllm && \
-    python /tmp/patch_vllm.py && \
+    python /tmp/rocm_vllm_patches.py --tree /tmp/vllm && \
     pip install --no-cache-dir -r requirements/rocm.txt && \
     export MAX_JOBS="$(build-jobs)" && \
     echo "building vLLM with MAX_JOBS=$MAX_JOBS" && \
@@ -244,14 +244,49 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
     pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
     mkdir -p /opt/vllm-tuner && \
     cp /tmp/vllm/benchmarks/kernels/benchmark_w8a8_block_fp8.py /opt/vllm-tuner/ && \
-    rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/patch_vllm.py
+    rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/rocm_vllm_patches.py
 
 # ── Kernel-tuning wrapper ─────────────────────────────────────────
 # The Go side spawns `python /opt/vllm-tuner/tune_fp8_wrapper.py …` and
 # the wrapper imports `benchmark_w8a8_block_fp8` from the same dir.
 COPY scripts/tune_fp8_wrapper.py /opt/vllm-tuner/tune_fp8_wrapper.py
 
-RUN python -c "import vllm; print(f'vLLM {vllm.__version__} installed successfully')"
+# Verify the install. `import vllm` cannot complete on this builder, and that
+# is not a defect in the wheel: vllm/__init__.py imports env_override, which
+# resolves the platform, and amdsmi enumerates the host's cards even with no
+# /dev/kfd in the build container -- so the ROCm platform is selected,
+# vllm/platforms/rocm.py resolves _GCN_ARCH at module scope, amdsmi's own
+# query then fails and the torch.cuda fallback raises "No CUDA GPUs are
+# available".
+#
+# Measured, not assumed: VLLM_TARGET_DEVICE=cpu does not avoid it (this build
+# resolves every plugin and has no CPU short-circuit), and neither does hiding
+# the GPUs with ROCR_VISIBLE_DEVICES or HIP_VISIBLE_DEVICES.
+#
+# So: run the import and treat exactly that one error as the expected outcome.
+# Everything else -- a missing shared object, a broken dependency, a bad
+# wheel -- still fails the build, which is what this check is for. On a builder
+# that does have a usable GPU the import simply succeeds.
+#
+# The alternative is patching vLLM's _get_gcn_arch to fall back to the build
+# architecture, as the vendored script used to. That is a change to upstream
+# source to satisfy our own smoke test, and it costs a full recompile; worth
+# revisiting only if something else in the image ever needs to import vLLM
+# without a GPU. vllmctl spawns `vllm serve` at runtime, where the cards are
+# present and detection works on its own.
+RUN python - <<'PY'
+import importlib.metadata as md
+
+print(f"vLLM {md.version('vllm')} installed")
+try:
+    import vllm  # noqa: F401
+except RuntimeError as e:
+    if "No CUDA GPUs are available" not in str(e):
+        raise
+    print("import reached platform selection; this builder has no usable GPU")
+else:
+    print("import vllm OK")
+PY
 
 # ── Final stage: runtime config ────────────────────────────────────
 # Adds the hipcc JIT wrapper, uv, runtime ENV, vllmctl binary, and the
