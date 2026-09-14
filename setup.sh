@@ -1265,17 +1265,44 @@ load_env_ports() {
 # bases publish to Docker Hub the same way, so the same bug is expected.
 
 # variant_base_ref prints the base image for the selected variant. An explicit
-# VLLMCTL_BASE_IMAGE wins (env, then .env) so an operator can pin a different
-# tag -- an alternate build of the same stack, say -- without editing the
-# manifest.
+# VLLMCTL_BASE_IMAGE in the environment wins, so an operator can pin a
+# different tag -- an alternate build of the same stack, say -- for one build
+# without editing the manifest.
+#
+# .env is deliberately NOT consulted, and used to be. That was a trap, because
+# .env is written by this script: the first install recorded the manifest's
+# image there, and every later install read it back and preferred it, so a
+# manifest bump was resolved, ignored, and then overwritten in .env with the
+# new value it had just declined to use. The tree said one thing and the
+# running image was another.
+#
+# It failed quietly in the worst case. ensure_base_image exports what it
+# resolves, and an exported value beats .env for compose, so the build ran on
+# the stale base while .env claimed the new one. Dockerfile.prebuilt's version
+# assertion cannot catch it either whenever two tags carry the same vLLM build
+# -- tcclaviger/vllm 28.02.2 and 28.04.9 both report 0.27.0.dev0+g55c98e370a,
+# four releases apart, which is exactly when a bump matters and exactly when
+# the assertion is blind.
 variant_base_ref() {
     if [[ -n "${VLLMCTL_BASE_IMAGE:-}" ]]; then
         echo "$VLLMCTL_BASE_IMAGE"; return
     fi
-    local val
-    val="$(grep '^VLLMCTL_BASE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
-    [[ -n "$val" ]] && { echo "$val"; return; }
     variant_field "$BUILD_VARIANT" BASE_IMAGE
+}
+
+# warn_stale_env_base says so when .env pins a base image the manifest no
+# longer names. Nothing reads that value any more, but an operator who put it
+# there by hand deserves to hear that it is being ignored rather than wonder
+# why their pin stopped working.
+warn_stale_env_base() {
+    local pinned manifest
+    pinned="$(grep '^VLLMCTL_BASE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    [[ -n "$pinned" ]] || return 0
+    manifest="$(variant_field "$BUILD_VARIANT" BASE_IMAGE)"
+    [[ -n "$manifest" && "$pinned" != "$manifest" ]] || return 0
+    warn ".env pins VLLMCTL_BASE_IMAGE=${pinned}"
+    warn "but ${BUILD_VARIANT} now declares ${manifest}. Using the manifest."
+    warn "Set VLLMCTL_BASE_IMAGE in the environment to override for one build."
 }
 
 # Can the build actually use this image as a base? A LABEL-only build is enough
@@ -1326,6 +1353,7 @@ flatten_image() {
 # here immediately.
 ensure_base_image() {
     local src flat tag
+    warn_stale_env_base
     src="$(variant_base_ref)"
     [[ -n "$src" ]] || return 0
 
