@@ -12,6 +12,8 @@ things that turned out to be wrong.
 - [`phase-11-config-profiles.md`](phase-11-config-profiles.md) — named,
   per-model snapshots of a launch config, and the `models.json` schema gate
   they needed first.
+- [`phase-12-per-model-env.md`](phase-12-per-model-env.md) — per-model
+  environment variables, overriding the machine-wide ones. Planned, not built.
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive

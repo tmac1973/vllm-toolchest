@@ -1,10 +1,33 @@
 # Remaining Work
 
 ## ROCm Dockerfile validation
-- Verify TheRock nightly URL is stable and correct
-- Apply vLLM build patches for RDNA4 support
+- Rebuild `rocm-source` against `scripts/rocm_vllm_patches.py`. It replaced a
+  script vendored from someone else's repo, and carries five edits where that
+  one had ten: forcing ROCm detection, pinning `device_type`, and the no-GPU
+  GCN-arch fallback are gone as unnecessary, and the `mwaitxintrin.h`, INT8 and
+  `HIP_FOUND` patches match nothing upstream any more. `--lenient` gets past an
+  edit whose anchor has moved.
+  First build, 2026-09-14 (gfx1100): vLLM compiled and installed
+  (0.27.2.dev0+g6e448d0ea.rocm723), so the five dropped edits cost nothing at
+  build time. One casualty: the final `import vllm` smoke test, which resolves
+  the platform and died in `_GCN_ARCH`. Measured in the cached build layer:
+  amdsmi enumerates the host's cards with no /dev/kfd, so ROCm is selected and
+  rocm.py is imported; `VLLM_TARGET_DEVICE=cpu` does not avoid it (this build
+  has no CPU short-circuit) and nor does hiding the GPUs. The check now
+  tolerates exactly that error. Consequence to keep in mind: `import vllm`
+  cannot work in this image without a usable GPU, which the dropped
+  `_get_gcn_arch` patch used to provide.
+  The script header now records what was measured rather than the pre-build
+  reasoning. Note that editing that file invalidates the cached vLLM build,
+  since the Dockerfile COPYs it: the next `rocm-source` build recompiles.
+  Served on RDNA3 (RX 7900 XTX) 2026-09-14 with an AWQ 4-bit model. Still
+  unproven on RDNA4. Not a defect, but worth knowing: an FP8 checkpoint fails
+  on RDNA3 in `torch._scaled_mm`, which needs MI300+ or Ada — the card has no
+  FP8 matmul, so no image can serve it.
 - End-to-end test on RDNA4 hardware (9070 XT)
 - Validate flash-attention triton backend on gfx1201
+- `plan/archive/` still refers to `scripts/patch_vllm.py`, which is gone. Left
+  alone deliberately: the archive records what was decided at the time.
 
 ## Benchmarking phase (Phase 6)
 - Implement benchmark API endpoints (currently stubbed)
