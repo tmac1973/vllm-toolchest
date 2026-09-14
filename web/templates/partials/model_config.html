@@ -175,8 +175,8 @@
       {{/* A plain field inside the form, so it autosaves with everything else.
            Applied after the machine-wide runtime environment, so a name set
            here wins for this model and leaves every other model alone. */}}
-      <label title="Environment variables for this model only, KEY=VALUE per line. Applied after the machine-wide runtime environment in Settings, so a name set here overrides it for this model. Blank lines and #-comments are ignored. Takes effect at the next restart.">Environment <small>(this model only)</small>
-        <textarea name="env" rows="3" spellcheck="false" placeholder="VLLM_PLE_CPU_OFFLOAD=1">{{.Env}}</textarea>
+      <label title="Environment variables for this model only. One KEY=VALUE per line — a comma does not separate entries, it becomes part of the value. Applied after the machine-wide runtime environment in Settings, so a name set here overrides it for this model. Blank lines and #-comments are ignored. Takes effect at the next restart.">Environment <small>(this model only &mdash; one KEY=VALUE per line)</small>
+        <textarea name="env" rows="3" spellcheck="false" placeholder="VLLM_PLE_CPU_OFFLOAD=1&#10;CLAV_GDN=1">{{.Env}}</textarea>
       </label>
       {{- if .EffectiveEnv}}
       <details>
