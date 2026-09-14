@@ -1,5 +1,7 @@
 bin/
 *.exe
+__pycache__/
+*.py[co]
 .env
 /data/
 *.log
