@@ -72,6 +72,12 @@ type Manager struct {
 	vllmHost   string
 	vllmPort   int
 	launcher   Launcher
+	// startupTimeout is how long a launch may take before it is reported as
+	// failed. The watch continues past it; see waitForReady.
+	startupTimeout time.Duration
+	// pollInterval is how often /health is checked. A field so tests do not
+	// wait two seconds per state transition; nothing else sets it.
+	pollInterval time.Duration
 
 	// Log ring buffer
 	logMu  sync.Mutex
@@ -83,15 +89,25 @@ type Manager struct {
 	subs  map[chan string]struct{}
 }
 
-func NewManager(vllmHost string, vllmPort int) *Manager {
+// DefaultStartupTimeout is used when a caller passes nothing sensible. It is
+// generous on purpose: the cost of waiting too long is a stale label, and the
+// cost of giving up too early used to be a healthy server reported as failed.
+const DefaultStartupTimeout = 30 * time.Minute
+
+func NewManager(vllmHost string, vllmPort int, startupTimeout time.Duration) *Manager {
+	if startupTimeout <= 0 {
+		startupTimeout = DefaultStartupTimeout
+	}
 	return &Manager{
-		state:    StateStopped,
-		vllmHost: vllmHost,
-		vllmPort: vllmPort,
-		launcher: DefaultLauncher,
-		logBuf:   make([]string, 0, 5000),
-		logMax:   5000,
-		subs:     make(map[chan string]struct{}),
+		state:          StateStopped,
+		vllmHost:       vllmHost,
+		vllmPort:       vllmPort,
+		launcher:       DefaultLauncher,
+		startupTimeout: startupTimeout,
+		pollInterval:   2 * time.Second,
+		logBuf:         make([]string, 0, 5000),
+		logMax:         5000,
+		subs:           make(map[chan string]struct{}),
 	}
 }
 
@@ -404,46 +420,96 @@ func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc) {
 	}
 }
 
+// waitForReady polls vLLM's /health until it answers, and keeps polling after
+// the startup deadline for as long as the process is alive.
+//
+// The deadline marks the state as failed, because an operator staring at
+// "starting" forever learns nothing. It does not stop the watch. This used to
+// return there, and a model that became healthy one second late stayed marked
+// failed until someone restarted it -- which happened on a 125B MoE whose
+// engine printed "Application startup complete" at 9m26s, inside the old
+// 10-minute deadline, while the poll had already given up. The server was
+// serving on its own port and the proxy in front of it refused every request.
+//
+// The health GET carries its own timeout. With http.Get's default of none, a
+// request issued just before the deadline could hang past it, and the loop
+// would sit in that call rather than ever polling again.
 func (m *Manager) waitForReady() {
 	healthURL := fmt.Sprintf("http://%s:%d/health", m.vllmHost, m.vllmPort)
-	timeout := time.After(10 * time.Minute) // large models take a while
-	ticker := time.NewTicker(2 * time.Second)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	deadline := time.After(m.startupTimeout)
+	ticker := time.NewTicker(m.pollInterval)
 	defer ticker.Stop()
+
+	lateStart := false
 
 	for {
 		select {
-		case <-timeout:
+		case <-deadline:
 			m.mu.Lock()
 			if m.state == StateStarting {
 				m.state = StateError
-				m.lastError = "startup timeout (10 minutes)"
+				m.lastError = fmt.Sprintf(
+					"startup timeout (%s) -- still watching; it will report running if it finishes",
+					m.startupTimeout)
+				lateStart = true
+				slog.Warn("vLLM startup timed out; still polling",
+					"model", m.modelID, "timeout", m.startupTimeout)
 			}
 			m.mu.Unlock()
-			return
+
 		case <-ticker.C:
 			m.mu.RLock()
 			state := m.state
 			m.mu.RUnlock()
 
-			if state != StateStarting && state != StateRunning {
+			// Stop when the process is gone or on its way out. A state of
+			// StateError is not a reason to stop while the process is still
+			// up: after the deadline that is exactly the state a late but
+			// healthy engine is in, and it is the case this loop exists for.
+			switch state {
+			case StateStopped, StateStopping:
 				return
-			}
-
-			resp, err := http.Get(healthURL)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == 200 {
-					m.mu.Lock()
-					if m.state == StateStarting {
-						m.state = StateRunning
-						slog.Info("vLLM is ready", "model", m.modelID)
-					}
-					m.mu.Unlock()
+			case StateError:
+				if !lateStart || !m.processAlive() {
 					return
 				}
 			}
+
+			resp, err := client.Get(healthURL)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				continue
+			}
+
+			m.mu.Lock()
+			if m.state == StateStarting || (lateStart && m.state == StateError) {
+				if lateStart {
+					slog.Info("vLLM came up after the startup timeout",
+						"model", m.modelID, "after", time.Since(m.startedAt).Truncate(time.Second))
+				} else {
+					slog.Info("vLLM is ready", "model", m.modelID)
+				}
+				m.state = StateRunning
+				m.lastError = ""
+			}
+			m.mu.Unlock()
+			return
 		}
 	}
+}
+
+// processAlive reports whether the launched process is still running. Used to
+// decide whether a failed state is worth continuing to watch: a timeout with a
+// live process may still come good, an exited one never will.
+func (m *Manager) processAlive() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cmd != nil && m.cmd.Process != nil && m.cmd.ProcessState == nil
 }
 
 // BuildArgs constructs vLLM CLI arguments from a model config.

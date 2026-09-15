@@ -52,7 +52,13 @@
 - Model delete confirmation should check if the model is currently running
 - Improve error messages when model files are corrupted or incomplete
 - Loading states for long operations (model scan, large downloads)
-- Wire `startup_timeout_s` config through to `internal/process/manager.go` (currently hardcoded to 10 minutes); bump default for ROCm first-boot JIT (20–30 minutes reasonable)
+- ~~Wire `startup_timeout_s` config through to `internal/process/manager.go`~~
+  Done 2026-09-15. It was worse than an unread setting: the poll returned at
+  the deadline, so a model that became healthy a moment later stayed marked
+  failed until someone restarted it, with the proxy refusing requests the
+  engine was answering on its own port. The watch now continues while the
+  process is alive, the health check has its own timeout, and the default is
+  30 minutes — a 125B MoE cold start measured 9m26s on four R9700s.
 - Relocate Triton/Inductor kernel caches onto the `/data` volume (e.g. `TRITON_CACHE_DIR=/data/cache/triton`, `TORCHINDUCTOR_CACHE_DIR=/data/cache/inductor`) so first-boot kernel compilation only happens once per image rather than every container recreate
 
 ## Setup script enhancements
