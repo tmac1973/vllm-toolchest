@@ -206,7 +206,7 @@ func TestModelListEscapesHostileNames(t *testing.T) {
 	s := &Server{
 		cfg:      &config.Config{DataDir: dir},
 		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
-		process:  process.NewManager("127.0.0.1", 8000),
+		process:  process.NewManager("127.0.0.1", 8000, 0),
 	}
 	s.initTemplates()
 	if err := s.registry.Register(&models.Model{

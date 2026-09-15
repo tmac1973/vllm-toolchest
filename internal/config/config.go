@@ -300,10 +300,15 @@ func defaults() *Config {
 		PreferMarlin:        true,
 		DefaultKVCacheDtype: "auto",
 		AutoRestart:         true,
-		StartupTimeoutS:     300,
-		ShutdownTimeoutS:    30,
-		EnablePrefixCache:   false,
-		Theme:               "dark",
+		// Five minutes was never enough and nothing read it anyway. A cold
+		// start of a 125B MoE on RDNA4 -- weight load, Triton/inductor
+		// compilation, CUDA-graph capture -- measured 9m26s on four R9700s,
+		// and that is with a warm kernel cache. The timeout is a backstop for
+		// a launch that will never finish, not a service-level objective.
+		StartupTimeoutS:   1800,
+		ShutdownTimeoutS:  30,
+		EnablePrefixCache: false,
+		Theme:             "dark",
 	}
 }
 

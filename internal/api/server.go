@@ -65,7 +65,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 		hfClient:   huggingface.NewClient(cfg.HFToken),
 		downloader: dl,
 		registry:   reg,
-		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort),
+		process:    process.NewManager(cfg.VLLMHost, cfg.VLLMPort, time.Duration(cfg.StartupTimeoutS)*time.Second),
 		vllmEnv:    env,
 		version:    version,
 	}

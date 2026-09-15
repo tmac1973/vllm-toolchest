@@ -201,7 +201,7 @@ func newGoldenServer(t *testing.T, env vllmenv.Env) *Server {
 		},
 		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		monitor:  monitor.New(0),
-		process:  process.NewManager("127.0.0.1", 8000),
+		process:  process.NewManager("127.0.0.1", 8000, 0),
 		vllmEnv:  env,
 	}
 	s.bench = benchmark.NewStore(dir)

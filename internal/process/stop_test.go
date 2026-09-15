@@ -40,7 +40,7 @@ sleep 120
 		t.Fatal(err)
 	}
 
-	m := NewManager("127.0.0.1", 0)
+	m := NewManager("127.0.0.1", 0, 0)
 	m.SetLauncher(Launcher{Bin: fake})
 	if err := m.Start("test", "", nil, nil); err != nil {
 		t.Fatalf("start: %v", err)
@@ -78,7 +78,7 @@ sleep 120
 }
 
 func TestStopOnStoppedManagerErrors(t *testing.T) {
-	m := NewManager("127.0.0.1", 0)
+	m := NewManager("127.0.0.1", 0, 0)
 	if err := m.Stop(); err == nil {
 		t.Error("expected an error stopping a manager that is not running")
 	}
