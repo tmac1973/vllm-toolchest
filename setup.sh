@@ -1683,6 +1683,13 @@ ContainerName=vllm-toolchest
 PublishPort=${VLLMCTL_PORT}:3000
 PublishPort=${VLLMCTL_INFERENCE_PORT}:8000
 Volume=${volume_name}:/data:z
+# Match what the compose files grant, or auto-start silently produces a weaker
+# container than `setup.sh install` does. memlock is the one that matters: an
+# offload path that pins host memory -- the PLE n-gram table, pinned expert
+# buffers -- fails against the 8 MiB default and falls back to unpinned, or
+# does not load at all.
+Ulimit=memlock=-1:-1
+Ulimit=nofile=65536:65536
 ${gpu_args}
 
 [Service]
