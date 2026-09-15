@@ -61,6 +61,19 @@
   30 minutes — a 125B MoE cold start measured 9m26s on four R9700s.
 - Relocate Triton/Inductor kernel caches onto the `/data` volume (e.g. `TRITON_CACHE_DIR=/data/cache/triton`, `TORCHINDUCTOR_CACHE_DIR=/data/cache/inductor`) so first-boot kernel compilation only happens once per image rather than every container recreate
 
+## Host prerequisites
+
+- **Locked memory.** A model that offloads experts or the n-gram table to
+  system RAM pins it, and rootless podman cannot raise `memlock` above the
+  invoking user's hard limit — a compose file asking for `-1` is clamped in
+  silence. Fedora's default is 8 MiB, which produced
+  `PLE offload: locked 0.0 GiB, FAILED to lock 47.7 GiB` on compute while the
+  identical compose file worked on a host carrying
+  `* hard memlock unlimited` in `/etc/security/limits.conf`. `setup.sh` now
+  warns at install time, and the Quadlet unit carries `LimitMEMLOCK=infinity`
+  so the systemd path is not capped either — but neither can substitute for
+  the host setting. Verified 2026-09-15: compute `ulimit -H -l` = 8192.
+
 ## Setup script enhancements
 - Add `enable` / `disable` commands for auto-start (from llama-toolchest)
 - Support `setup.sh update` to pull latest image — and note that the staleness

@@ -594,9 +594,41 @@ hostreq_nvidia_driver_min() {
     version_ge "$have" "$1"
 }
 
+# check_memlock_limit warns when the host will not let a container pin much
+# memory. Not a manifest HOSTREQ_: it is a property of this machine rather than
+# of the variant, and every image that offloads anything wants it.
+#
+# Rootless podman cannot raise a limit above the invoking user's hard limit, so
+# a compose file asking for memlock=-1 gets silently clamped to whatever the
+# host allows -- 8 MiB on a default Fedora install. The engine then fails to
+# pin and says so in one line most of a screen into its startup log:
+#
+#   PLE offload: locked 0.0 GiB, FAILED to lock 47.7 GiB
+#
+# which is a long way from the install that caused it.
+check_memlock_limit() {
+    local hard
+    hard="$(ulimit -H -l 2>/dev/null || echo unlimited)"
+    [[ "$hard" == "unlimited" ]] && return 0
+    # KiB. A gibibyte is far below what an offloaded model pins and far above
+    # anything a default install grants, so it separates the two cleanly.
+    [[ "$hard" =~ ^[0-9]+$ ]] || return 0
+    (( hard >= 1048576 )) && return 0
+
+    warn "This host limits locked memory to ${hard} KiB for your user."
+    warn "Models that offload experts or the n-gram table to system RAM pin it,"
+    warn "and a rootless container cannot exceed the host limit however the"
+    warn "compose file is written. They will load unpinned or not at all."
+    warn "To lift it, add to /etc/security/limits.conf and log out and back in:"
+    warn "    *  soft  memlock  unlimited"
+    warn "    *  hard  memlock  unlimited"
+}
+
 # check_host_requirements walks the selected variant's HOSTREQ_* entries in
 # order. Runs after the variant is chosen and before anything is built.
 check_host_requirements() {
+    check_memlock_limit
+
     if [[ "${VLLMCTL_SKIP_HOSTCHECK:-}" == "1" ]]; then
         warn "VLLMCTL_SKIP_HOSTCHECK=1 — not checking host requirements for ${BUILD_VARIANT}"
         return 0
@@ -1695,6 +1727,12 @@ ${gpu_args}
 [Service]
 Restart=on-failure
 TimeoutStartSec=900
+# Ulimit= in [Container] asks podman for a limit; this is what lets it have
+# one. A unit cannot raise a limit above its own service limit, and the user
+# manager's default is typically 8 MiB -- the same ceiling that makes a
+# rootless container fail to pin the PLE table however generous the compose
+# file is. Both are needed: this one, and a host that permits it.
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=default.target

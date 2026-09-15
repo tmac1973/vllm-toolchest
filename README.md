@@ -31,6 +31,23 @@ offers a second, hand-tuned image -- see [Image variants](#image-variants).
 
 ## Requirements
 
+> **Locked memory, if you plan to offload.** Models that keep experts or a
+> large embedding table in system RAM pin that memory, and a rootless
+> container cannot lock more than your user's hard limit — the compose file
+> asks for unlimited and is clamped in silence. Most distributions default to
+> 8 MiB. Check with `ulimit -H -l`; if it is not `unlimited`, add
+>
+> ```
+> *  soft  memlock  unlimited
+> *  hard  memlock  unlimited
+> ```
+>
+> to `/etc/security/limits.conf` and log out and back in. `setup.sh` warns
+> about this at install time. Without it the engine loads unpinned or fails,
+> reporting something like `PLE offload: locked 0.0 GiB, FAILED to lock
+> 47.7 GiB` deep in its startup log.
+
+
 - **Container runtime**: Docker or Podman
 - **GPU**: NVIDIA or AMD GPU with sufficient VRAM for your model
 - **OS**: Linux (tested on Arch/CachyOS, should work on any distro with container support)
