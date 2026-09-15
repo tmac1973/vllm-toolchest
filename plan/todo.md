@@ -57,8 +57,30 @@
 
 ## Setup script enhancements
 - Add `enable` / `disable` commands for auto-start (from llama-toolchest)
-- Support `setup.sh update` to pull latest image
+- Support `setup.sh update` to pull latest image — and note that the staleness
+  it should report is now only "the author published a newer tag", since a
+  manifest bump itself takes effect on the next install (below).
 - Validate GPU driver availability during install
+
+### Fixed 2026-09-14: a manifest bump could not take effect
+
+`variant_base_ref` resolved the base image from `VLLMCTL_BASE_IMAGE` in the
+environment, then from `.env`, then from the manifest. `.env` is written by
+`setup.sh` itself, so the first install recorded the manifest's image there and
+every later install preferred that copy: bumping `rdna4-clav` from 28.02.2 to
+28.04.9 was read, ignored, and then overwritten in `.env` with the value it had
+just declined to use.
+
+It failed silently. `ensure_base_image` exports what it resolves and an export
+beats `.env` for compose, so the build ran on the stale base while `.env`
+claimed the new one — and `Dockerfile.prebuilt`'s version assertion is blind to
+it whenever two tags share a vLLM build, which 28.02.2 and 28.04.9 do
+(`0.27.0.dev0+g55c98e370a`, four releases apart). It surfaced only as
+`vllm: error: unrecognized arguments: --enable-expert-offload …` on a flag the
+older tag never had.
+
+`.env` is no longer an input. The environment variable remains the one-off
+override, and a `.env` pin that disagrees with the manifest now warns.
 
 ## Multi-GPU testing
 - Test tensor parallelism with TP=2 and TP=4
