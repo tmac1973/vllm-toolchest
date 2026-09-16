@@ -6,8 +6,14 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
-// vramBanner is the headline above the config panel: what the checkpoint is,
-// what of it the cards have to hold, and what this host makes of that.
+// vramBanner is the headline above the config panel: what this configuration
+// costs in GPU memory, how that figure is arrived at, and whether this host
+// can supply it.
+//
+// The headline is a total across every card the model will be split over, not
+// a per-card share. What one rank holds is an implementation detail of the
+// split; the question is whether the configuration can run, and that is one
+// number that moves as the settings beneath it are edited.
 type vramBanner struct {
 	Unknown bool
 	Why     string
@@ -19,44 +25,51 @@ type vramBanner struct {
 	// figures beside it still stand: those are measured from the files.
 	Caveat string
 
-	CheckpointGB float64
-	// HostResidentGB is the part offload keeps in system RAM, and
-	// HostResidentMinGB the least it could be. Shown whenever any offload is
-	// active, because it is the difference between the size on disk and what
-	// the GPUs are actually asked for — the conflation that had a working
-	// model reported as too large for the host running it.
+	// RequiredGB is the headline. Ranged marks it widened by an offload whose
+	// size the configuration does not state.
+	RequiredGB     float64
+	RequiredLowGB  float64
+	RequiredHighGB float64
+	Ranged         bool
+
+	// The working behind it.
+	CheckpointGB   float64
+	WeightsTotalGB float64
+	KVAtContextGB  float64
+	OverheadGB     float64
+	ContextTokens  int
+
+	// HostResidentGB is the part offload keeps in system RAM. Shown whenever
+	// any offload is active, because it is the difference between the size on
+	// disk and what the GPUs are actually asked for.
 	HostResidentGB    float64
 	HostResidentMinGB float64
 	HostBanded        bool
 	OffloadActive     bool
 	OffloadLabel      string
 
-	DeviceWeightsGB float64
-	// Ranged says the device figure is a band: offload is on but its size is
-	// not knowable from the configuration alone.
-	Ranged              bool
-	DeviceWeightsHighGB float64
-
-	// NoInventory means there are figures but no cards to judge them against.
-	NoInventory bool
-	Verdict     string
-	VerdictHue  string
+	// Available is what this host permits at the configured width, and
+	// HasInventory says whether there was anything to compare against.
+	HasInventory bool
+	AvailableGB  float64
+	TotalVRAMGB  float64
+	ConfiguredTP int
 }
 
-// vramTPRow is one tensor-parallel width: what each card would hold, what is
-// left for the KV cache, and how much context that buys.
+// vramTPRow is one tensor-parallel width: what the model costs in total at
+// that width, and what that many cards can give it.
 type vramTPRow struct {
-	TP              int
-	Configured      bool
-	Recommended     bool
-	WeightsPerGPUGB float64
-	OverheadGB      float64
-	LoadGB          float64
-	BudgetGB        float64
-	KVHeadroomGB    float64
-	MaxTokens       int
-	Verdict         string
-	Hue             string
+	TP             int
+	Configured     bool
+	Recommended    bool
+	WeightsGB      float64
+	KVGB           float64
+	OverheadGB     float64
+	RequiredGB     float64
+	AvailableGB    float64
+	Fits           bool
+	Uncertain      bool
+	ConcurrentSeqs int
 }
 
 func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
@@ -65,30 +78,40 @@ func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
 	}
 
 	b := vramBanner{
-		ParamLabel:          models.FormatParamCount(est.ParamCountBillion),
-		CheckpointGB:        est.CheckpointGB,
-		HostResidentGB:      est.HostResidentGB,
-		HostResidentMinGB:   est.HostResidentMinGB,
-		HostBanded:          est.HostResidentGB > est.HostResidentMinGB+0.05,
-		OffloadActive:       est.Offload.Any(),
-		DeviceWeightsGB:     est.DeviceWeightsGB,
-		DeviceWeightsHighGB: est.DeviceWeightsHighGB,
-		Ranged:              est.Ranged(),
-		OffloadLabel:        offloadLabel(est.Offload),
-		Caveat:              est.Caveat,
+		ParamLabel:     models.FormatParamCount(est.ParamCountBillion),
+		RequiredGB:     est.TotalRequiredGB,
+		RequiredLowGB:  est.TotalRequiredLowGB,
+		RequiredHighGB: est.TotalRequiredHighGB,
+		Ranged:         est.TotalRequiredHighGB > est.TotalRequiredLowGB+0.05,
+
+		CheckpointGB:   est.CheckpointGB,
+		WeightsTotalGB: est.WeightsTotalGB,
+		KVAtContextGB:  est.KVAtContextGB,
+		ContextTokens:  est.ContextTokens,
+
+		HostResidentGB:    est.HostResidentGB,
+		HostResidentMinGB: est.HostResidentMinGB,
+		HostBanded:        est.HostResidentGB > est.HostResidentMinGB+0.05,
+		OffloadActive:     est.Offload.Any(),
+		OffloadLabel:      offloadLabel(est.Offload),
+		Caveat:            est.Caveat,
+
+		ConfiguredTP: fit.ConfiguredTP,
+	}
+	b.OverheadGB = est.TotalRequiredGB - b.WeightsTotalGB - b.KVAtContextGB
+	if b.OverheadGB < 0 {
+		b.OverheadGB = 0
 	}
 	if est.ActiveParamBillion > 0 {
 		b.ActiveLabel = models.FormatParamCount(est.ActiveParamBillion)
 	}
 
-	switch {
-	case !fit.Known:
-		b.NoInventory = true
-		b.Verdict = fit.Why
-		b.VerdictHue = "#6b7280"
-	default:
-		b.Verdict = fit.Label
-		b.VerdictHue = verdictHue(fit)
+	if fit.Known {
+		b.HasInventory = true
+		b.AvailableGB = fit.AvailableGB
+		b.TotalVRAMGB = fit.TotalVRAMGB
+	} else {
+		b.Why = fit.Why
 	}
 	return b
 }
@@ -100,43 +123,21 @@ func newVRAMTPRows(est models.VRAMEstimate, fit models.VRAMFit) []vramTPRow {
 
 	rows := make([]vramTPRow, 0, len(fit.Options))
 	for _, o := range fit.Options {
-		row := vramTPRow{
-			TP:              o.TP,
-			Configured:      o.TP == fit.ConfiguredTP,
-			Recommended:     o.TP == fit.RecommendedTP,
-			WeightsPerGPUGB: o.WeightsPerGPUGB,
-			OverheadGB:      o.ActivationGB + o.GraphsGB,
-			LoadGB:          o.LoadGB,
-			BudgetGB:        o.BudgetGB,
-			KVHeadroomGB:    o.KVHeadroomGB,
-			MaxTokens:       o.MaxTokens,
-		}
-
-		switch {
-		case o.Uncertain:
-			row.Verdict, row.Hue = "depends on offload", "#6b7280"
-		case o.ServesConfigured:
-			row.Verdict, row.Hue = "fits", "#2d8a4e"
-		case o.Loads:
-			row.Verdict, row.Hue = "loads, context won't fit", "#b86e00"
-		default:
-			row.Verdict, row.Hue = "too large", "#b83d3d"
-		}
-		rows = append(rows, row)
+		rows = append(rows, vramTPRow{
+			TP:             o.TP,
+			Configured:     o.Configured,
+			Recommended:    o.Recommended,
+			WeightsGB:      o.WeightsGB,
+			KVGB:           o.KVGB,
+			OverheadGB:     o.OverheadGB,
+			RequiredGB:     o.RequiredGB,
+			AvailableGB:    o.AvailableGB,
+			Fits:           o.Fits,
+			Uncertain:      o.Uncertain,
+			ConcurrentSeqs: o.ConcurrentSeqs,
+		})
 	}
 	return rows
-}
-
-func verdictHue(fit models.VRAMFit) string {
-	switch {
-	case fit.Configured == nil, fit.RecommendedTP == 0:
-		return "#b83d3d"
-	case fit.Configured.Uncertain:
-		return "#6b7280"
-	case !fit.Configured.ServesConfigured:
-		return "#b86e00"
-	}
-	return "#2d8a4e"
 }
 
 // offloadLabel names what is being kept off the cards, or "" when nothing is.

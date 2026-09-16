@@ -9,27 +9,36 @@
     {{- if .Unknown}}
     <strong>VRAM Estimate:</strong> not available &mdash; {{.Why}}
     {{- else}}
-    <strong>VRAM Estimate:</strong> {{.ParamLabel}} params{{if .ActiveLabel}} ({{.ActiveLabel}} active){{end}},
-    {{printf "%.1f" .CheckpointGB}} GB checkpoint
-    {{- if .OffloadActive}} &minus; {{if .HostBanded}}{{printf "%.1f" .HostResidentMinGB}}&ndash;{{end}}{{printf "%.1f" .HostResidentGB}} GB in host RAM{{if .OffloadLabel}} ({{.OffloadLabel}}){{end}}{{end}}
-    = <strong>{{printf "%.1f" .DeviceWeightsGB}}{{if .Ranged}}&ndash;{{printf "%.1f" .DeviceWeightsHighGB}}{{end}} GB</strong> on the GPUs
-    &mdash; <span style="color:{{.VerdictHue}};">{{.Verdict}}</span>
+    <strong>VRAM Estimate:</strong>
+    <strong>{{printf "%.1f" .RequiredGB}} GB</strong>{{if .Ranged}} <small>({{printf "%.1f" .RequiredLowGB}}&ndash;{{printf "%.1f" .RequiredHighGB}})</small>{{end}}
+    total to load as configured{{if gt .ConfiguredTP 1}} across {{.ConfiguredTP}} GPUs{{end}}
+    {{- if .HasInventory}}, of {{printf "%.1f" .AvailableGB}} GB available{{end}}
+    <br>
+    <small>
+      {{printf "%.1f" .WeightsTotalGB}} GB weights
+      {{- if .KVAtContextGB}} + {{printf "%.1f" .KVAtContextGB}} GB KV cache{{if .ContextTokens}} at {{.ContextTokens}} tokens{{end}}{{end}}
+      {{- if .OverheadGB}} + {{printf "%.1f" .OverheadGB}} GB overhead{{end}}
+      {{- if .CheckpointGB}}; checkpoint is {{printf "%.1f" .CheckpointGB}} GB{{end}}
+      {{- if .OffloadActive}}, of which {{if .HostBanded}}{{printf "%.1f" .HostResidentMinGB}}&ndash;{{end}}{{printf "%.1f" .HostResidentGB}} GB stays in host RAM{{if .OffloadLabel}} ({{.OffloadLabel}}){{end}}{{end}}
+      {{- if .ParamLabel}} &middot; {{.ParamLabel}} params{{if .ActiveLabel}}, {{.ActiveLabel}} active{{end}}{{end}}
+    </small>
     {{- if .Caveat}}<br><small>{{.Caveat}}</small>{{end}}
+    {{- if and (not .HasInventory) .Why}}<br><small>{{.Why}}</small>{{end}}
     {{- end}}
     {{- end}}
     {{- with .VRAMRows}}
     <table style="margin:0.5rem 0 0;font-size:0.85em;">
-      <thead><tr><th>Split</th><th>Weights/GPU</th><th>+ overhead</th><th>Budget</th><th>KV headroom</th><th>Max context</th><th></th></tr></thead>
+      <thead><tr><th>Split</th><th>Weights</th><th>KV cache</th><th>Overhead</th><th>Total needed</th><th>Available</th><th>Full-context requests</th></tr></thead>
       <tbody>
       {{- range .}}
         <tr{{if .Configured}} style="font-weight:600;"{{end}}>
           <td>TP={{.TP}}{{if .Recommended}} &starf;{{end}}</td>
-          <td>{{printf "%.1f" .WeightsPerGPUGB}} GB</td>
+          <td>{{printf "%.1f" .WeightsGB}} GB</td>
+          <td>{{printf "%.1f" .KVGB}} GB</td>
           <td>{{printf "%.1f" .OverheadGB}} GB</td>
-          <td>{{printf "%.1f" .BudgetGB}} GB</td>
-          <td>{{printf "%.1f" .KVHeadroomGB}} GB</td>
-          <td>{{if .MaxTokens}}{{.MaxTokens}}{{else}}&mdash;{{end}}</td>
-          <td style="color:{{.Hue}};">{{.Verdict}}</td>
+          <td>{{printf "%.1f" .RequiredGB}} GB</td>
+          <td>{{printf "%.1f" .AvailableGB}} GB</td>
+          <td>{{if .Fits}}{{if .ConcurrentSeqs}}{{.ConcurrentSeqs}}{{else}}1{{end}}{{else if .Uncertain}}&mdash;{{else}}0{{end}}</td>
         </tr>
       {{- end}}
       </tbody>

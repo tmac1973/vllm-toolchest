@@ -4,30 +4,33 @@
     <span class="mc-restart">Restart required</span>
   </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
-    <strong>VRAM Estimate:</strong> 46.7B params (12.9B active),
-    23.0 GB checkpoint
-    = <strong>23.0 GB</strong> on the GPUs
-    &mdash; <span style="color:#2d8a4e;">fits TP=1</span>
+    <strong>VRAM Estimate:</strong>
+    <strong>25.0 GB</strong>
+    total to load as configured, of 27.2 GB available
+    <br>
+    <small>
+      23.0 GB weights + 1.0 GB KV cache at 8192 tokens + 1.0 GB overhead; checkpoint is 23.0 GB &middot; 46.7B params, 12.9B active
+    </small>
     <table style="margin:0.5rem 0 0;font-size:0.85em;">
-      <thead><tr><th>Split</th><th>Weights/GPU</th><th>+ overhead</th><th>Budget</th><th>KV headroom</th><th>Max context</th><th></th></tr></thead>
+      <thead><tr><th>Split</th><th>Weights</th><th>KV cache</th><th>Overhead</th><th>Total needed</th><th>Available</th><th>Full-context requests</th></tr></thead>
       <tbody>
         <tr style="font-weight:600;">
           <td>TP=1 &starf;</td>
           <td>23.0 GB</td>
           <td>1.0 GB</td>
+          <td>1.0 GB</td>
+          <td>25.0 GB</td>
           <td>27.2 GB</td>
-          <td>3.2 GB</td>
-          <td>26204</td>
-          <td style="color:#2d8a4e;">fits</td>
+          <td>3</td>
         </tr>
         <tr>
           <td>TP=2</td>
-          <td>12.7 GB</td>
-          <td>0.9 GB</td>
-          <td>27.2 GB</td>
-          <td>13.6 GB</td>
-          <td>222809</td>
-          <td style="color:#2d8a4e;">fits</td>
+          <td>25.3 GB</td>
+          <td>1.0 GB</td>
+          <td>1.9 GB</td>
+          <td>28.2 GB</td>
+          <td>54.4 GB</td>
+          <td>27</td>
         </tr>
       </tbody>
     </table>

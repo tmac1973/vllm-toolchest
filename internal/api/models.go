@@ -444,56 +444,38 @@ func newQuantBadge(q models.QuantMeta) quantBadge {
 	return badge
 }
 
-// vramLabel is a model's VRAM estimate and fit verdict, rendered by the
-// "vram_label" template.
+// vramLabel is the estimated VRAM to load a model as configured, rendered by
+// the "vram_label" template.
 //
-// Three states, because there are three genuinely different things to say:
+// One number and nothing else. It is the total across every card the model
+// will be split over -- weights, KV cache at the configured context, and the
+// engine's own overhead -- so it answers "can this configuration run" and
+// moves as the configuration is edited.
 //
-//	Unknown   nothing can be computed; Why says what is missing
-//	!Verdict  a figure, but no cards to judge it against
-//	default   a figure and a verdict
-//
-// The middle one is new. The old label had no way to express it and so judged
-// every host against an invented single 32 GiB card, which is how a model
-// serving happily across four cards came to be labelled "Too large".
+// No verdict, no tensor-parallel commentary. Those belong in the config panel
+// beside the settings that change them, not in a column whose job is to report
+// one quantity.
 type vramLabel struct {
 	Unknown bool
 	Why     string
-	// PerGPUGB is what one card holds at the configured width, not the whole
-	// model: on a four-way split the total was never the number that mattered.
-	PerGPUGB float64
-	FitLabel string
-	Color    string
+	TotalGB float64
+	// Ranged marks an estimate widened by an offload whose size the
+	// configuration does not state.
+	Ranged bool
+	LowGB  float64
+	HighGB float64
 }
 
 func (s *Server) newVRAMLabel(m *models.Model) vramLabel {
-	est, fit := s.vramFit(m)
-
+	est := s.effectiveVRAM(m)
 	if est.Unknown {
 		return vramLabel{Unknown: true, Why: est.UnknownWhy}
 	}
-	if !fit.Known {
-		return vramLabel{
-			PerGPUGB: fit.PerGPUGB,
-			FitLabel: fit.Label,
-			Color:    "#6b7280",
-		}
-	}
-
-	color := "#2d8a4e"
-	switch {
-	case fit.Configured == nil, fit.RecommendedTP == 0:
-		color = "#b83d3d"
-	case fit.Configured.Uncertain:
-		color = "#6b7280"
-	case !fit.Configured.ServesConfigured:
-		color = "#b86e00"
-	}
-
 	return vramLabel{
-		PerGPUGB: fit.PerGPUGB,
-		FitLabel: fit.Label,
-		Color:    color,
+		TotalGB: est.TotalRequiredGB,
+		Ranged:  est.TotalRequiredHighGB > est.TotalRequiredLowGB+0.05,
+		LowGB:   est.TotalRequiredLowGB,
+		HighGB:  est.TotalRequiredHighGB,
 	}
 }
 

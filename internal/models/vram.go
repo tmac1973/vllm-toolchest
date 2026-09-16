@@ -53,8 +53,31 @@ type VRAMEstimate struct {
 	DeviceWeightsHighGB float64 `json:"device_weights_high_gb,omitempty"`
 
 	// KVCachePerTokenB is for the whole model, across every attention layer.
-	// Fit divides it by the tensor-parallel size.
 	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
+
+	// TotalRequiredGB is the headline: how much GPU memory it takes to load
+	// this model and serve the context it is configured for, summed across
+	// every card it will be split over.
+	//
+	// Totalled rather than per-card deliberately. What a single rank holds is
+	// an implementation detail of the split; the question being asked is
+	// whether this configuration can run at all, and that is answered by one
+	// number moving as the configuration is edited -- context length, KV
+	// dtype, offload, tensor-parallel width.
+	//
+	// It is computed from the configuration alone and never from the cards
+	// present, so it means the same thing on any host. Comparing it to a
+	// particular machine is a separate step.
+	TotalRequiredGB     float64 `json:"total_required_gb"`
+	TotalRequiredLowGB  float64 `json:"total_required_low_gb,omitempty"`
+	TotalRequiredHighGB float64 `json:"total_required_high_gb,omitempty"`
+
+	// The parts of that total, kept so the panel can show the working.
+	WeightsTotalGB float64 `json:"weights_total_gb"`
+	KVAtContextGB  float64 `json:"kv_at_context_gb"`
+	GraphPoolGB    float64 `json:"graph_pool_gb,omitempty"`
+	// ContextTokens is the context the KV figure was computed for.
+	ContextTokens int `json:"context_tokens,omitempty"`
 
 	// DeviceCacheGB is a buffer the engine stages on each card -- the expert
 	// streaming cache. Unlike offload it adds to what a rank holds.
@@ -210,7 +233,86 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 		est.UnknownWhy = "NVMe offload is not modelled"
 	}
 
+	addTotals(&est, cfg, m.VLLMConfig)
 	return est
+}
+
+// Requirement is what one configuration costs in GPU memory, summed across the
+// cards it is split over.
+type Requirement struct {
+	TP int
+
+	WeightsGB     float64
+	WeightsHighGB float64
+	KVGB          float64
+	GraphsGB      float64
+	CacheGB       float64
+	ActivationGB  float64
+
+	TotalGB     float64
+	TotalHighGB float64
+}
+
+// RequiredAt works out what this model needs at a given tensor-parallel width.
+//
+// Everything here scales with something the operator can change, which is the
+// point: the figure is meant to move as the model is configured, so the effect
+// of halving the context or enabling offload is visible before the engine is
+// started rather than after it fails to start.
+func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
+	if tp < 1 {
+		tp = 1
+	}
+	r := Requirement{
+		TP:            tp,
+		WeightsGB:     weightsTotalGB(est.DeviceWeightsGB, tp),
+		WeightsHighGB: weightsTotalGB(est.DeviceWeightsHighGB, tp),
+		KVGB:          est.KVAtContextGB,
+		// Every rank captures its own graph ladder and stages its own expert
+		// cache, so both scale with the width.
+		CacheGB:      est.DeviceCacheGB * float64(tp),
+		ActivationGB: est.ActivationBaseGB,
+	}
+	if !c.EnforceEager {
+		r.GraphsGB = graphPoolPerGPUGB * float64(tp)
+	}
+
+	fixed := r.KVGB + r.GraphsGB + r.CacheGB + r.ActivationGB
+	r.TotalGB = r.WeightsGB + fixed
+	r.TotalHighGB = r.WeightsHighGB + fixed
+	return r
+}
+
+// addTotals fills in the headline figure for the width the model is set to.
+func addTotals(est *VRAMEstimate, cfg HFConfig, c VLLMConfig) {
+	// The context actually served. An unset max_model_len means the
+	// checkpoint's own maximum, which is what vLLM will use.
+	ctx := c.MaxModelLen
+	if ctx <= 0 {
+		ctx = cfg.MaxPositionEmbeddings
+	}
+	est.ContextTokens = ctx
+	if ctx > 0 && est.KVCachePerTokenB > 0 {
+		est.KVAtContextGB = float64(est.KVCachePerTokenB) * float64(ctx) / (1024 * 1024 * 1024)
+	}
+
+	r := RequiredAt(*est, c, c.TensorParallelSize)
+	est.WeightsTotalGB = (r.WeightsGB + r.WeightsHighGB) / 2
+	est.GraphPoolGB = r.GraphsGB
+	est.TotalRequiredLowGB = r.TotalGB
+	est.TotalRequiredHighGB = r.TotalHighGB
+	est.TotalRequiredGB = (r.TotalGB + r.TotalHighGB) / 2
+}
+
+// weightsTotalGB is what all the cards together hold of the weights.
+//
+// The replication surcharge is a cost of splitting, so a single rank does not
+// pay it: with nothing sharded there is nothing replicated.
+func weightsTotalGB(deviceGB float64, tp int) float64 {
+	if tp < 2 {
+		return deviceGB
+	}
+	return deviceGB * replicationOverhead
 }
 
 // hostResidentRange bounds what offload keeps off the GPUs: maxHost is the

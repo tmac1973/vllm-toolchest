@@ -51,7 +51,7 @@
             <br><small style="opacity:0.6;">{{.ID}}</small>
         </div>
         <div class="model-card-quant"><kbd>{{.Quant.Method}}{{with .Quant.Width}} <span class="nowrap">{{.}}</span>{{end}}</kbd></div>
-        <div class="model-card-vram" title="Estimated VRAM at the configured context length">{{template "vram_label" .VRAM}}</div>
+        <div class="model-card-vram" title="Total VRAM to load this model as configured, across all GPUs">{{template "vram_label" .VRAM}}</div>
         <div class="model-card-size">{{.SizeLabel}}</div>
         <div class="model-card-actions">
             <div role="group">

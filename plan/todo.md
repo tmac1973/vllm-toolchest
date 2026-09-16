@@ -9,9 +9,8 @@ out of it, and one judgement was reversed on better evidence.
   puts the table at 43.6 GiB against 47.68 measured, and TP=4 at 17.9 GiB per
   rank against the engine's own 19.07. It had looked inert locally only because
   no checkpoint on the workstation carries such a table. It is now the estimate,
-  banded at ±20% rather than trusted flat, and a verdict is offered again.
-  Tighten the band once more checkpoints with a PLE table have been measured —
-  two points is what the ±20% is resting on.
+  banded rather than trusted flat, and a verdict is offered again. The residual
+  is not all table, though — see the 0.90 share below.
 - **`--expert-offload-mem` is a ceiling, not an amount.** A run configured with
   46 was measured moving 18.72 GiB. It bounds the optimistic end and never sets
   a figure. `--expert-cache-gb` is a different quantity again — a cache staged
@@ -26,20 +25,46 @@ out of it, and one judgement was reversed on better evidence.
   zero — which would make the offload residual the entire checkpoint. FP8 names
   its own width, so it is now read as 8 bits.
 
+## VRAM estimator: the figure is a total, not a per-card share
+
+Reframed 2026-09-16 after the panel reported 18.5 GB for a checkpoint that is
+108.5 GB on disk. The arithmetic was right and the question was wrong.
+
+It had been reporting **weights on one card**, which excludes the KV cache —
+the largest consumer in vLLM, and the one that scales with the settings a user
+is actually editing. Worse, it invited comparison with `rocm-smi`, which shows
+the whole allocation: vLLM claims `gpu_memory_utilization` of every card at
+startup regardless, so the two numbers could never agree and the estimate
+looked broken whether or not it was.
+
+The estimate is now **the total GPU memory to load the model as configured**,
+summed across every card it is split over: weights after offload, KV cache at
+the configured context, graph pools, on-card caches and activations. It is
+computed from the configuration alone, so it means the same thing on any host
+and it moves as the model is configured — which is the entire purpose.
+
+Comparing it to a particular machine is a separate step, and lives in the
+config panel beside the settings that move it. The card column shows one
+number and no verdict: fit commentary belonged next to the controls, not in a
+column whose job is to report a quantity.
+
+Worth remembering if this is ever revisited: "which is more useful for
+comparing models" was the wrong axis to optimise. Nobody was comparing models.
+
 ## VRAM estimator: calibration still owed on compute
 
-The estimator was reworked 2026-09-16: parameter counting is MoE-aware, the
-stored estimate no longer carries a fit verdict, and fit is judged against the
-host's real cards at every tensor-parallel width rather than against an
-invented single 32 GiB card. What is still owed:
+What is still owed:
 
 - **Watch a real startup.** Compare the panel against the engine's own
-  `Available KV cache memory` and `model loading took` lines. The per-rank
-  weight figure has been checked against 19.07 GiB; the KV headroom and the
-  max-context column have not been checked against anything.
-- **The ±20% band on the PLE residual is a prior, not a measurement.** It rests
-  on two checkpoints. A third would justify tightening or widening it, and
-  until then the band width is the least evidenced number in the estimator.
+  `Available KV cache memory` and `model loading took` lines. The weights
+  figure has been checked against 19.07 GiB per rank; the KV figure and the
+  full-context request count have not been checked against anything.
+- **The KV figure counts one sequence at `max_model_len`.** That is the
+  minimum to serve the configured context at all. The panel reports separately
+  how many full-length requests the leftover buys, which is the number to tune
+  `max_num_seqs` against. Whether the headline should instead assume full
+  concurrency is a judgement that can be revisited once the startup figures
+  have been compared.
 - **The CUDA-graph pool is a flat 0.9 GiB** (measured 0.49 and 1.32 on two
   checkpoints) and activation assumes vLLM's 2048-token default chunk when
   `--max-num-batched-tokens` is unset. Both are stand-ins for a measurement

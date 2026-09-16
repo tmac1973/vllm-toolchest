@@ -65,13 +65,14 @@ func (s *Server) handleGPUMap(w http.ResponseWriter, r *http.Request) {
 			if tp < 1 {
 				tp = 1
 			}
-			// Fit already reports the per-rank figure, including the
-			// replicated tensors a flat division misses.
+			// The estimate is a total across the cards, and these are
+			// per-card bars, so it is divided back down here. This is the one
+			// place a per-card figure is the right answer.
 			_, fit := s.vramFit(m)
-			if o := fit.Configured; o != nil {
-				enginePerGPUGB = o.LoadGB
+			if o := fit.Configured; o != nil && o.TP > 0 {
+				enginePerGPUGB = o.RequiredGB / float64(o.TP)
 			} else {
-				enginePerGPUGB = m.VRAMEstimate.DeviceWeightsGB / float64(tp)
+				enginePerGPUGB = m.VRAMEstimate.TotalRequiredGB / float64(tp)
 			}
 			engineName = displayNameOf(m)
 		}
