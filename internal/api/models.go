@@ -65,7 +65,7 @@ func (s *Server) modelRows() []modelRow {
 			Orphaned:    m.Orphaned,
 			Quant:       newQuantBadge(m.Quantization),
 			SizeLabel:   huggingface.FormatBytes(m.TotalSizeBytes),
-			VRAM:        newVRAMLabel(effectiveVRAM(m)),
+			VRAM:        s.newVRAMLabel(m),
 			Active:      m.ID == s.cfg.ActiveModel,
 			Serving:     m.ID == servingID,
 		}
@@ -237,7 +237,7 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 
 	// Recompute VRAM estimate
 	m.VLLMConfig = cfg
-	m.VRAMEstimate = models.EstimateVRAM(m)
+	m.VRAMEstimate = models.EstimateVRAM(m, s.configuredEnvPairs(m))
 	s.registry.Register(m)
 
 	if isHTMX(r) {
@@ -392,14 +392,23 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int, hasBNB bo
 
 // effectiveVRAM is the estimate to display for a model.
 //
-// A record written before the estimate was stored carries none, and the value
-// is arithmetic over fields already loaded — so compute it rather than showing
-// a dash on the card and zeros in the config panel.
-func effectiveVRAM(m *models.Model) models.VRAMEstimate {
-	if m.VRAMEstimate.WeightMemoryGB == 0 && m.HFConfig.HiddenSize > 0 {
-		return models.EstimateVRAM(m)
-	}
-	return m.VRAMEstimate
+// It recomputes rather than reading the stored value, because the stored one
+// was written with the model's own environment alone: the registry has no way
+// to resolve the machine-wide and variant-knob layers that sit under it. A
+// variable like VLLM_PLE_CPU_OFFLOAD set machine-wide changes what the engine
+// keeps in host RAM, and an estimate blind to it is wrong by tens of gigabytes.
+//
+// Passing the resolved environment is also what stops the estimate and the
+// launch command from drifting apart — they read the same layers, through the
+// same parser, in the same order.
+func (s *Server) effectiveVRAM(m *models.Model) models.VRAMEstimate {
+	return models.EstimateVRAM(m, s.configuredEnvPairs(m))
+}
+
+// vramFit judges that estimate against this host's cards.
+func (s *Server) vramFit(m *models.Model) (models.VRAMEstimate, models.VRAMFit) {
+	est := s.effectiveVRAM(m)
+	return est, models.Fit(est, m.VLLMConfig, s.gpuInventory())
 }
 
 // quantBadge is a model's quantization. Method and Width are separate because
@@ -436,28 +445,54 @@ func newQuantBadge(q models.QuantMeta) quantBadge {
 }
 
 // vramLabel is a model's VRAM estimate and fit verdict, rendered by the
-// "vram_label" template. Unknown means there is no estimate to show.
+// "vram_label" template.
+//
+// Three states, because there are three genuinely different things to say:
+//
+//	Unknown   nothing can be computed; Why says what is missing
+//	!Verdict  a figure, but no cards to judge it against
+//	default   a figure and a verdict
+//
+// The middle one is new. The old label had no way to express it and so judged
+// every host against an invented single 32 GiB card, which is how a model
+// serving happily across four cards came to be labelled "Too large".
 type vramLabel struct {
-	Unknown  bool
-	TotalGB  float64
+	Unknown bool
+	Why     string
+	// PerGPUGB is what one card holds at the configured width, not the whole
+	// model: on a four-way split the total was never the number that mattered.
+	PerGPUGB float64
 	FitLabel string
 	Color    string
 }
 
-func newVRAMLabel(est models.VRAMEstimate) vramLabel {
-	if est.WeightMemoryGB == 0 {
-		return vramLabel{Unknown: true}
+func (s *Server) newVRAMLabel(m *models.Model) vramLabel {
+	est, fit := s.vramFit(m)
+
+	if est.Unknown {
+		return vramLabel{Unknown: true, Why: est.UnknownWhy}
 	}
+	if !fit.Known {
+		return vramLabel{
+			PerGPUGB: fit.PerGPUGB,
+			FitLabel: fit.Label,
+			Color:    "#6b7280",
+		}
+	}
+
 	color := "#2d8a4e"
-	if est.NeedsTP2 {
+	switch {
+	case fit.Configured == nil, fit.RecommendedTP == 0:
+		color = "#b83d3d"
+	case fit.Configured.Uncertain:
+		color = "#6b7280"
+	case !fit.Configured.ServesConfigured:
 		color = "#b86e00"
 	}
-	if est.TooLarge {
-		color = "#b83d3d"
-	}
+
 	return vramLabel{
-		TotalGB:  est.TotalSingleGPUGB,
-		FitLabel: est.FitLabel,
+		PerGPUGB: fit.PerGPUGB,
+		FitLabel: fit.Label,
 		Color:    color,
 	}
 }

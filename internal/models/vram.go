@@ -1,80 +1,313 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
 
-// VRAMEstimate holds computed VRAM requirements.
+	"github.com/tmac1973/vllm-toolchest/internal/config"
+)
+
+// VRAMEstimate is what a model needs, independent of the hardware it might run
+// on. It is stored in the registry, so it holds only facts about the checkpoint
+// and the configuration it would be launched with -- never a verdict.
+//
+// A verdict depends on the cards in the machine, and a stored verdict outlives
+// them: the record that said "Too large" was written against an invented 32 GiB
+// single card and then persisted, so it kept saying so on a host with four.
+// Fit answers the hardware question, at render time, and is never written down.
 type VRAMEstimate struct {
 	ParamCountBillion float64 `json:"param_count_billion"`
-	WeightMemoryGB    float64 `json:"weight_memory_gb"`
-	KVCachePerTokenB  int64   `json:"kv_cache_per_token_bytes"`
-	ActivationGB      float64 `json:"activation_overhead_gb"`
-	TotalSingleGPUGB  float64 `json:"total_single_gpu_gb"`
-	TotalPerGPUTP2GB  float64 `json:"total_per_gpu_tp2_gb"`
-	FitsSingleGPU     bool    `json:"fits_single_gpu"`
-	NeedsTP2          bool    `json:"needs_tp2"`
-	TooLarge          bool    `json:"too_large"`
-	RecommendedTP     int     `json:"recommended_tp"`
-	FitLabel          string  `json:"fit_label"`
+	// ActiveParamBillion is what one token flows through on an MoE -- the
+	// dense part plus only the experts the router picks. Zero on a dense
+	// model, where the total already answers the question.
+	ActiveParamBillion float64 `json:"active_param_billion,omitempty"`
+
+	// StructuralGB is params x bytes-per-param. CheckpointGB is what the
+	// weights actually occupy, which is the files on disk whenever we have
+	// them. They are kept apart because the difference between them is
+	// informative: it is the tensors the formula does not model.
+	StructuralGB float64 `json:"structural_gb"`
+	CheckpointGB float64 `json:"checkpoint_gb"`
+
+	// HostResidentGB is the part of the checkpoint that offload keeps in
+	// system RAM, and DeviceWeightsGB is what is left for the GPUs to hold.
+	//
+	// This replaces a "disk floor" that took the larger of the formula and the
+	// file size and called it VRAM. The floor was reaching for something real
+	// -- the formula undercounts, and the files cannot lie about their size --
+	// but it counted host-resident bytes as GPU bytes, so a checkpoint whose
+	// n-gram table sits in system RAM was judged as though it did not.
+	// HostResidentGB is the most that could plausibly be host-resident and
+	// HostResidentMinGB the least. They are equal only when every active
+	// offload has a stated size.
+	HostResidentGB    float64 `json:"host_resident_gb,omitempty"`
+	HostResidentMinGB float64 `json:"host_resident_min_gb,omitempty"`
+	// OffloadUnsized says an offload is active whose size cannot be known
+	// from the configuration. It is carried explicitly rather than inferred
+	// from the width of the band: a band that happens to come out narrow is
+	// still a guess, and deriving certainty from arithmetic that happened not
+	// to straddle is how a "PLE is on" estimate twice applied zero bytes and
+	// reported it as a firm figure.
+	OffloadUnsized  bool    `json:"offload_unsized,omitempty"`
+	DeviceWeightsGB float64 `json:"device_weights_gb"`
+	// DeviceWeightsHighGB is the upper bound when offload is on but unsized:
+	// what the cards hold if nothing moves off them after all. Equal to
+	// DeviceWeightsGB when the figure is certain.
+	DeviceWeightsHighGB float64 `json:"device_weights_high_gb,omitempty"`
+
+	// KVCachePerTokenB is for the whole model, across every attention layer.
+	// Fit divides it by the tensor-parallel size.
+	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
+
+	// ActivationBaseGB is the working memory the model needs beyond its
+	// weights, for the whole model at the configured batch size. Fit divides
+	// it across the ranks. It lives here rather than in Fit because it depends
+	// only on the shape and the configuration, neither of which is hardware.
+	ActivationBaseGB float64 `json:"activation_base_gb"`
+
+	Offload Offload `json:"offload,omitzero"`
+
+	// ParamsUncertain marks a parameter count known to be understated rather
+	// than merely approximate, with Caveat saying why. The checkpoint and
+	// device figures remain usable: those come from the files on disk, which
+	// are a measurement and not affected by what the formula cannot model.
+	ParamsUncertain bool   `json:"params_uncertain,omitempty"`
+	Caveat          string `json:"caveat,omitempty"`
+
+	// Unknown withholds the figure entirely, and UnknownWhy says what is
+	// missing. Showing a wrong number confidently is worse than showing none:
+	// bytesPerParam already returns zero rather than inventing a value for a
+	// quantization scheme it does not recognise, and this extends that posture
+	// to the rest of the estimate.
+	Unknown    bool   `json:"unknown,omitempty"`
+	UnknownWhy string `json:"unknown_why,omitempty"`
 }
 
-// EstimateVRAM computes VRAM requirements for a model.
+// Ranged reports whether the device-weight figure is a band rather than a
+// number, which happens when offload is active but its size is not knowable
+// from the configuration alone.
+func (e VRAMEstimate) Ranged() bool {
+	return e.OffloadUnsized || e.DeviceWeightsHighGB > e.DeviceWeightsGB+0.05
+}
+
+// OwnEnvPairs is the model's own environment block, parsed by the same code
+// that parses it for a launch, so the estimate cannot read it differently from
+// the way the engine will receive it.
 //
-// Weight memory is computed two ways and the larger wins:
-//  1. Structural — param-count × bytes-per-param. Accurate for plain
-//     transformers, but undercounts hybrid (Mamba/GDN) and MoE models
-//     because the formula only models attention + dense MLP layers.
-//  2. Disk-floor — the safetensors files on disk are roughly equal to
-//     the in-memory weight footprint. The file size is a hard lower
-//     bound for any sane quantization, so use it as a sanity floor.
+// It is the minimum a caller should pass to EstimateVRAM. The API layer passes
+// the fully resolved environment instead, which also carries the machine-wide
+// and variant-knob layers.
+func (m *Model) OwnEnvPairs() []string {
+	if m == nil {
+		return nil
+	}
+	return config.EnvSet{Extra: m.VLLMConfig.Env}.Pairs()
+}
+
+// EstimateVRAM computes what a model needs, with no reference to the hardware
+// available.
 //
-// This avoids two known underestimate failure modes: the param-count
-// formula missing Mamba layers (Qwen3.5+, Jamba, Hunyuan) and unknown
-// quantization schemes silently defaulting to a too-aggressive bpp.
-func EstimateVRAM(m *Model) VRAMEstimate {
+// envPairs is the resolved launch environment -- what the engine will actually
+// be started with. Pass nil to use the model's own block alone; a caller that
+// does so can only miss an offload setting, which overstates VRAM rather than
+// understating it.
+func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	est := VRAMEstimate{}
+	if m == nil {
+		est.Unknown = true
+		est.UnknownWhy = "no model"
+		return est
+	}
+	if envPairs == nil {
+		envPairs = m.OwnEnvPairs()
+	}
+
+	cfg := m.HFConfig
+	est.Offload = DetectOffload(envPairs, m.VLLMConfig.ExtraFlags)
+	est.KVCachePerTokenB = kvCachePerToken(cfg, m.VLLMConfig)
+	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 
 	diskGB := float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
+	params := estimateParamCount(cfg)
+	bpp := m.Quantization.BytesPerParam
 
-	params := estimateParamCount(m.HFConfig)
-	if params == 0 {
-		// Couldn't compute params from architecture — work backwards from disk.
-		if diskGB > 0 {
-			est.WeightMemoryGB = diskGB
-			bpp := m.Quantization.BytesPerParam
-			if bpp <= 0 {
-				bpp = 2.0 // best guess for back-calculation only
-			}
-			est.ParamCountBillion = diskGB / bpp
+	if params > 0 {
+		est.ParamCountBillion = float64(params) / 1e9
+		est.ActiveParamBillion = float64(ActiveParamCount(cfg)) / 1e9
+		if bpp > 0 {
+			est.StructuralGB = float64(params) * bpp / (1024 * 1024 * 1024)
 		}
-		if est.WeightMemoryGB > 0 {
-			est.ActivationGB = activationOverhead(est.ParamCountBillion)
-			est.TotalSingleGPUGB = est.WeightMemoryGB + est.ActivationGB
-			est.TotalPerGPUTP2GB = est.WeightMemoryGB/2 + est.ActivationGB
+	}
+
+	// The checkpoint is what the weights occupy. The files on disk are the
+	// better witness when we have them -- they include every tensor, modelled
+	// or not -- and the formula stands in when we do not.
+	switch {
+	case diskGB > 0:
+		est.CheckpointGB = diskGB
+	case est.StructuralGB > 0:
+		est.CheckpointGB = est.StructuralGB
+	default:
+		est.Unknown = true
+		switch {
+		case params == 0:
+			est.UnknownWhy = "architecture not recognised"
+		case bpp <= 0:
+			est.UnknownWhy = "unrecognised quantization scheme"
+		default:
+			est.UnknownWhy = "no size on disk"
 		}
-		computeFitLabels(&est, m.VLLMConfig.GPUMemoryUtilization)
 		return est
 	}
 
-	est.ParamCountBillion = float64(params) / 1e9
-	bpp := m.Quantization.BytesPerParam
-	if bpp > 0 {
-		est.WeightMemoryGB = float64(params) * bpp / (1024 * 1024 * 1024)
-	}
-	// Disk-floor: weights on disk can't be smaller than weights in memory.
-	// Tokenizer/config files add at most a few MB so the bias is negligible.
-	if diskGB > est.WeightMemoryGB {
-		est.WeightMemoryGB = diskGB
+	if params == 0 && bpp > 0 {
+		// Work the parameter count backwards so the panel still has a figure
+		// to show, but do not pretend to know the architecture.
+		est.ParamCountBillion = est.CheckpointGB / bpp
 	}
 
-	// KV cache per token
-	cfg := m.HFConfig
+	// An MoE whose expert shape is missing counts every expert layer as a
+	// single dense MLP, so the parameter count reads an order of magnitude too
+	// small. That discredits the parameter count -- not the checkpoint size,
+	// which is measured from the files and does not care what the formula can
+	// model.
+	//
+	// So this caveats rather than withholds. Blanking a figure we actually
+	// have, because an architecture *name* hints at experts, would be the
+	// worse answer: the disk size is the more reliable of the two numbers
+	// here, and it is the one that decides whether the weights fit.
+	if isMoE(cfg) && (cfg.NumExperts == 0 || cfg.MoEIntermediate == 0) {
+		est.ParamsUncertain = true
+		est.Caveat = "expert shape missing from config, so the parameter count is understated"
+		if diskGB <= 0 {
+			// Nothing measured to fall back on: now there is no figure.
+			est.Unknown = true
+			est.UnknownWhy = "mixture-of-experts shape missing from config"
+		}
+	}
+
+	maxHost, minHost := hostResidentRange(est, cfg)
+	est.HostResidentGB = maxHost
+	est.HostResidentMinGB = minHost
+	est.OffloadUnsized = est.Offload.Any() && !est.Offload.Sized()
+	est.DeviceWeightsGB = est.CheckpointGB - maxHost
+	est.DeviceWeightsHighGB = est.CheckpointGB - minHost
+	if est.DeviceWeightsGB < 0 {
+		est.DeviceWeightsGB = 0
+	}
+	if est.DeviceWeightsHighGB < est.DeviceWeightsGB {
+		est.DeviceWeightsHighGB = est.DeviceWeightsGB
+	}
+	if est.OffloadUnsized && est.Caveat == "" {
+		est.Caveat = "offload size is not stated, so the GPU figure is a range"
+	}
+
+	if est.Offload.NVMe {
+		est.UnknownWhy = "NVMe offload is not modelled"
+	}
+
+	return est
+}
+
+// hostResidentRange bounds what offload keeps off the GPUs: maxHost is the
+// most that could plausibly be host-resident, minHost the least.
+//
+// Naming them by direction is deliberate. They were once (low, high) meaning
+// host-resident amounts, where "low" produced the *larger* device figure --
+// and that inversion is precisely how a zero-sized PLE table slipped through
+// as a confident number twice.
+//
+// The PLE table is never sized to a figure. The unaccounted-tensor residual --
+// what the checkpoint holds beyond what the structural formula explains --
+// bounds it, and is used only as the optimistic end of a band. It reconciles
+// with the two checkpoints measured on this machine, 38.8 and 47.68 GiB, but
+// that is inference from two points: it will read any other unmodelled tensor
+// as embedding table, and on a checkpoint with no such table it is zero, which
+// says nothing about whether the offload did anything. So the pessimistic end
+// always assumes nothing moves at all, and no flat verdict is ever drawn from
+// the optimistic one.
+func hostResidentRange(est VRAMEstimate, cfg HFConfig) (maxHost, minHost float64) {
+	if !est.Offload.Any() {
+		return 0, 0
+	}
+
+	if est.Offload.PLE {
+		if residual := est.CheckpointGB - est.StructuralGB; est.StructuralGB > 0 && residual > 0 {
+			maxHost += residual
+		}
+	}
+
+	if est.Offload.Experts {
+		// Capping at the idle share matters: the active path is resident by
+		// definition, so an oversized cache cannot push weights off the cards
+		// that every token needs.
+		idle := idleExpertGB(est, cfg)
+		if est.Offload.ExpertSized {
+			// A stated size is a fact about the host side, so it moves both
+			// bounds together rather than widening the band.
+			sized := min(est.Offload.ExpertGB, idle)
+			maxHost += sized
+			minHost += sized
+		} else {
+			maxHost += idle
+		}
+	}
+
+	if maxHost > est.CheckpointGB {
+		maxHost = est.CheckpointGB
+	}
+	if minHost > maxHost {
+		minHost = maxHost
+	}
+	return maxHost, minHost
+}
+
+// idleExpertGB is the weight held in experts a given token does not route to,
+// which is the most expert offload can ever move off the cards. Returns 0 when
+// the shape is unknown, leaving the caller with a band.
+//
+// It is an upper bound and not a prediction: the resident working set depends
+// on how the router spreads across a batch, which no static figure can know.
+func idleExpertGB(est VRAMEstimate, cfg HFConfig) float64 {
+	if !isMoE(cfg) || est.StructuralGB <= 0 {
+		return 0
+	}
+	total := estimateParamCount(cfg)
+	active := ActiveParamCount(cfg)
+	if total <= 0 || active <= 0 || active >= total {
+		return 0
+	}
+	// Offload holds the experts a token does not route to; the resident set is
+	// the active path. This is the steady-state share, not the peak.
+	idle := float64(total-active) / float64(total)
+	return est.StructuralGB * idle
+}
+
+func isMoE(cfg HFConfig) bool {
+	if cfg.NumExperts > 0 {
+		return true
+	}
+	switch cfg.ModelType {
+	case "mixtral", "qwen3_moe", "qwen3_next", "deepseek_v2", "deepseek_v3":
+		return true
+	}
+	return false
+}
+
+// kvCachePerToken is the KV cache one token costs across the whole model.
+//
+// Only full-attention layers hold a KV cache. On a hybrid the rest keep a
+// fixed-size recurrent state that does not grow with context, so counting
+// every layer overstates this badly -- fourfold on a model that is 16
+// attention layers out of 64.
+func kvCachePerToken(cfg HFConfig, c VLLMConfig) int64 {
 	headDim := cfg.HeadDim
 	if headDim == 0 && cfg.HiddenSize > 0 && cfg.NumAttentionHeads > 0 {
 		headDim = cfg.HiddenSize / cfg.NumAttentionHeads
 	}
 
 	kvDtypeBytes := 2 // FP16 default
-	if m.VLLMConfig.KVCacheDtype == "fp8" || m.VLLMConfig.KVCacheDtype == "fp8_e5m2" || m.VLLMConfig.KVCacheDtype == "fp8_e4m3" {
+	switch c.KVCacheDtype {
+	case "fp8", "fp8_e5m2", "fp8_e4m3":
 		kvDtypeBytes = 1
 	}
 
@@ -83,63 +316,60 @@ func EstimateVRAM(m *Model) VRAMEstimate {
 		kvHeads = cfg.NumAttentionHeads
 	}
 
-	// Only full-attention layers hold a KV cache. On a hybrid the rest keep a
-	// fixed-size recurrent state that does not grow with context, so counting
-	// every layer overstates this badly -- fourfold on a model that is 16
-	// attention layers out of 64.
 	kvLayers := cfg.AttentionLayers
 	if kvLayers <= 0 {
 		kvLayers = cfg.NumHiddenLayers // unknown, or a dense model
 	}
 
-	if kvLayers > 0 && kvHeads > 0 && headDim > 0 {
-		est.KVCachePerTokenB = int64(2 * kvLayers * kvHeads * headDim * kvDtypeBytes)
+	if kvLayers <= 0 || kvHeads <= 0 || headDim <= 0 {
+		return 0
 	}
-
-	// Activation overhead estimate
-	est.ActivationGB = activationOverhead(est.ParamCountBillion)
-
-	// Total for single GPU (weights + activation, KV cache is dynamic)
-	est.TotalSingleGPUGB = est.WeightMemoryGB + est.ActivationGB
-
-	// Per-GPU for TP=2
-	est.TotalPerGPUTP2GB = est.WeightMemoryGB/2 + est.ActivationGB
-
-	computeFitLabels(&est, m.VLLMConfig.GPUMemoryUtilization)
-	return est
+	return int64(2 * kvLayers * kvHeads * headDim * kvDtypeBytes)
 }
 
-func computeFitLabels(est *VRAMEstimate, gpuMemUtil float64) {
-	gpuBudget := 32.0 * 0.90
-	if gpuMemUtil > 0 {
-		gpuBudget = 32.0 * gpuMemUtil
+// activationBaseGB is the working memory the model needs beyond its weights: a
+// handful of hidden-sized buffers over the batch, plus the logits.
+//
+// It replaces a fixed ladder that returned one of five constants by parameter
+// count and capped at 2.0 GB. That was wrong in both directions -- far too
+// large for a small model with a small batch, far too small for a large batch
+// on any model -- because activation scales with the batch and the hidden
+// size, not with how many parameters are sitting still.
+func activationBaseGB(cfg HFConfig, c VLLMConfig) float64 {
+	h := float64(cfg.HiddenSize)
+	if h <= 0 {
+		return 0
 	}
 
-	if est.TotalSingleGPUGB <= gpuBudget {
-		est.FitsSingleGPU = true
-		est.RecommendedTP = 1
-		est.FitLabel = "Fits single GPU"
-	} else if est.TotalPerGPUTP2GB <= gpuBudget {
-		est.NeedsTP2 = true
-		est.RecommendedTP = 2
-		est.FitLabel = "Needs TP=2"
-	} else {
-		est.TooLarge = true
-		est.RecommendedTP = 0
-		est.FitLabel = "Too large"
+	// vLLM batches a chunk of tokens per step, not the whole context window,
+	// so the window is the wrong fallback: it charged a 262k-context model
+	// six gigabytes of activation for a batch it will never form in one step.
+	// vLLM's own default is 2048 with chunked prefill, capped by the window
+	// when that is smaller.
+	tokens := c.MaxNumBatchedTokens
+	if tokens <= 0 {
+		tokens = 2048
+		if c.MaxModelLen > 0 && c.MaxModelLen < tokens {
+			tokens = c.MaxModelLen
+		}
 	}
-}
 
-// VRAMFitLabel returns a short fit label given an estimated VRAM in GB.
-func VRAMFitLabel(estimatedGB, perGPUGB float64, numGPUs int) string {
-	budget := perGPUGB * 0.90
-	if estimatedGB <= budget {
-		return "fits"
+	seqs := c.MaxNumSeqs
+	if seqs <= 0 {
+		seqs = 256
 	}
-	if numGPUs >= 2 && estimatedGB/2 <= budget {
-		return "TP=2"
-	}
-	return "too_large"
+
+	// Roughly the live set through one decoder layer: the residual stream, the
+	// two MLP projections and the attention workspace, at activation
+	// precision. Layers are processed one at a time, so this does not scale
+	// with depth.
+	const liveBuffers = 6
+	const actBytes = 2
+
+	act := float64(tokens) * h * actBytes * liveBuffers
+	logits := float64(seqs) * float64(cfg.VocabSize) * 4
+
+	return (act + logits) / (1024 * 1024 * 1024)
 }
 
 // BytesToGB converts bytes to GB for display.
@@ -185,36 +415,86 @@ func estimateParamCount(cfg HFConfig) int64 {
 		outputEmbedding = v * h
 	}
 
-	// Per-layer attention
+	// Per-layer attention. Billed to every layer, including the recurrent
+	// layers of a hybrid, whose own projections are of a similar size. On the
+	// hybrid checked against a published figure -- Qwen3-Next-80B, 36 of 48
+	// layers recurrent -- the whole attention term is barely 1% of the model,
+	// so the simplification is well inside the error of everything else here.
 	qProj := h * heads * headDim
 	kProj := h * kvHeads * headDim
 	vProj := h * kvHeads * headDim
 	oProj := heads * headDim * h
 	attn := qProj + kProj + vProj + oProj
 
-	// Per-layer MLP (3x for gate/up/down)
-	mlp := 3 * h * inter
-
 	// Per-layer norms
 	norms := 2 * h
 
-	layerTotal := attn + mlp + norms
+	// Dense MLP: gate, up, down.
+	denseMLP := 3 * h * inter
+
+	// Mixture-of-experts layers replace that one MLP with NumExperts of them,
+	// each at moe_intermediate_size rather than intermediate_size, plus a
+	// router and -- on the architectures that have one -- a shared expert
+	// every token also passes through.
+	//
+	// Modelling these as a single dense MLP was the original defect: 512
+	// experts of width 512 counted as one 5120-wide MLP undercounts the layer
+	// about fiftyfold, and the undercount was then masked by falling back to
+	// the checkpoint's size on disk.
+	experts := int64(cfg.NumExperts)
+	moeInter := int64(cfg.MoEIntermediate)
+	moeMLP := int64(0)
+	if experts > 0 && moeInter > 0 {
+		moeMLP = experts*3*h*moeInter + h*experts // experts + router gate
+		if shared := int64(cfg.SharedExpertInter); shared > 0 {
+			moeMLP += 3 * h * shared
+		}
+	}
+
+	// Leading layers that keep an ordinary MLP before the MoE layers begin.
+	denseCount := int64(cfg.DenseLayers)
+	if denseCount < 0 || denseCount > l {
+		denseCount = 0
+	}
+	if moeMLP == 0 {
+		denseCount = l // no usable MoE shape: every layer counts as dense
+	}
+	moeCount := l - denseCount
+
+	layerAttnNorms := (attn + norms) * l
 	finalNorm := h
 
-	return embedding + outputEmbedding + l*layerTotal + finalNorm
+	return embedding + outputEmbedding + layerAttnNorms +
+		denseCount*denseMLP + moeCount*moeMLP + finalNorm
 }
 
-func activationOverhead(paramBillions float64) float64 {
-	switch {
-	case paramBillions < 3:
-		return 0.3
-	case paramBillions < 13:
-		return 0.5
-	case paramBillions < 34:
-		return 1.0
-	case paramBillions < 72:
-		return 1.5
-	default:
-		return 2.0
+// ActiveParamCount is what a single token actually flows through: the dense
+// part plus only the experts the router selects. Reported alongside the total
+// because the two differ by an order of magnitude on an MoE, and the active
+// figure is what predicts compute while the total predicts memory.
+//
+// Returns 0 when the shape is unknown or the model is dense, where the total
+// already answers the question.
+func ActiveParamCount(cfg HFConfig) int64 {
+	if cfg.NumExperts <= 0 || cfg.NumExpertsPerTok <= 0 || cfg.MoEIntermediate <= 0 {
+		return 0
 	}
+	total := estimateParamCount(cfg)
+	if total == 0 {
+		return 0
+	}
+
+	h := int64(cfg.HiddenSize)
+	l := int64(cfg.NumHiddenLayers)
+	denseCount := int64(cfg.DenseLayers)
+	if denseCount < 0 || denseCount > l {
+		denseCount = 0
+	}
+	moeCount := l - denseCount
+
+	inactive := int64(cfg.NumExperts-cfg.NumExpertsPerTok) * 3 * h * int64(cfg.MoEIntermediate)
+	if inactive < 0 {
+		return total
+	}
+	return total - moeCount*inactive
 }

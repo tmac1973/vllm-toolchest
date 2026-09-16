@@ -101,6 +101,13 @@ func goldenFixtureModels() []*models.Model {
 				MaxPositionEmbeddings: 32768,
 				VocabSize:             32000,
 				TorchDtype:            "float16",
+				// Mixtral states no moe_intermediate_size; intermediate_size
+				// is the expert width. Without these the fixture was an MoE
+				// counted as a dense model -- the very bug this reworks --
+				// sitting in our own test data.
+				NumExperts:       8,
+				NumExpertsPerTok: 2,
+				MoEIntermediate:  14336,
 			},
 			Quantization: models.QuantMeta{Method: "awq", Bits: 4, Sym: true, GroupSize: 128, BytesPerParam: 0.5},
 			ToolUse: models.ToolUseMeta{
@@ -203,13 +210,21 @@ func newGoldenServer(t *testing.T, env vllmenv.Env) *Server {
 		monitor:  monitor.New(0),
 		process:  process.NewManager("127.0.0.1", 8000, 0),
 		vllmEnv:  env,
+
+		// The monitor here is never started, so it would report no cards at
+		// all and every fragment would record the "no card inventory" state —
+		// which is exactly the branch these recordings are least useful for.
+		// Two 32 GiB cards instead: enough that the 28.8 GiB FP8 fixture is a
+		// tight single-card fit and the Mixtral is a comfortable one, so the
+		// recordings exercise real verdicts rather than a uniform refusal.
+		gpuInvOverride: &models.GPUInventory{Count: 2, PerCardGB: 32, Known: true},
 	}
 	s.bench = benchmark.NewStore(dir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.initTemplates()
 
 	for _, m := range goldenFixtureModels() {
-		m.VRAMEstimate = models.EstimateVRAM(m)
+		m.VRAMEstimate = models.EstimateVRAM(m, s.configuredEnvPairs(m))
 		if err := s.registry.Register(m); err != nil {
 			t.Fatalf("register %s: %v", m.ID, err)
 		}

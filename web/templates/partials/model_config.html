@@ -5,7 +5,36 @@
     <span class="mc-restart">Restart required</span>
   </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
-    <strong>VRAM Estimate:</strong> {{printf "%.1f" .WeightGB}} GB weights + {{printf "%.1f" .OverheadGB}} GB overhead = <strong>{{printf "%.1f" .TotalGB}} GB</strong> &mdash; {{.FitLabel}}
+    {{- with .VRAM}}
+    {{- if .Unknown}}
+    <strong>VRAM Estimate:</strong> not available &mdash; {{.Why}}
+    {{- else}}
+    <strong>VRAM Estimate:</strong> {{.ParamLabel}} params{{if .ActiveLabel}} ({{.ActiveLabel}} active){{end}},
+    {{printf "%.1f" .CheckpointGB}} GB checkpoint
+    {{- if .OffloadActive}} &minus; {{if .HostBanded}}{{printf "%.1f" .HostResidentMinGB}}&ndash;{{end}}{{printf "%.1f" .HostResidentGB}} GB in host RAM{{if .OffloadLabel}} ({{.OffloadLabel}}){{end}}{{end}}
+    = <strong>{{printf "%.1f" .DeviceWeightsGB}}{{if .Ranged}}&ndash;{{printf "%.1f" .DeviceWeightsHighGB}}{{end}} GB</strong> on the GPUs
+    &mdash; <span style="color:{{.VerdictHue}};">{{.Verdict}}</span>
+    {{- if .Caveat}}<br><small>{{.Caveat}}</small>{{end}}
+    {{- end}}
+    {{- end}}
+    {{- with .VRAMRows}}
+    <table style="margin:0.5rem 0 0;font-size:0.85em;">
+      <thead><tr><th>Split</th><th>Weights/GPU</th><th>+ overhead</th><th>Budget</th><th>KV headroom</th><th>Max context</th><th></th></tr></thead>
+      <tbody>
+      {{- range .}}
+        <tr{{if .Configured}} style="font-weight:600;"{{end}}>
+          <td>TP={{.TP}}{{if .Recommended}} &starf;{{end}}</td>
+          <td>{{printf "%.1f" .WeightsPerGPUGB}} GB</td>
+          <td>{{printf "%.1f" .OverheadGB}} GB</td>
+          <td>{{printf "%.1f" .BudgetGB}} GB</td>
+          <td>{{printf "%.1f" .KVHeadroomGB}} GB</td>
+          <td>{{if .MaxTokens}}{{.MaxTokens}}{{else}}&mdash;{{end}}</td>
+          <td style="color:{{.Hue}};">{{.Verdict}}</td>
+        </tr>
+      {{- end}}
+      </tbody>
+    </table>
+    {{- end}}
   </div>
   {{/* The profile controls sit OUTSIDE the config form below, and that is the
        whole reason this block is here rather than in a fieldset. The form

@@ -65,7 +65,14 @@ func (s *Server) handleGPUMap(w http.ResponseWriter, r *http.Request) {
 			if tp < 1 {
 				tp = 1
 			}
-			enginePerGPUGB = m.VRAMEstimate.TotalSingleGPUGB / float64(tp)
+			// Fit already reports the per-rank figure, including the
+			// replicated tensors a flat division misses.
+			_, fit := s.vramFit(m)
+			if o := fit.Configured; o != nil {
+				enginePerGPUGB = o.LoadGB
+			} else {
+				enginePerGPUGB = m.VRAMEstimate.DeviceWeightsGB / float64(tp)
+			}
 			engineName = displayNameOf(m)
 		}
 	}

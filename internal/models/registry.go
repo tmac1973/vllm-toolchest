@@ -56,7 +56,32 @@ type HFConfig struct {
 	// all of them inflates the per-token figure fourfold.
 	//
 	// Zero means "unknown", and callers fall back to NumHiddenLayers.
-	AttentionLayers   int    `json:"attention_layers,omitempty"`
+	AttentionLayers int `json:"attention_layers,omitempty"`
+
+	// Mixture-of-experts shape. Without these the parameter count models one
+	// dense MLP per layer and undercounts an MoE several-fold, which used to
+	// be masked by falling back to the checkpoint size on disk -- and that
+	// counts weights an offload keeps in system RAM as if they were in VRAM.
+	//
+	// NumExperts is zero for a dense model, which is a correct answer rather
+	// than a missing one; MetaVersion is what distinguishes the two.
+	NumExperts       int `json:"num_experts,omitempty"`
+	NumExpertsPerTok int `json:"num_experts_per_tok,omitempty"`
+	MoEIntermediate  int `json:"moe_intermediate_size,omitempty"`
+	// SharedExpertInter is the shared expert every token passes through, on
+	// the architectures that have one. Counted once per MoE layer.
+	SharedExpertInter int `json:"shared_expert_intermediate_size,omitempty"`
+	// DenseLayers is how many leading layers keep an ordinary MLP before the
+	// MoE layers begin.
+	DenseLayers int `json:"dense_layers,omitempty"`
+
+	// MetaVersion is the parser revision that wrote this record, so a field
+	// added later can be backfilled even when its zero value is legitimate.
+	// AttentionLayers could use zero as "never parsed" because no model has
+	// zero attention layers; NumExperts cannot, because every dense model
+	// has none. See hfMetaVersion and backfillMetadata.
+	MetaVersion int `json:"meta_version,omitempty"`
+
 	VocabSize         int    `json:"vocab_size,omitempty"`
 	TorchDtype        string `json:"torch_dtype,omitempty"`
 	TieWordEmbeddings bool   `json:"tie_word_embeddings,omitempty"`
@@ -472,7 +497,7 @@ func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
 	}
 
 	// Compute VRAM estimate
-	m.VRAMEstimate = EstimateVRAM(m)
+	m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())
 
 	return r.Register(m)
 }
@@ -562,8 +587,15 @@ func (r *Registry) backfillMetadata() {
 		// parse always sets it, falling back to the total layer count on a
 		// dense model -- and leaving it zero would keep showing the old,
 		// fourfold-too-high KV estimate for every hybrid already registered.
+		// MetaVersion carries the same intent forward for fields whose zero
+		// value is legitimate -- NumExperts is 0 on every dense model, so it
+		// cannot double as "never parsed" the way AttentionLayers can. A new
+		// field is now a one-line bump of hfMetaVersion rather than another
+		// sentinel clause here. The AttentionLayers clause stays because
+		// records written before MetaVersion existed report 0 for it too.
 		stale := m.HFConfig.HiddenSize == 0 ||
-			(m.HFConfig.AttentionLayers == 0 && m.HFConfig.NumHiddenLayers > 0)
+			(m.HFConfig.AttentionLayers == 0 && m.HFConfig.NumHiddenLayers > 0) ||
+			m.HFConfig.MetaVersion < hfMetaVersion
 		if stale {
 			slog.Info("backfilling metadata", "id", m.ID)
 			m.HFConfig = ParseHFConfig(m.LocalPath)
@@ -571,7 +603,7 @@ func (r *Registry) backfillMetadata() {
 			m.ToolUse = DetectToolUse(m.LocalPath, m.ID, m.HFConfig)
 			m.Vision = DetectVision(m.LocalPath, m.HFConfig)
 			m.GenDefaults = ParseGenDefaults(m.LocalPath)
-			m.VRAMEstimate = EstimateVRAM(m)
+			m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())
 		}
 	}
 }
