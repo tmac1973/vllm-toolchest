@@ -143,14 +143,18 @@ func verdictHue(fit models.VRAMFit) string {
 func offloadLabel(o models.Offload) string {
 	var parts []string
 	if o.PLE {
-		// Said plainly: the table is detected, never sized.
-		parts = append(parts, "embedding table, unsized")
+		// Estimated from the residual, never read from the configuration.
+		parts = append(parts, "embedding table, estimated")
 	}
 	if o.Experts {
-		if o.ExpertSized {
-			parts = append(parts, fmt.Sprintf("experts (%.0f GB cache)", o.ExpertGB))
-		} else {
-			parts = append(parts, "experts (unsized)")
+		switch {
+		case o.ExpertCapSet:
+			parts = append(parts, fmt.Sprintf("experts (up to %.0f GB)", o.ExpertHostCapGB))
+		default:
+			parts = append(parts, "experts (no ceiling set)")
+		}
+		if o.ExpertCacheSet {
+			parts = append(parts, fmt.Sprintf("%.1f GB cache on card", o.ExpertCacheGB))
 		}
 	}
 	if o.NVMe {

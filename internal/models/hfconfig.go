@@ -531,9 +531,18 @@ func ParseGenDefaults(modelDir string) GenDefaults {
 }
 
 func bytesPerParam(method string, bits, groupSize int) float64 {
+	if bits == 0 && strings.Contains(method, "fp8") {
+		// FP8 names its own width. A block-quantized FP8 checkpoint leaves
+		// bits unset, and returning "unknown" for it left the structural
+		// figure at zero -- which is survivable on its own, since the size on
+		// disk carries the estimate, but it makes the offload residual
+		// (checkpoint - structural) the *entire* checkpoint. Enabling PLE
+		// offload on such a model would then report ~100% of it offloaded.
+		bits = 8
+	}
 	if bits == 0 {
 		// Defaulting silently to 4-bit was an old bug — newer formats
-		// (compressed-tensors FP8, raw FP8) leave bits unset. 0 means
+		// (compressed-tensors, bitsandbytes) leave bits unset. 0 means
 		// "unknown"; let EstimateVRAM fall back to disk-size rather
 		// than fabricate a quantization level.
 		return 0
