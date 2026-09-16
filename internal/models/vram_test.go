@@ -224,14 +224,14 @@ func TestFitDoesNotRejectAModelThatRuns(t *testing.T) {
 	if fit.Configured == nil {
 		t.Fatal("TP=4 was configured and the host has four cards, but no option matched")
 	}
-	if !fit.Configured.ServesConfigured {
-		t.Errorf("TP=4 reported as not serving: weights %.1f, load %.1f, budget %.1f, max tokens %d",
-			fit.Configured.WeightsPerGPUGB, fit.Configured.LoadGB,
-			fit.Configured.BudgetGB, fit.Configured.MaxTokens)
+	if !fit.Configured.Fits {
+		t.Errorf("TP=4 reported as not fitting: required %.1f (worst %.1f) of %.1f available",
+			fit.Configured.RequiredGB, fit.Configured.RequiredHigh,
+			fit.Configured.AvailableGB)
 	}
-	// ~19.1 GiB per rank is what the engine itself reported for this model.
-	if w := fit.Configured.WeightsPerGPUGB; w < 18.1 || w > 20.1 {
-		t.Errorf("per-rank weights %.2f GB, want 19.1 +/- 1.0", w)
+	// The engine reported ~19.1 GiB per rank, so ~76.3 GiB across the four.
+	if w := fit.Configured.WeightsGB; w < 72.4 || w > 80.4 {
+		t.Errorf("total weights %.2f GB, want %.1f (19.1 x 4) +/- 4", w, 19.1*4)
 	}
 }
 
@@ -247,7 +247,7 @@ func TestSingleRankPaysNoReplicationOverhead(t *testing.T) {
 	if fit.Configured == nil {
 		t.Fatal("no TP=1 option")
 	}
-	if w := fit.Configured.WeightsPerGPUGB; w < 22.95 || w > 23.05 {
+	if w := fit.Configured.WeightsGB; w < 22.95 || w > 23.05 {
 		t.Errorf("TP=1 weights %.2f GB, want the checkpoint's own 23.0", w)
 	}
 }
@@ -264,8 +264,20 @@ func TestFitWithoutInventoryWithholdsTheVerdict(t *testing.T) {
 	if len(fit.Options) != 0 {
 		t.Errorf("offered %d tensor-parallel options with no inventory", len(fit.Options))
 	}
-	if fit.PerGPUGB <= 0 {
-		t.Error("withheld the figure as well as the verdict")
+	if fit.Why == "" {
+		t.Error("withheld the comparison without saying why")
+	}
+	// The requirement itself does not depend on the cards, so it survives.
+	if est.TotalRequiredGB <= 0 {
+		est = EstimateVRAM(&Model{
+			HFConfig:       mixtralShape(),
+			Quantization:   QuantMeta{Method: "awq", BytesPerParam: 0.5},
+			TotalSizeBytes: 24_700_000_000,
+			VLLMConfig:     VLLMConfig{TensorParallelSize: 2, MaxModelLen: 8192},
+		}, nil)
+		if est.TotalRequiredGB <= 0 {
+			t.Error("no requirement computed, though it does not depend on the hardware")
+		}
 	}
 }
 
@@ -317,23 +329,23 @@ func TestOffloadBandDecidesTheVerdict(t *testing.T) {
 	cfg := VLLMConfig{TensorParallelSize: 1, GPUMemoryUtilization: 1, MaxModelLen: 1024}
 
 	for _, tc := range []struct {
-		name                     string
-		perCardGB                float64
-		wantLoads, wantUncertain bool
+		name                    string
+		perCardGB               float64
+		wantFits, wantUncertain bool
 	}{
-		{"band entirely inside the budget is a firm fit", 120, true, false},
-		{"band straddling the budget withholds the verdict", 80, false, true},
-		{"band entirely above the budget is a plain refusal", 40, false, false},
+		{"band entirely inside what is available is a firm fit", 120, true, false},
+		{"band straddling what is available withholds the verdict", 80, false, true},
+		{"band entirely above what is available is a plain refusal", 40, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := Fit(banded, cfg, GPUInventory{Count: 1, PerCardGB: tc.perCardGB, Known: true}).Configured
 			if o == nil {
 				t.Fatal("no TP=1 option")
 			}
-			if o.Loads != tc.wantLoads || o.Uncertain != tc.wantUncertain {
-				t.Errorf("loads=%v uncertain=%v, want loads=%v uncertain=%v (load %.1f-%.1f against budget %.1f)",
-					o.Loads, o.Uncertain, tc.wantLoads, tc.wantUncertain,
-					o.LoadGB, o.LoadHighGB, o.BudgetGB)
+			if o.Fits != tc.wantFits || o.Uncertain != tc.wantUncertain {
+				t.Errorf("fits=%v uncertain=%v, want fits=%v uncertain=%v (required %.1f, worst %.1f, available %.1f)",
+					o.Fits, o.Uncertain, tc.wantFits, tc.wantUncertain,
+					o.RequiredGB, o.RequiredHigh, o.AvailableGB)
 			}
 		})
 	}
@@ -366,29 +378,42 @@ func TestMeasuredCheckpointGetsAVerdict(t *testing.T) {
 		TensorParallelSize: 4, GPUMemoryUtilization: 0.97,
 		MaxModelLen: 262144, MaxNumBatchedTokens: 8192,
 	}
+	addTotals(&est, HFConfig{}, cfg)
 	fit := Fit(est, cfg, GPUInventory{Count: 4, PerCardGB: 31.86, Known: true})
 
 	o := fit.Configured
 	if o == nil {
 		t.Fatal("no TP=4 option on a four-card host")
 	}
-	if o.Uncertain || !o.ServesConfigured {
-		t.Errorf("TP=4 should be a firm fit; got uncertain=%v serves=%v load %.1f-%.1f budget %.1f",
-			o.Uncertain, o.ServesConfigured, o.LoadGB, o.LoadHighGB, o.BudgetGB)
+	if o.Uncertain || !o.Fits {
+		t.Errorf("TP=4 should be a firm fit; got uncertain=%v fits=%v required %.1f (worst %.1f) of %.1f",
+			o.Uncertain, o.Fits, o.RequiredGB, o.RequiredHigh, o.AvailableGB)
 	}
-	// The engine reported 19.07 GiB per rank; the band must contain it.
-	if o.WeightsPerGPUGB > 19.07 || o.WeightsPerGPUHighGB < 19.07 {
-		t.Errorf("per-rank band %.1f-%.1f GB does not contain the measured 19.07",
-			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB)
+
+	// The engine reported 19.07 GiB per rank, so 76.28 across the four cards.
+	// The band is on the total, because the total is what is reported now.
+	const measuredTotal = 19.07 * 4
+	lo := weightsTotalGB(est.DeviceWeightsGB, 4)
+	hi := weightsTotalGB(est.DeviceWeightsHighGB, 4)
+	if lo > measuredTotal || hi < measuredTotal {
+		t.Errorf("weights band %.1f-%.1f GB does not contain the measured %.1f", lo, hi, measuredTotal)
 	}
-	// Containing it is not enough. An earlier version of this passed while
-	// reporting 15.5-20.3, whose lower end claims a 124B model occupies less
-	// per card than it possibly can -- it took the whole residual as
-	// offloadable and the configured ceiling as the amount offloaded, both at
-	// once. A band wider than a quarter of the figure is not an estimate.
-	if spread := o.WeightsPerGPUHighGB - o.WeightsPerGPUGB; spread > 19.07*0.25 {
-		t.Errorf("per-rank band %.1f-%.1f GB spans %.1f GB, too wide to be useful",
-			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB, spread)
+	// Containing it is not enough. An earlier version passed while reporting a
+	// band whose lower end claimed a 124B model occupies less than it possibly
+	// can -- it took the whole residual as offloadable and the configured
+	// ceiling as the amount offloaded, both at once. A band wider than a
+	// quarter of the figure is not an estimate.
+	if spread := hi - lo; spread > measuredTotal*0.25 {
+		t.Errorf("weights band %.1f-%.1f GB spans %.1f GB, too wide to be useful", lo, hi, spread)
+	}
+
+	// The whole point of the rework: the headline is a total, and it is far
+	// larger than any single card's share of it.
+	if est.TotalRequiredGB < lo {
+		t.Errorf("total required %.1f GB is below the weights alone (%.1f)", est.TotalRequiredGB, lo)
+	}
+	if est.KVAtContextGB <= 0 {
+		t.Error("KV cache at the configured context is not counted in the total")
 	}
 }
 
@@ -433,45 +458,38 @@ func TestExpertOffloadCeilingIsNotTheAmount(t *testing.T) {
 	if o == nil {
 		t.Fatal("no TP=4 option on a four-card host")
 	}
-	if o.WeightsPerGPUGB > 14.15 || o.WeightsPerGPUHighGB < 14.15 {
-		t.Errorf("per-rank band %.1f-%.1f GB does not contain the measured 14.15",
-			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB)
+	// The engine reported 14.15 GiB per rank, so 56.6 across the four cards.
+	const measuredTotal = 14.15 * 4
+	lo := weightsTotalGB(est.DeviceWeightsGB, 4)
+	hi := weightsTotalGB(est.DeviceWeightsHighGB, 4)
+	if lo > measuredTotal || hi < measuredTotal {
+		t.Errorf("weights band %.1f-%.1f GB does not contain the measured %.1f", lo, hi, measuredTotal)
 	}
-	// The figure that prompted this: 2.3 GB per card for a 124B model.
-	if o.WeightsPerGPUGB < 5 {
-		t.Errorf("per-rank floor %.1f GB is below anything a 124B checkpoint can occupy",
-			o.WeightsPerGPUGB)
+	// The figure that prompted this: 2.3 GB per card, i.e. 9.2 GB in total,
+	// for a 124B checkpoint.
+	if lo < 20 {
+		t.Errorf("weights floor %.1f GB is below anything a 124B checkpoint can occupy", lo)
 	}
-	if !o.ServesConfigured {
-		t.Errorf("TP=4 should serve: load %.1f-%.1f against budget %.1f",
-			o.LoadGB, o.LoadHighGB, o.BudgetGB)
+	if !o.Fits {
+		t.Errorf("TP=4 should fit: required %.1f (worst %.1f) of %.1f available",
+			o.RequiredGB, o.RequiredHigh, o.AvailableGB)
 	}
-
-	// TP=2 is the case the two-verdict split exists for. Its optimistic end
-	// fits the budget and its pessimistic end does not, so the honest answer
-	// is neither "fits" nor "too large" but that it turns on how much the
-	// offload really moves -- which, with the expert share resting on a single
-	// measurement, is not something to claim either way.
-	for _, opt := range fit.Options {
-		if opt.TP != 2 {
-			continue
-		}
-		if opt.LoadGB > opt.BudgetGB || opt.LoadHighGB <= opt.BudgetGB {
-			t.Errorf("TP=2 load %.1f-%.1f no longer straddles the %.1f budget; this case has stopped testing what it means to",
-				opt.LoadGB, opt.LoadHighGB, opt.BudgetGB)
-		}
-		if !opt.Uncertain {
-			t.Error("TP=2 straddles the budget and must not claim a verdict")
-		}
+	// The on-card expert cache is charged to every rank, so it grows with the
+	// width rather than being divided by it.
+	if o.OverheadGB < est.DeviceCacheGB*4 {
+		t.Errorf("overhead %.1f GB does not carry the 4 x %.1f GB of on-card cache",
+			o.OverheadGB, est.DeviceCacheGB)
 	}
 
-	// TP=1 is beyond reach at either end of the band, so it is a plain
-	// refusal. The equivalent check for TP=2 belongs only to the GPTQ
-	// checkpoint, whose band is narrow enough that both ends miss.
+	// A single card cannot hold this checkpoint under any offload assumption,
+	// and available memory now scales with the width, so narrow splits are
+	// plain refusals. (Straddling is covered by TestOffloadBandDecidesTheVerdict
+	// against a fixture built for it, rather than by whichever real checkpoint
+	// happens to land near a boundary.)
 	for _, opt := range fit.Options {
-		if opt.TP == 1 && opt.Uncertain {
-			t.Errorf("TP=1: even the optimistic bound %.1f exceeds the %.1f budget, so this is a refusal, not uncertainty",
-				opt.LoadGB, opt.BudgetGB)
+		if opt.TP == 1 && (opt.Fits || opt.Uncertain) {
+			t.Errorf("TP=1: %.1f GB required against %.1f available is a refusal, not a maybe",
+				opt.RequiredGB, opt.AvailableGB)
 		}
 	}
 }
@@ -488,8 +506,12 @@ func TestUnknownWithholdsRatherThanGuessing(t *testing.T) {
 	if est.UnknownWhy == "" {
 		t.Error("withheld the estimate without saying why")
 	}
-	if fit := Fit(est, VLLMConfig{}, GPUInventory{Count: 4, PerCardGB: 32, Known: true}); fit.Label != "—" {
-		t.Errorf("fit label = %q, want a dash for an unknown estimate", fit.Label)
+	fit := Fit(est, VLLMConfig{}, GPUInventory{Count: 4, PerCardGB: 32, Known: true})
+	if !fit.Unknown {
+		t.Error("compared an unknown estimate against the hardware anyway")
+	}
+	if len(fit.Options) != 0 {
+		t.Errorf("offered %d tensor-parallel options for a model it cannot size", len(fit.Options))
 	}
 }
 
