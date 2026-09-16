@@ -17,6 +17,10 @@ things that turned out to be wrong.
 - [`phase-13-engine-advice.md`](phase-13-engine-advice.md) — reading what the
   engine measured and what it suggests, out of its own log output. The first
   slice of the "optimizer"; acting on any of it is deliberately a later phase.
+- [`phase-14-measured-vram.md`](phase-14-measured-vram.md) — take the VRAM
+  figures from the engine's own report instead of deriving them. A reversal of
+  phase 13's assumption that the estimator could be calibrated into
+  correctness; §1 is the evidence that it could not.
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive

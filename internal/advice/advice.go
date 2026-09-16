@@ -61,13 +61,31 @@ type Measurements struct {
 	WeightsPerRankGB float64 `json:"weights_per_rank_gb,omitempty"`
 	LoadSeconds      float64 `json:"load_seconds,omitempty"`
 
+	// ConsumedGB is weights plus allocator overhead, PeakActivationGB the
+	// working set at the configured batch, GraphPoolGB the captured graphs --
+	// all per rank, and all reported together on one line.
+	//
+	// These are the three terms the structural estimate got wrong: activation
+	// by a factor of twenty-three, the graph pool by two, and the allocator
+	// overhead by not modelling it at all.
+	ConsumedGB       float64 `json:"consumed_gb,omitempty"`
+	NonTorchGB       float64 `json:"non_torch_gb,omitempty"`
+	PeakActivationGB float64 `json:"peak_activation_gb,omitempty"`
+	GraphPoolGB      float64 `json:"graph_pool_gb,omitempty"`
+
 	// MaxConcurrency is how many simultaneous requests at ConcurrencyTokens
 	// the KV pool supports, as the engine computes it.
 	MaxConcurrency    float64 `json:"max_concurrency,omitempty"`
 	ConcurrencyTokens int     `json:"concurrency_tokens,omitempty"`
 
-	GPUBlocks int `json:"gpu_blocks,omitempty"`
-	CPUBlocks int `json:"cpu_blocks,omitempty"`
+	// KVCacheTokens is the whole pool's capacity, across every rank. With
+	// KVCacheGB it gives the bytes a token really costs -- the figure that
+	// turns "what if I halve the context" into arithmetic instead of a guess.
+	KVCacheTokens int `json:"kv_cache_tokens,omitempty"`
+	// KVCacheMemoryBytes is the value the engine offers for --kv-cache-memory
+	// to reproduce this pool exactly. It hands over the config field's value
+	// directly; nothing here has to derive it.
+	KVCacheMemoryBytes int64 `json:"kv_cache_memory_bytes,omitempty"`
 
 	// PLEOffloadGB is how much of the embedding table was pinned in host RAM,
 	// and PLEOffloadFailed records the case this project has already hit: the
@@ -81,6 +99,28 @@ type Measurements struct {
 
 // Any reports whether anything at all was captured.
 func (m Measurements) Any() bool { return m != Measurements{} }
+
+// KVBytesPerToken is what one token of context really costs across the whole
+// pool, and 0 when the run did not report enough to say.
+//
+// tp is the tensor-parallel width the run used, because KVCacheGB is per rank
+// while KVCacheTokens counts the pool as a whole.
+//
+// This is the most valuable thing a single start yields. Derived from the
+// architecture it came out 2.61x low on a hybrid, because the recurrent layers
+// hold state in the same pool at matched page sizes and the draft model brings
+// its own -- none of which the attention-layer count can see. Measured, it is
+// exact, and it is near enough a constant of the model and the KV dtype, so it
+// re-answers the context-length question without another run.
+func (m Measurements) KVBytesPerToken(tp int) float64 {
+	if tp < 1 {
+		tp = 1
+	}
+	if m.KVCacheGB <= 0 || m.KVCacheTokens <= 0 {
+		return 0
+	}
+	return m.KVCacheGB * float64(tp) * (1024 * 1024 * 1024) / float64(m.KVCacheTokens)
+}
 
 // Ready reports whether the line says the server finished starting.
 //
@@ -161,7 +201,7 @@ func Observe(m *Measurements, line string) {
 	}
 	if strings.Contains(lower, "maximum concurrency") {
 		if g := reConcurrency.FindStringSubmatch(line); g != nil {
-			if n, err := strconv.Atoi(g[1]); err == nil {
+			if n, ok := parseCount(g[1]); ok {
 				m.ConcurrencyTokens = n
 			}
 			if v, err := strconv.ParseFloat(g[2], 64); err == nil {
@@ -169,14 +209,49 @@ func Observe(m *Measurements, line string) {
 			}
 		}
 	}
-	if strings.Contains(lower, "gpu blocks") {
-		if g := reBlocks.FindStringSubmatch(line); g != nil {
-			if n, err := strconv.Atoi(g[1]); err == nil {
-				m.GPUBlocks = n
+	// The pool's capacity. Written "GPU KV cache size: 651,081 tokens" -- an
+	// earlier rule looked for "GPU blocks: N, CPU blocks: M", a line vLLM does
+	// not print and nobody had checked.
+	if strings.Contains(lower, "kv cache size") {
+		if g := reKVCacheSize.FindStringSubmatch(line); g != nil {
+			if n, ok := parseCount(g[1]); ok {
+				m.KVCacheTokens = n
 			}
-			if n, err := strconv.Atoi(g[2]); err == nil {
-				m.CPUBlocks = n
+		}
+	}
+	// One line, and it carries every term the structural estimate got wrong.
+	if strings.Contains(lower, "for consumed memory") {
+		if g := reActualUsage.FindStringSubmatch(line); g != nil {
+			if v, err := strconv.ParseFloat(g[1], 64); err == nil {
+				m.ConsumedGB = v
 			}
+			if v, err := strconv.ParseFloat(g[2], 64); err == nil {
+				m.PeakActivationGB = v
+			}
+			if v, err := strconv.ParseFloat(g[3], 64); err == nil {
+				m.GraphPoolGB = v
+			}
+		}
+	}
+	// The engine offers the exact value for --kv-cache-memory. Two appear on
+	// the line: the first fits the requested budget, the second fills the card.
+	// The conservative one is the one to keep.
+	if strings.Contains(lower, "kv-cache-memory") {
+		if g := reKVCacheMemory.FindStringSubmatch(line); g != nil {
+			if n, err := strconv.ParseInt(g[1], 10, 64); err == nil {
+				m.KVCacheMemoryBytes = n
+			}
+		}
+	}
+	if strings.Contains(lower, "non-torch") {
+		if v, ok := firstFloat(reNonTorch, line); ok {
+			m.NonTorchGB = v
+		}
+	}
+	// Reported after capture, against the estimate the engine itself made.
+	if strings.Contains(lower, "cuda graph pool memory") {
+		if v, ok := firstFloat(reGraphPool, line); ok {
+			m.GraphPoolGB = v
 		}
 	}
 	// One line carries both halves on a partial failure:
@@ -254,6 +329,13 @@ var rules = []rule{
 		// makes an aggressive utilization unsatisfiable.
 		hint: "free memory on device",
 		match: func(line string) *Item {
+			// A successful start reports free memory too, in the same words up
+			// to this clause. Without it the healthy case would raise an error
+			// saying the engine could not start -- the same false positive
+			// this rule set has now produced twice.
+			if !strings.Contains(strings.ToLower(line), "less than desired") {
+				return nil
+			}
 			g := reFreeMemory.FindStringSubmatch(line)
 			if g == nil {
 				return nil
@@ -279,6 +361,47 @@ var rules = []rule{
 		},
 	},
 	{
+		// Informational, and it shipped in main as an error: the note contains
+		// the word "increase", so every healthy start raised "the engine ran
+		// out of room". It sits ahead of the direction rule so the specific
+		// reading wins over the general one.
+		// Gated on the clause that carries the number rather than on the
+		// sentence that introduces it. vLLM prints both on one line today, and
+		// a hint on the introduction alone would miss the value the moment
+		// they are split -- which is a wording change away, not a redesign.
+		hint: "--gpu-memory-utilization to",
+		match: func(line string) *Item {
+			item := &Item{
+				Severity: Info,
+				Message:  "Graph-capture memory is counted inside gpu_memory_utilization, so the configured fraction buys slightly less KV cache than it did before that accounting existed.",
+				Field:    "gpu_memory_utilization",
+				Line:     line,
+			}
+			if g := reProfilingEquiv.FindStringSubmatch(line); g != nil {
+				item.Suggested = g[1]
+			}
+			return item
+		},
+	},
+	{
+		// The engine states the exact byte count that reproduces the pool it
+		// just built. Nothing here has to derive it.
+		hint: "--kv-cache-memory=",
+		match: func(line string) *Item {
+			g := reKVCacheMemory.FindStringSubmatch(line)
+			if g == nil {
+				return nil
+			}
+			return &Item{
+				Severity:  Info,
+				Message:   "The engine reports the exact KV pool it allocated. Pinning kv_cache_memory to it makes the split reproducible instead of dependent on what else is resident at startup.",
+				Field:     "kv_cache_memory",
+				Suggested: g[1],
+				Line:      line,
+			}
+		},
+	},
+	{
 		// vLLM writes "GPU memory utilization" in prose and
 		// "gpu_memory_utilization" in argument dumps, so the hint has to match
 		// both. The first version gated on the underscore spelling and missed
@@ -301,7 +424,10 @@ var rules = []rule{
 					Field:    "gpu_memory_utilization",
 					Line:     line,
 				}
-			case strings.Contains(lower, "increas"):
+			// "try increasing" is the failure's phrasing. Bare "increase"
+			// also appears in healthy informational notes, and matching it
+			// turned every successful start into a reported error.
+			case strings.Contains(lower, "try increas"):
 				return &Item{
 					Severity: Error,
 					Message:  "The engine ran out of room and suggests raising gpu_memory_utilization. Check what else is on the cards first -- above about 0.95 there is nothing left to give.",
@@ -426,13 +552,30 @@ var (
 	reModelLoad   = regexp.MustCompile(`(?i)model loading took\s*([\d.]+)\s*GiB`)
 	reLoadSeconds = regexp.MustCompile(`(?i)and\s*([\d.]+)\s*seconds`)
 	reConcurrency = regexp.MustCompile(`(?i)Maximum concurrency for\s*([\d,]+)\s*tokens per request:\s*([\d.]+)x`)
-	reBlocks      = regexp.MustCompile(`(?i)GPU blocks:\s*([\d,]+),\s*CPU blocks:\s*([\d,]+)`)
-	reLocked      = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
-	reFailedLock  = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
-	reSeqLenVsKV  = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
-	// Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
-	// desired GPU memory utilization (0.97, 30.9 GiB).
-	reFreeMemory     = regexp.MustCompile(`(?i)Free memory on device\s+\S+\s+\(([\d.]+)/([\d.]+)\s*GiB\)`)
+	// The pool's capacity. An earlier rule looked for "GPU blocks: N, CPU
+	// blocks: M", which vLLM does not print -- it was invented whole and
+	// silently matched nothing.
+	reKVCacheSize   = regexp.MustCompile(`(?i)GPU KV cache size:\s*([\d,]+)\s*tokens`)
+	reNonTorch      = regexp.MustCompile(`(?i)non-torch\s*([\d.]+)\s*GiB`)
+	reGraphPool     = regexp.MustCompile(`(?i)CUDA graph pool memory:\s*([\d.]+)\s*GiB\s*\(actual\)`)
+	reKVCacheMemory = regexp.MustCompile(`--kv-cache-memory=(\d+)`)
+	// Actual usage is 24.58 GiB for consumed memory (weights + non-torch),
+	// 1.46 GiB for peak activation, and 0.49 GiB for CUDAGraph memory.
+	reActualUsage = regexp.MustCompile(`(?i)Actual usage is\s*([\d.]+)\s*GiB for consumed memory.*?([\d.]+)\s*GiB for peak activation.*?([\d.]+)\s*GiB for CUDAGraph memory`)
+	// The graph-accounting note, which is informational and not a failure.
+	// The trailing \d matters: [\d.]+ alone swallows the sentence's full stop
+	// and yields "0.9826." -- a value destined for a config field.
+	reProfilingEquiv = regexp.MustCompile(`(?i)increase --gpu-memory-utilization to\s*(\d+(?:\.\d+)?)`)
+	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
+	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	// The refusal names the device:
+	//   Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
+	//   desired GPU memory utilization (0.97, 30.9 GiB).
+	// The post-start report does not:
+	//   Free memory on device (31.23/31.86 GiB) on startup. Desired ...
+	// Written against the refusal alone, this matched only half of them.
+	reFreeMemory     = regexp.MustCompile(`(?i)Free memory on device\s+(?:cuda:\S+\s+)?\(([\d.]+)/([\d.]+)\s*GiB\)`)
 	reUnrecognized   = regexp.MustCompile(`unrecognized arguments:\s*(\S+)`)
 	reChunkedPrefill = regexp.MustCompile(`(?i)max_num_batched_tokens\s*[=:]\s*(\d+)`)
 
@@ -451,6 +594,17 @@ var oomPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)not enough memory`),
 	regexp.MustCompile(`(?i)KV cache.*cannot fit`),
 	regexp.MustCompile(`(?i)ValueError:\s*The model's max seq len .* is larger than the maximum`),
+}
+
+// parseCount reads an integer that may carry thousands separators. vLLM writes
+// "262,144 tokens" and "651,081 tokens", and Atoi rejects both -- which is why
+// the concurrency figure silently came back as zero.
+func parseCount(s string) (int, bool) {
+	n, err := strconv.Atoi(strings.ReplaceAll(strings.TrimSpace(s), ",", ""))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func firstFloat(re *regexp.Regexp, line string) (float64, bool) {

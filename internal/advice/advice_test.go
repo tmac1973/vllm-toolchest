@@ -116,6 +116,14 @@ INFO shutting down`
 	}
 }
 
+// Every line in this fixture is copied verbatim from a real transcript, and
+// must stay that way.
+//
+// An earlier version paired an invented cache size with a real token count,
+// and the derived bytes-per-token came out at twice the truth -- computed
+// confidently from two figures that never appeared together. That is the exact
+// habit this package was reworked to end, and it had got inside the test
+// written to prove the habit was over.
 func TestObserve(t *testing.T) {
 	var m Measurements
 	if m.Any() {
@@ -123,10 +131,12 @@ func TestObserve(t *testing.T) {
 	}
 
 	for _, line := range []string{
-		"INFO [gpu_worker.py:298] Available KV cache memory: 10.34 GiB",
-		"INFO [gpu_model_runner.py:2653] model loading took 19.07 GiB and 172.5 seconds",
-		"INFO [kv_cache_utils.py:829] GPU blocks: 42301, CPU blocks: 0",
-		"INFO [kv_cache_utils.py:833] Maximum concurrency for 262144 tokens per request: 2.48x",
+		"INFO [gpu_worker.py:701] Available KV cache memory: 4.87 GiB",
+		"INFO [model_runner.py:415] Model loading took 19.07 GiB memory and 58.214395 seconds",
+		// Real line and real numbers, thousands separators included -- Atoi
+		// rejects those, which is how the concurrency figure came back zero.
+		"INFO [kv_cache_utils.py:2393] GPU KV cache size: 651,081 tokens, Maximum concurrency for 262,144 tokens per request: 2.48x",
+		"INFO [gpu_worker.py:935] Actual usage is 24.58 GiB for consumed memory (weights + non-torch), 1.46 GiB for peak activation, and 0.49 GiB for CUDAGraph memory.",
 		"PLE offload: locked 38.8 GiB",
 	} {
 		Observe(&m, line)
@@ -135,21 +145,31 @@ func TestObserve(t *testing.T) {
 	if !m.Any() {
 		t.Fatal("observed five measurements and reported none")
 	}
-	if m.KVCacheGB != 10.34 {
-		t.Errorf("KVCacheGB = %v, want 10.34", m.KVCacheGB)
+	if m.KVCacheGB != 4.87 {
+		t.Errorf("KVCacheGB = %v, want 4.87", m.KVCacheGB)
 	}
 	if m.WeightsPerRankGB != 19.07 {
 		t.Errorf("WeightsPerRankGB = %v, want 19.07", m.WeightsPerRankGB)
 	}
-	if m.LoadSeconds != 172.5 {
-		t.Errorf("LoadSeconds = %v, want 172.5", m.LoadSeconds)
+	if m.LoadSeconds != 58.214395 {
+		t.Errorf("LoadSeconds = %v, want 58.214395", m.LoadSeconds)
 	}
-	if m.GPUBlocks != 42301 || m.CPUBlocks != 0 {
-		t.Errorf("blocks = %d/%d, want 42301/0", m.GPUBlocks, m.CPUBlocks)
+	if m.KVCacheTokens != 651081 {
+		t.Errorf("KV pool = %d tokens, want 651081", m.KVCacheTokens)
 	}
 	if m.ConcurrencyTokens != 262144 || m.MaxConcurrency != 2.48 {
 		t.Errorf("concurrency = %.2fx at %d tokens, want 2.48x at 262144",
 			m.MaxConcurrency, m.ConcurrencyTokens)
+	}
+	if m.ConsumedGB != 24.58 || m.PeakActivationGB != 1.46 || m.GraphPoolGB != 0.49 {
+		t.Errorf("consumed/activation/graphs = %.2f/%.2f/%.2f, want 24.58/1.46/0.49",
+			m.ConsumedGB, m.PeakActivationGB, m.GraphPoolGB)
+	}
+
+	// The figure this whole approach turns on: derived from the architecture
+	// it came out 12,288, and the engine's own allocation says 32,126.
+	if b := m.KVBytesPerToken(4); b < 32000 || b > 32300 {
+		t.Errorf("KV bytes/token = %.0f, want ~32126", b)
 	}
 	if m.PLEOffloadGB != 38.8 {
 		t.Errorf("PLEOffloadGB = %v, want 38.8", m.PLEOffloadGB)
@@ -318,6 +338,70 @@ ValueError: Free memory on device cuda:1 (27.54/31.86 GiB) on startup is less th
 	}
 	if items[0].Suggested != "0.85" {
 		t.Errorf("suggested = %q, want 0.85", items[0].Suggested)
+	}
+}
+
+// The successful start, which the previous rule set could not read at all: it
+// matched one line in eight and mistook a healthy accounting note for a
+// failure. A good start should yield measurements and almost no advice.
+func TestSuccessfulStartYieldsMeasurementsNotAlarms(t *testing.T) {
+	lines := []string{
+		`(PleOffloadWorker pid=996) INFO [worker.py:222] PLE offload: locked 38.8 GiB of PLE weights in RAM`,
+		`(Worker_TP2 pid=512) INFO [model_runner.py:415] Model loading took 19.07 GiB memory and 58.214395 seconds`,
+		`(Worker_TP0 pid=510) INFO [gpu_worker.py:701] Available KV cache memory: 4.87 GiB`,
+		`(EngineCore pid=384) INFO [kv_cache_utils.py:2393] GPU KV cache size: 651,081 tokens, Maximum concurrency for 262,144 tokens per request: 2.48x`,
+		`(Worker_TP0 pid=510) INFO [gpu_worker.py:935] Free memory on device (31.23/31.86 GiB) on startup. Desired GPU memory utilization is (0.97, 30.9 GiB). Actual usage is 24.58 GiB for consumed memory (weights + non-torch), 1.46 GiB for peak activation, and 0.49 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with --kv-cache-memory=4536913634 (4.23 GiB) to fit into requested memory, or --kv-cache-memory=4887892992 (4.55 GiB) to fully utilize gpu memory.`,
+		`(Worker_TP2 pid=512) INFO [gpu_worker.py:716] CUDA graph memory profiling is enabled (default since v0.21.0). The current --gpu-memory-utilization=0.9700 is equivalent to --gpu-memory-utilization=0.9574 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.9826.`,
+		`(Worker_TP1 pid=511) INFO [gpu_worker.py:872] CUDA graph pool memory: 0.49 GiB (actual), 0.4 GiB (estimated), difference: 0.09 GiB (18.6%).`,
+		`(Worker_TP0 pid=510) INFO [mem_utils.py:363] memory after profile: torch reserved 22.7 GiB, torch allocated 21.59 GiB, non-torch 2.51 GiB (before load: non-torch 0.63 GiB)`,
+	}
+
+	var m Measurements
+	for _, l := range lines {
+		Observe(&m, l)
+		// Nothing about a healthy start is an error. The rule set shipped one
+		// anyway: the graph-accounting note contains the word "increase", so
+		// every good start reported that the engine had run out of room.
+		if it := Scan(l); it != nil && it.Severity == Error {
+			t.Errorf("healthy line raised an error:\n  %.100s\n  -> %s", l, it.Message)
+		}
+	}
+
+	// The three terms the structural estimate got wrong, all on one line.
+	if m.ConsumedGB != 24.58 || m.PeakActivationGB != 1.46 || m.GraphPoolGB != 0.49 {
+		t.Errorf("consumed/activation/graphs = %.2f/%.2f/%.2f, want 24.58/1.46/0.49",
+			m.ConsumedGB, m.PeakActivationGB, m.GraphPoolGB)
+	}
+	if m.NonTorchGB != 2.51 {
+		t.Errorf("non-torch = %v, want 2.51 -- the term that was not modelled at all", m.NonTorchGB)
+	}
+	// The point of the whole approach: derived from the architecture this was
+	// 12,288, and the engine's own allocation says 32,126.
+	if b := m.KVBytesPerToken(4); b < 32000 || b > 32300 {
+		t.Errorf("KV bytes/token = %.0f, want ~32126", b)
+	}
+	// The engine hands over the config field's value directly.
+	if m.KVCacheMemoryBytes != 4536913634 {
+		t.Errorf("kv_cache_memory = %d, want the conservative 4536913634", m.KVCacheMemoryBytes)
+	}
+	if m.PLEOffloadGB != 38.8 || m.PLEOffloadFailed {
+		t.Errorf("PLE offload = %v (failed=%v), want 38.8 and no failure", m.PLEOffloadGB, m.PLEOffloadFailed)
+	}
+}
+
+// A value bound for a config field must be clean. [\d.]+ swallowed the
+// sentence's full stop and produced "0.9826.".
+func TestSuggestedValuesAreNotPunctuated(t *testing.T) {
+	line := `To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.9826.`
+	it := Scan(line)
+	if it == nil {
+		t.Fatal("the graph-accounting note matched nothing")
+	}
+	if it.Severity != Info {
+		t.Errorf("severity = %q, want info -- this is accounting, not a failure", it.Severity)
+	}
+	if it.Suggested != "0.9826" {
+		t.Errorf("suggested = %q, want %q", it.Suggested, "0.9826")
 	}
 }
 
