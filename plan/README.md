@@ -14,6 +14,9 @@ things that turned out to be wrong.
   they needed first.
 - [`phase-12-per-model-env.md`](phase-12-per-model-env.md) — per-model
   environment variables, overriding the machine-wide ones. Planned, not built.
+- [`phase-13-engine-advice.md`](phase-13-engine-advice.md) — reading what the
+  engine measured and what it suggests, out of its own log output. The first
+  slice of the "optimizer"; acting on any of it is deliberately a later phase.
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive

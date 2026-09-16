@@ -3,10 +3,11 @@ package benchmark
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/advice"
 )
 
 // Probe constants. The 256-token granularity matches vLLM's KV-cache block
@@ -308,46 +309,15 @@ func utilKey(u float64) string {
 	return fmt.Sprintf("%.2f", u)
 }
 
-// OOM log patterns. Compiled once at package init so the probe doesn't
-// re-compile on every log line.
-var oomPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)torch\.cuda\.OutOfMemoryError`),
-	regexp.MustCompile(`(?i)torch\.OutOfMemoryError`),
-	regexp.MustCompile(`(?i)CUDA out of memory`),
-	regexp.MustCompile(`(?i)HIP out of memory`),
-	regexp.MustCompile(`(?i)RuntimeError:\s*out of memory`),
-	regexp.MustCompile(`(?i)not enough memory`),
-	regexp.MustCompile(`(?i)KV cache.*cannot fit`),
-	regexp.MustCompile(`(?i)ValueError:\s*The model's max seq len .* is larger than the maximum`),
-}
-
-// vLLM occasionally suggests "Try reducing `max_model_len` to N" or
-// similar. The probe uses this to short-circuit further iterations.
-var suggestedMaxLenPattern = regexp.MustCompile(`(?i)max[_ ]model[_ ]len.*?(\d{3,7})`)
-
 // DetectOOM scans a log buffer for OOM patterns. Returns true and any
 // suggested max_model_len value found, or false otherwise.
+//
+// The patterns themselves live in internal/advice, which reads the rest of
+// what the engine says as well. Keeping a second copy here would have two sets
+// of rules over the same log text, drifting apart -- which is exactly what
+// happened once already with the environment layers.
 func DetectOOM(logs string) (oom bool, suggestedMaxLen int) {
-	for _, re := range oomPatterns {
-		if re.MatchString(logs) {
-			oom = true
-			break
-		}
-	}
-	if !oom {
-		return false, 0
-	}
-	// Take the smallest suggested value (most conservative).
-	matches := suggestedMaxLenPattern.FindAllStringSubmatch(logs, -1)
-	for _, m := range matches {
-		var n int
-		if _, err := fmt.Sscanf(m[1], "%d", &n); err == nil && n > 0 {
-			if suggestedMaxLen == 0 || n < suggestedMaxLen {
-				suggestedMaxLen = n
-			}
-		}
-	}
-	return oom, suggestedMaxLen
+	return advice.OOM(logs)
 }
 
 // ClassifyLogs is a convenience for ProbeEnv implementations: given the
