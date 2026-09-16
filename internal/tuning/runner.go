@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
@@ -302,6 +303,30 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	m.appendLog(fmt.Sprintf("[tuner] output dir: %s", m.TunedDir()))
 
 	cmd := exec.CommandContext(ctx, python, args...)
+
+	// Put the tuner in its own process group and tear the whole group down on
+	// cancel.
+	//
+	// CommandContext on its own kills the direct child -- python -- and
+	// nothing else. The ROCm workers it spawned keep running, holding
+	// gigabytes of VRAM with nothing left to reap them, and a cancelled job
+	// then quietly costs the *next* start its memory: vLLM compares
+	// gpu_memory_utilization against free memory, so it refuses to start with
+	// nothing on screen explaining why. Observed 2026-09-16, where a cancelled
+	// tuning job left 1.2 GiB on one card and 1.0 on another, and an unrelated
+	// model would not launch at 0.97.
+	//
+	// internal/process has always done this; the tuner never did.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	// If the group will not take the hint, Go force-kills after this.
+	cmd.WaitDelay = 10 * time.Second
+
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		// tqdm updates its bar with \r overwrites many times per second.
@@ -328,6 +353,12 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 
 	err = cmd.Wait()
 	if ctx.Err() == context.Canceled {
+		// Sweep anything that outlived the group's SIGTERM. A tuning run with
+		// a GPU kernel in flight does not always stop when asked, and a
+		// survivor holds VRAM until someone finds it by hand.
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
 		m.appendLog("[tuner] cancelled")
 		finish(StateCancelled, "cancelled")
 		return
