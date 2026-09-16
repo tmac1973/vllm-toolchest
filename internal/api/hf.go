@@ -201,15 +201,23 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 		}
 	}
 
-	// Compared against the first GPU only: this is a "will it obviously not
-	// fit" warning, not the tensor-parallel planning the model card does.
+	// A "will it obviously not fit" warning, not the tensor-parallel planning
+	// the model card does — this model is not downloaded yet, so there is no
+	// config to plan against.
+	//
+	// Compared against the smallest card rather than the first: a group is
+	// bounded by its weakest member, and index 0 is an arbitrary choice that
+	// happens to be the right answer only on a uniform host.
 	var vramWarning string
-	if metrics := s.monitor.Current(); detail.VRAMEstGB > 0 && len(metrics.GPU) > 0 {
-		gpuVRAM := float64(metrics.GPU[0].VRAMTotalMB) / 1024
-		if detail.VRAMEstGB > gpuVRAM {
+	if inv := s.gpuInventory(); detail.VRAMEstGB > 0 && inv.Known {
+		if detail.VRAMEstGB > inv.PerCardGB*float64(inv.Count) {
 			vramWarning = fmt.Sprintf(
-				"Estimated VRAM (%.1f GB) exceeds GPU memory (%.0f GB). Consider a quantized variant or TP=2.",
-				detail.VRAMEstGB, gpuVRAM)
+				"Estimated VRAM (%.1f GB) exceeds this host's %d × %.0f GB. Consider a quantized variant.",
+				detail.VRAMEstGB, inv.Count, inv.PerCardGB)
+		} else if detail.VRAMEstGB > inv.PerCardGB {
+			vramWarning = fmt.Sprintf(
+				"Estimated VRAM (%.1f GB) exceeds one card (%.0f GB); it will need tensor parallelism.",
+				detail.VRAMEstGB, inv.PerCardGB)
 		}
 	}
 

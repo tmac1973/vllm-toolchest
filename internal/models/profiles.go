@@ -162,7 +162,7 @@ func (r *Registry) ApplyProfile(modelID, name string) (VLLMConfig, error) {
 
 	m.VLLMConfig = r.profiles[i].Config
 	m.ActiveProfile = r.profiles[i].Name
-	m.VRAMEstimate = EstimateVRAM(m)
+	m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())
 	return m.VLLMConfig, r.save()
 }
 

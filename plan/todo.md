@@ -1,5 +1,44 @@
 # Remaining Work
 
+## VRAM estimator: calibration still owed on compute
+
+The estimator was reworked 2026-09-16: parameter counting is MoE-aware, the
+stored estimate no longer carries a fit verdict, and fit is judged against the
+host's real cards at every tensor-parallel width rather than against an
+invented single 32 GiB card. Two things could not be finished here.
+
+- **The PLE table is detected but never sized.** Sizing it from the
+  unaccounted-tensor residual (`checkpoint − structural`) reconciles with the
+  two checkpoints measured on compute — 38.8 and 47.68 GiB — but none of the
+  three checkpoints on this workstation has such a table, so the method has
+  zero validating data points locally and twice produced a "PLE is on"
+  estimate that silently subtracted nothing. It now always shows a band and
+  withholds the verdict (`depends on offload`). Decided deliberately, not by
+  omission: wider and never wrong beats precise and unvalidated. Revisit with
+  the two real checkpoints in hand.
+- **No ground-truth test.** The plan asked for per-rank weights asserted within
+  ±1 GiB of the engine's own 19.07 and 14.15 GiB. Both checkpoints live on
+  compute, and the residual depends on their real `HFConfig`, so a synthesised
+  fixture would pass by construction and prove nothing. What is pinned instead:
+  the MoE parameter count against four checkpoints (Qwen3-30B-A3B → 30.53B,
+  Qwen3-Next-80B → 79.04B, Mixtral-8x7B → 46.7B/12.9B active, and the
+  Qwen3-Next structural figure reproducing its 45.9 GiB of safetensors to
+  within 0.1 GiB).
+- Compare the panel against the engine's own `Available KV cache memory` and
+  `model loading took` lines once it is running on compute.
+- The CUDA-graph pool is a flat 0.9 GiB (measured 0.49 and 1.32 on two
+  checkpoints) and activation assumes vLLM's 2048-token default chunk. Both
+  are stand-ins for a measurement nobody has taken.
+
+## Second VRAM estimator in the HuggingFace client
+
+`internal/huggingface/client.go:564` estimates VRAM for models not yet
+downloaded, from the repo's advertised parameter count and file sizes. It is a
+different question with worse data — there is no local config to parse — and it
+was deliberately left alone. It does not know about MoE, offload, or tensor
+parallelism. The download page now at least compares its figure against the
+smallest card and the whole host rather than against GPU 0.
+
 ## ROCm Dockerfile validation
 - Rebuild `rocm-source` against `scripts/rocm_vllm_patches.py`. It replaced a
   script vendored from someone else's repo, and carries five edits where that

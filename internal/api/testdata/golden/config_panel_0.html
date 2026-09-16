@@ -4,7 +4,33 @@
     <span class="mc-restart">Restart required</span>
   </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
-    <strong>VRAM Estimate:</strong> 28.8 GB weights + 1.0 GB overhead = <strong>29.8 GB</strong> &mdash; Needs TP=2
+    <strong>VRAM Estimate:</strong> 30.7B params,
+    28.8 GB checkpoint
+    = <strong>28.8 GB</strong> on the GPUs
+    &mdash; <span style="color:#2d8a4e;">fits TP=2</span><br><small>expert shape missing from config, so the parameter count is understated</small>
+    <table style="margin:0.5rem 0 0;font-size:0.85em;">
+      <thead><tr><th>Split</th><th>Weights/GPU</th><th>+ overhead</th><th>Budget</th><th>KV headroom</th><th>Max context</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>TP=1</td>
+          <td>28.8 GB</td>
+          <td>1.0 GB</td>
+          <td>28.8 GB</td>
+          <td>0.0 GB</td>
+          <td>&mdash;</td>
+          <td style="color:#b83d3d;">too large</td>
+        </tr>
+        <tr style="font-weight:600;">
+          <td>TP=2 &starf;</td>
+          <td>15.8 GB</td>
+          <td>1.0 GB</td>
+          <td>28.8 GB</td>
+          <td>12.0 GB</td>
+          <td>787025</td>
+          <td style="color:#2d8a4e;">fits</td>
+        </tr>
+      </tbody>
+    </table>
   </div>
   
   <div class="model-profiles" hx-target="#config-unsloth--Qwen3-8-27B-FP8" hx-swap="innerHTML"

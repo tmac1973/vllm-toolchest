@@ -40,6 +40,15 @@ type Server struct {
 	tuner      *tuning.Manager
 	vllmEnv    vllmenv.Env
 	version    string
+
+	// gpuInvOverride fixes the GPU inventory the fit calculation is judged
+	// against. Nil in production, where it comes from the monitor.
+	//
+	// It exists because the fragment recordings need a stable host: the test
+	// server builds a monitor it never starts, so every card would otherwise
+	// render in the "no card inventory" state and the goldens would record
+	// nothing about fit at all.
+	gpuInvOverride *models.GPUInventory
 }
 
 func NewServer(cfg *config.Config) *Server {

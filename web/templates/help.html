@@ -67,7 +67,7 @@
     <ol>
         <li><strong>Download a model.</strong> On <a href="/models/browse">Download Models</a>, search HuggingFace and pick a repository. Unlike GGUF tooling you download a whole repo, not one file — an FP8 or AWQ checkpoint is several files that only work together.</li>
         <li><strong>Make it active.</strong> On <a href="/models">Models</a>, click the radio button beside it. vLLM serves one model per process, so this is a choice among models, not a set of them.</li>
-        <li><strong>Check it fits.</strong> The <em>VRAM est.</em> column estimates the memory that model needs at its configured context length. If it says the model needs more than you have, lower <em>Context length</em> in <em>Configure</em> before you start.</li>
+        <li><strong>Check it fits.</strong> The <em>VRAM est.</em> column estimates what each GPU must hold at the configured split. If it says the context will not fit, lower <em>Context length</em> in <em>Configure</em>, or raise the split — the table in <em>Configure</em> shows what every tensor-parallel width on this host would cost and how much context each one buys.</li>
         <li><strong>Start the engine.</strong> On <a href="/server">Server</a>, click <em>Start</em>. Loading takes anywhere from twenty seconds to several minutes; watch the log panel.</li>
         <li><strong>Send a request.</strong> Use the OpenAI-compatible endpoint on the Server page, passing the name from <code>/v1/models</code> in the <code>model</code> field.</li>
     </ol>
@@ -141,7 +141,7 @@
     <p>One row per registered model. Columns are the model's name and repo ID, its quantization method and bit width, an estimated VRAM figure, and its size on disk.</p>
     <dl>
         <dt>The radio button</dt><dd>Makes a model active — the one <em>Start</em> will launch. Choosing a different one while the engine is running does not switch models; it marks a restart as owed and shows the <span style="color:var(--pico-primary);">&#x21bb;</span> glyph.</dd>
-        <dt>VRAM est.</dt><dd>Weights plus KV cache at the configured context length plus activation overhead, with a verdict — fits one GPU, needs two, or too large. It is an estimate from the model's own config, computed two ways with the larger winning, because the structural formula undercounts hybrid and mixture-of-experts models. Treat it as a planning figure, not a guarantee.</dd>
+        <dt>VRAM est.</dt><dd>What <em>one card</em> holds at the tensor-parallel size the model is configured for — not the whole model — with a verdict against the cards this host actually has. The verdict distinguishes "it will start" from "it will serve the context you configured", because a model can do the first and not the second. A dash means the estimate could not be computed, and hovering says why; a grey figure means there is no card inventory to judge it against, so the number stands without a verdict. Treat it as a planning figure, not a guarantee.</dd>
         <dt>Configure</dt><dd>Opens the launch config for that model, inline. See below.</dd>
         <dt>Remove</dt><dd>Unregisters the model, with the option to delete its files. Removing the registry entry alone leaves the files to be found again by the next scan.</dd>
         <dt><del>missing</del></dt><dd>The registry has an entry whose files are gone. It cannot be served, and the radio is disabled.</dd>

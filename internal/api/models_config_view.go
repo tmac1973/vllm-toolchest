@@ -29,11 +29,14 @@ type modelConfigView struct {
 	SafeID      string
 	DisplayName string
 
-	// VRAM estimate banner
-	WeightGB   float64
-	OverheadGB float64
-	TotalGB    float64
-	FitLabel   string
+	// VRAM estimate banner. VRAM is the shape-and-config estimate; VRAMFit is
+	// how it lands on this host's cards, at every width the host can offer.
+	//
+	// Both are recomputed per render and neither is stored. A verdict depends
+	// on the machine, and a stored verdict outlives the machine it was written
+	// for.
+	VRAM     vramBanner
+	VRAMRows []vramTPRow
 
 	// Profiles. Banner is what the last profile action had to say, and
 	// ReadOnly is why nothing on the panel can be saved, when that is so.
@@ -118,17 +121,15 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		modelLen = maxCtx
 	}
 
-	est := effectiveVRAM(m)
+	est, fit := s.vramFit(m)
 
 	v := modelConfigView{
 		ID:          m.ID,
 		SafeID:      safeID(m.ID),
 		DisplayName: displayNameOf(m),
 
-		WeightGB:   est.WeightMemoryGB,
-		OverheadGB: est.ActivationGB,
-		TotalGB:    est.TotalSingleGPUGB,
-		FitLabel:   est.FitLabel,
+		VRAM:     newVRAMBanner(est, fit),
+		VRAMRows: newVRAMTPRows(est, fit),
 
 		MaxCtx:     maxCtx,
 		ModelLen:   modelLen,

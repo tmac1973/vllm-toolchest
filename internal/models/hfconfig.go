@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+// hfMetaVersion is bumped whenever ParseHFConfig learns to read a new field.
+// A stored record carrying an older version is re-parsed on the next scan.
+//
+// This exists because the usual trick does not generalise. AttentionLayers can
+// treat zero as "written before the field existed" because a real model always
+// has at least one attention layer; NumExperts cannot, because zero is the
+// correct answer for every dense model. Versioning the parse makes the next
+// field a one-line bump instead of another sentinel special case.
+//
+// 1: MoE shape -- NumExperts, NumExpertsPerTok, MoEIntermediate,
+// SharedExpertInter, DenseLayers.
+const hfMetaVersion = 1
+
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {
 	cfg := HFConfig{}
@@ -69,6 +82,32 @@ func ParseHFConfig(modelDir string) HFConfig {
 		jsonFieldFrom(src, &cfg.IntermediateSize, "ffn_dim")
 	}
 
+	// Mixture-of-experts shape. Every family spells these differently, so the
+	// cascade matters: Qwen uses num_experts, DeepSeek n_routed_experts,
+	// Mixtral num_local_experts.
+	if !jsonFieldFrom(src, &cfg.NumExperts, "num_experts") {
+		if !jsonFieldFrom(src, &cfg.NumExperts, "n_routed_experts") {
+			if !jsonFieldFrom(src, &cfg.NumExperts, "num_local_experts") {
+				jsonFieldFrom(src, &cfg.NumExperts, "moe_num_experts")
+			}
+		}
+	}
+	if !jsonFieldFrom(src, &cfg.NumExpertsPerTok, "num_experts_per_tok") {
+		jsonFieldFrom(src, &cfg.NumExpertsPerTok, "moe_topk")
+	}
+	if !jsonFieldFrom(src, &cfg.MoEIntermediate, "moe_intermediate_size") {
+		jsonFieldFrom(src, &cfg.MoEIntermediate, "intermediate_size_moe")
+	}
+	// A shared expert may be stated as a width, or as a count of experts at
+	// the MoE width (DeepSeek's n_shared_experts).
+	if !jsonFieldFrom(src, &cfg.SharedExpertInter, "shared_expert_intermediate_size") {
+		var nShared int
+		if jsonFieldFrom(src, &nShared, "n_shared_experts") && nShared > 0 {
+			cfg.SharedExpertInter = nShared * cfg.MoEIntermediate
+		}
+	}
+	cfg.DenseLayers = countDenseLayers(src, cfg.NumHiddenLayers, cfg.NumExperts)
+
 	// Attention heads
 	if !jsonFieldFrom(src, &cfg.NumAttentionHeads, "num_attention_heads") {
 		if !jsonFieldFrom(src, &cfg.NumAttentionHeads, "n_head") {
@@ -104,6 +143,11 @@ func ParseHFConfig(modelDir string) HFConfig {
 	if cfg.TorchDtype == "" {
 		jsonFieldFrom(raw, &cfg.TorchDtype, "torch_dtype")
 	}
+
+	// Stamped only on the success path: a config.json we could not read or
+	// parse stays stale and gets retried, rather than being recorded as
+	// fully parsed at this version.
+	cfg.MetaVersion = hfMetaVersion
 
 	return cfg
 }
@@ -646,4 +690,53 @@ func countAttentionLayers(src map[string]json.RawMessage, totalLayers int) int {
 	}
 
 	return totalLayers
+}
+
+// countDenseLayers works out how many layers of an MoE model keep an ordinary
+// MLP rather than an expert block. Returns 0 for "every layer is MoE", which
+// is also the right answer for a model with no MoE at all -- the caller only
+// consults this once it has a usable expert shape.
+//
+// Two conventions, and they disagree about what they describe:
+//
+//	first_k_dense_replace: 3      DeepSeek -- the leading N layers are dense
+//	mlp_only_layers + decoder_sparse_step   Qwen -- a layer is MoE only when
+//	                                        it is off the exception list and
+//	                                        lands on the stride
+func countDenseLayers(src map[string]json.RawMessage, totalLayers, numExperts int) int {
+	if totalLayers <= 0 || numExperts <= 0 {
+		return 0
+	}
+
+	var firstKDense int
+	if jsonFieldFrom(src, &firstKDense, "first_k_dense_replace") && firstKDense > 0 {
+		if firstKDense > totalLayers {
+			return totalLayers
+		}
+		return firstKDense
+	}
+
+	var mlpOnly []int
+	haveMLPOnly := jsonFieldFrom(src, &mlpOnly, "mlp_only_layers")
+	var sparseStep int
+	haveStep := jsonFieldFrom(src, &sparseStep, "decoder_sparse_step")
+	if !haveMLPOnly && !haveStep {
+		return 0
+	}
+	if sparseStep <= 0 {
+		sparseStep = 1
+	}
+
+	only := make(map[int]bool, len(mlpOnly))
+	for _, i := range mlpOnly {
+		only[i] = true
+	}
+
+	dense := 0
+	for i := 0; i < totalLayers; i++ {
+		if only[i] || (i+1)%sparseStep != 0 {
+			dense++
+		}
+	}
+	return dense
 }
