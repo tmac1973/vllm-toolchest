@@ -13,6 +13,7 @@
 package advice
 
 import (
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -246,16 +247,117 @@ var rules = []rule{
 		},
 	},
 	{
-		hint: "gpu_memory_utilization",
+		// The pre-flight refusal, and the one that prompted this rule set
+		// being rewritten: vLLM compares the fraction asked for against the
+		// memory actually *free*, not the card's size. Anything else already
+		// resident -- a leaked worker from a cancelled job, most likely --
+		// makes an aggressive utilization unsatisfiable.
+		hint: "free memory on device",
+		match: func(line string) *Item {
+			g := reFreeMemory.FindStringSubmatch(line)
+			if g == nil {
+				return nil
+			}
+			free, err1 := strconv.ParseFloat(g[1], 64)
+			total, err2 := strconv.ParseFloat(g[2], 64)
+			if err1 != nil || err2 != nil || total <= 0 {
+				return nil
+			}
+			msg := "Another process is already holding memory on this GPU, so the engine could not reserve the fraction configured. Free it, or lower gpu_memory_utilization."
+			item := &Item{
+				Severity: Error,
+				Message:  msg,
+				Field:    "gpu_memory_utilization",
+				Line:     line,
+			}
+			// Round down to a 0.05 step so every rank agrees on one number
+			// and the panel shows a single suggestion rather than one per card.
+			if step := math.Floor(free/total*20) / 20; step > 0 && step < 1 {
+				item.Suggested = strconv.FormatFloat(step, 'f', 2, 64)
+			}
+			return item
+		},
+	},
+	{
+		// vLLM writes "GPU memory utilization" in prose and
+		// "gpu_memory_utilization" in argument dumps, so the hint has to match
+		// both. The first version gated on the underscore spelling and missed
+		// the prose; the correction gated on the spaced spelling and missed the
+		// dumps. Matching the one word common to both is the fix, and the
+		// direction check below is what keeps it narrow.
+		hint: "utilization",
 		match: func(line string) *Item {
 			lower := strings.ToLower(line)
-			if !strings.Contains(lower, "increas") && !strings.Contains(lower, "try") {
+			// Direction matters, and the first version of this rule assumed
+			// one: it always advised raising the value. The engine asks for
+			// the opposite at least as often, and telling someone to raise a
+			// setting the engine just asked them to lower is worse than
+			// staying quiet.
+			switch {
+			case strings.Contains(lower, "decrease"), strings.Contains(lower, "reduce"):
+				return &Item{
+					Severity: Error,
+					Message:  "The engine asks for a lower gpu_memory_utilization -- it could not reserve the fraction configured.",
+					Field:    "gpu_memory_utilization",
+					Line:     line,
+				}
+			case strings.Contains(lower, "increas"):
+				return &Item{
+					Severity: Error,
+					Message:  "The engine ran out of room and suggests raising gpu_memory_utilization. Check what else is on the cards first -- above about 0.95 there is nothing left to give.",
+					Field:    "gpu_memory_utilization",
+					Line:     line,
+				}
+			}
+			return nil
+		},
+	},
+	{
+		hint: "worker",
+		match: func(line string) *Item {
+			lower := strings.ToLower(line)
+			if !strings.Contains(lower, "failed to start") {
 				return nil
 			}
 			return &Item{
 				Severity: Error,
-				Message:  "The engine ran out of room and suggests raising gpu_memory_utilization. Check what else is on the cards first -- above about 0.95 there is nothing left to give.",
-				Field:    "gpu_memory_utilization",
+				Message:  "A worker process failed to start, so the engine never came up. The cause is in the lines above this one.",
+				Line:     line,
+			}
+		},
+	},
+	{
+		hint: "num_speculative_tokens",
+		match: func(line string) *Item {
+			if !strings.Contains(strings.ToLower(line), "acceptance rate") {
+				return nil
+			}
+			return &Item{
+				Severity: Warning,
+				Message:  "More than one speculative token runs the draft layer repeatedly, which can lower the acceptance rate. Worth measuring against a lower count.",
+				Field:    "speculative_config",
+				Line:     line,
+			}
+		},
+	},
+	{
+		hint: "data type to store kv cache",
+		match: func(line string) *Item {
+			return &Item{
+				Severity: Info,
+				Message:  "The KV cache is quantized, which halves its footprint and can cost a little accuracy without a proper scaling factor.",
+				Field:    "kv_cache_dtype",
+				Line:     line,
+			}
+		},
+	},
+	{
+		hint: "cuda_visible_devices on rocm",
+		match: func(line string) *Item {
+			return &Item{
+				Severity: Warning,
+				Message:  "CUDA_VISIBLE_DEVICES is deprecated on ROCm. Set HIP_VISIBLE_DEVICES instead.",
+				Field:    "env",
 				Line:     line,
 			}
 		},
@@ -320,14 +422,17 @@ var rules = []rule{
 }
 
 var (
-	reKVCache        = regexp.MustCompile(`(?i)KV cache memory:?\s*([\d.]+)\s*GiB`)
-	reModelLoad      = regexp.MustCompile(`(?i)model loading took\s*([\d.]+)\s*GiB`)
-	reLoadSeconds    = regexp.MustCompile(`(?i)and\s*([\d.]+)\s*seconds`)
-	reConcurrency    = regexp.MustCompile(`(?i)Maximum concurrency for\s*([\d,]+)\s*tokens per request:\s*([\d.]+)x`)
-	reBlocks         = regexp.MustCompile(`(?i)GPU blocks:\s*([\d,]+),\s*CPU blocks:\s*([\d,]+)`)
-	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
-	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
-	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	reKVCache     = regexp.MustCompile(`(?i)KV cache memory:?\s*([\d.]+)\s*GiB`)
+	reModelLoad   = regexp.MustCompile(`(?i)model loading took\s*([\d.]+)\s*GiB`)
+	reLoadSeconds = regexp.MustCompile(`(?i)and\s*([\d.]+)\s*seconds`)
+	reConcurrency = regexp.MustCompile(`(?i)Maximum concurrency for\s*([\d,]+)\s*tokens per request:\s*([\d.]+)x`)
+	reBlocks      = regexp.MustCompile(`(?i)GPU blocks:\s*([\d,]+),\s*CPU blocks:\s*([\d,]+)`)
+	reLocked      = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	reFailedLock  = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
+	reSeqLenVsKV  = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	// Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
+	// desired GPU memory utilization (0.97, 30.9 GiB).
+	reFreeMemory     = regexp.MustCompile(`(?i)Free memory on device\s+\S+\s+\(([\d.]+)/([\d.]+)\s*GiB\)`)
 	reUnrecognized   = regexp.MustCompile(`unrecognized arguments:\s*(\S+)`)
 	reChunkedPrefill = regexp.MustCompile(`(?i)max_num_batched_tokens\s*[=:]\s*(\d+)`)
 

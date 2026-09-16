@@ -82,14 +82,51 @@ it implicates and a suggested value where one can be extracted:
 | Pattern | Field | Severity |
 |---|---|---|
 | OOM patterns (the existing eight) | `max_model_len` | error |
-| `Try increasing gpu_memory_utilization` | `gpu_memory_utilization` | error |
+| `Free memory on device cuda:N (X/Y GiB) … less than desired` | `gpu_memory_utilization`, suggest ⌊X/Y⌋ to a 0.05 step | error |
+| `Decrease` / `increase` **GPU memory utilization** | `gpu_memory_utilization` | error |
 | `max seq len (N) is larger than the maximum number of tokens that can be stored in KV cache (M)` | `max_model_len`, suggest M | error |
+| `WorkerProc failed to start` | — | error |
+| `num_speculative_tokens > 1 … lower acceptance rate` | `speculative_config` | warning |
+| `Using fp8 data type to store kv cache … accuracy drop` | `kv_cache_dtype` | info |
+| `CUDA_VISIBLE_DEVICES on ROCm is deprecated` | `env` | warning |
 | `Chunked prefill is enabled with max_num_batched_tokens=N` | `max_num_batched_tokens` | info |
-| `--enforce-eager` / graph capture skipped | `enforce_eager` | info |
 | unrecognized arguments: `--flag` | `extra_flags` | error |
 
 That last one is from this project's own history: a manifest bump that silently
 did nothing surfaced only as `unrecognized arguments: --enable-expert-offload`.
+
+### What a real transcript changed, 2026-09-16
+
+The table above is the second version. The first was written from what vLLM was
+assumed to say, and against a real failing start it **matched one line in eight
+and missed the failure itself**. Three lessons, all of them cheap to have
+avoided by reading a log first:
+
+- **Spelling.** vLLM writes `gpu_memory_utilization` in argument dumps and
+  "GPU memory utilization" in prose. A guard on either spelling alone misses
+  half the lines that matter — which happened twice here, once in each
+  direction, the second caught only because the corpus is now the transcript.
+- **Direction.** The original rule always advised *raising*
+  `gpu_memory_utilization`. The engine asks for the opposite at least as often,
+  and this log says "Decrease". Advice that confidently inverts the engine's
+  own instruction is worse than silence.
+- **Cheap guards must still be specific.** A secondary check on the substring
+  `try` also matches "en**try**.py", "regis**try**", "coun**try**". Only a
+  narrow hint was keeping it honest.
+
+The failure in that log was not an OOM at all but a **pre-flight refusal**:
+vLLM compares the configured fraction against memory that is *free*, not the
+card's size, and something else was already holding ~4.6 GiB per card. Two
+consequences beyond this package:
+
+- `gpuInventoryFrom` reported card *size* and ignored `VRAMUsedMB`, which the
+  monitor already collects — so the VRAM estimate could promise a comfortable
+  fit for a configuration that cannot start. It now takes free memory.
+- The memory was held by workers orphaned from a **cancelled tuning job**.
+  `internal/tuning` launched its subprocess without a process group, so
+  cancelling killed `python` and left the ROCm workers holding their contexts.
+  `internal/process` had solved this long ago; the tuner never had. Fixed, with
+  the same shell-tree test `stop_test.go` uses.
 
 ## 4. Shape
 

@@ -206,6 +206,121 @@ func TestOOMTakesTheSmallestSuggestion(t *testing.T) {
 	}
 }
 
+// Lines from a real failing start on the four-R9700 box, 2026-09-16. The first
+// version of these rules matched one line out of eight and missed the actual
+// failure, so the corpus here is the log itself rather than what the rules were
+// written against.
+func TestAgainstARealFailingStart(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		line      string
+		want      bool
+		severity  Severity
+		field     string
+		suggested string
+	}{
+		{
+			// The failure. vLLM compares the fraction asked for against memory
+			// actually free, not the card's size.
+			name:      "pre-flight refusal states free and total",
+			line:      `(Worker pid=44803) ERROR 09-16 20:50:38 [multiproc_executor.py:948] ValueError: Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than desired GPU memory utilization (0.97, 30.9 GiB). Decrease GPU memory utilization or reduce GPU memory used by other processes.`,
+			want:      true,
+			severity:  Error,
+			field:     "gpu_memory_utilization",
+			suggested: "0.85",
+		},
+		{
+			// The rule this replaced advised *raising* the value whatever the
+			// engine said, which is the opposite of what this line asks for.
+			name:     "the engine asking for less is not the engine asking for more",
+			line:     "Decrease GPU memory utilization or reduce GPU memory used by other processes.",
+			want:     true,
+			severity: Error,
+			field:    "gpu_memory_utilization",
+		},
+		{
+			name:     "and the other direction still works",
+			line:     "Try increasing gpu_memory_utilization when initializing the engine.",
+			want:     true,
+			severity: Error,
+			field:    "gpu_memory_utilization",
+		},
+		{
+			name:     "worker failed to start",
+			line:     `(Worker pid=44803) ERROR 09-16 20:50:38 [multiproc_executor.py:948] WorkerProc failed to start.`,
+			want:     true,
+			severity: Error,
+		},
+		{
+			name:     "speculative tokens above one",
+			line:     `(APIServer pid=44393) WARNING 09-16 20:49:43 [speculative.py:1042] Enabling num_speculative_tokens > 1 will run multiple times of forward on same MTP layer,which may result in lower acceptance rate`,
+			want:     true,
+			severity: Warning,
+			field:    "speculative_config",
+		},
+		{
+			name:     "quantized kv cache",
+			line:     `(APIServer pid=44393) INFO 09-16 20:49:43 [cache.py:304] Using fp8 data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor`,
+			want:     true,
+			severity: Info,
+			field:    "kv_cache_dtype",
+		},
+		{
+			name:     "wrong visible-devices variable on ROCm",
+			line:     `WARNING 09-16 20:49:52 [rocm.py:134] Using CUDA_VISIBLE_DEVICES on ROCm is deprecated and support will be removed in vLLM v0.26.0. Please use HIP_VISIBLE_DEVICES instead.`,
+			want:     true,
+			severity: Warning,
+			field:    "env",
+		},
+		{
+			// "entry.py" contains "try". An earlier version gated on that
+			// substring and would have been one narrow hint away from
+			// matching every traceback frame in the file.
+			name: "a traceback frame is not advice",
+			line: `(APIServer pid=44393)   File "/opt/vllm/lib/python3.14/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 176, in run_server`,
+		},
+		{
+			name: "the banner is not advice",
+			line: `(APIServer pid=44393) INFO 09-16 20:49:41 [api_utils.py:395] version 0.28.0  model /data/models/tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ  Clav Version 28.04.9`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Scan(tc.line)
+			if (got != nil) != tc.want {
+				t.Fatalf("match = %v, want %v\n  line: %.120s", got != nil, tc.want, tc.line)
+			}
+			if got == nil {
+				return
+			}
+			if got.Severity != tc.severity {
+				t.Errorf("severity = %q, want %q", got.Severity, tc.severity)
+			}
+			if got.Field != tc.field {
+				t.Errorf("field = %q, want %q", got.Field, tc.field)
+			}
+			if tc.suggested != "" && got.Suggested != tc.suggested {
+				t.Errorf("suggested = %q, want %q", got.Suggested, tc.suggested)
+			}
+		})
+	}
+}
+
+// Every rank reports the refusal with its own free figure. Rounding the
+// suggestion to a 0.05 step means they agree, so the panel shows one number
+// rather than one per card.
+func TestFreeMemorySuggestionAgreesAcrossRanks(t *testing.T) {
+	logs := `ValueError: Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than desired GPU memory utilization (0.97, 30.9 GiB). Decrease GPU memory utilization.
+ValueError: Free memory on device cuda:1 (27.54/31.86 GiB) on startup is less than desired GPU memory utilization (0.97, 30.9 GiB). Decrease GPU memory utilization.`
+
+	items := ScanAll(logs)
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1: %+v", len(items), items)
+	}
+	if items[0].Suggested != "0.85" {
+		t.Errorf("suggested = %q, want 0.85", items[0].Suggested)
+	}
+}
+
 func TestReady(t *testing.T) {
 	for _, line := range []string{
 		"INFO:     Uvicorn running on http://0.0.0.0:8000",
