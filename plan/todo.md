@@ -47,16 +47,18 @@ invented single 32 GiB card. What is still owed:
 - **Speculative/MTP draft weights and vision-tower parameters are not counted.**
   Both checkpoints on compute run MTP with 3 draft tokens; whatever that costs
   is currently absorbed into the residual and attributed to the PLE table.
-- **Expert offload has no pessimistic floor, and the band shows it.** The
-  ceiling moves only the optimistic end, so the MXFP4 checkpoint predicts
-  8.5–75.4 GiB of device weights — a ninefold spread that still lands a verdict
-  at TP=4 only because the budget is generous, and reads "depends on offload"
-  at TP=1 and TP=2 where the GPTQ checkpoint gives a plain refusal. An enabled
-  offload plainly moves *something*, so a floor would tighten this a great
-  deal. Not added: there is one data point for it (18.72 GiB moved against a
-  46 GiB ceiling), and inventing a floor from a single measurement is the same
-  mistake the PLE residual made when it was calibrated on two. Measure a second
-  configuration before closing this end of the band.
+- **The expert share is fitted to one measurement.** 18.72 GiB moved against a
+  46 GiB ceiling, which is 30% of that checkpoint's idle expert weight. That
+  30% is now the centre of the estimate with a ±50% band around it, because one
+  point cannot support anything tighter. A second offload configuration —
+  different ceiling, different model — would either corroborate it or show it
+  for the coincidence it might be. Until then this is the weakest number in the
+  estimator, and the band is wide on purpose.
+- **The PLE share is corroborated but only twice.** 0.890 and 0.913 of the
+  residual across two checkpoints, hence 0.90 ±5%. The gap between residual and
+  table is presumably the MTP draft weights and the vision tower; if those were
+  counted structurally the residual would *be* the table and this correction
+  could go away entirely. That is the better fix and it is not done.
 
 What is pinned by tests: the MoE parameter count against four checkpoints
 (Qwen3-30B-A3B → 30.53B, Qwen3-Next-80B → 79.04B, Mixtral-8x7B → 46.7B with
