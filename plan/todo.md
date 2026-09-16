@@ -1,34 +1,68 @@
 # Remaining Work
 
+## VRAM estimator: what compute measured, 2026-09-16
+
+Checked against the running instance after the rework landed. Three fixes came
+out of it, and one judgement was reversed on better evidence.
+
+- **The PLE residual works on the real checkpoints.** On the GPTQ checkpoint it
+  puts the table at 43.6 GiB against 47.68 measured, and TP=4 at 17.9 GiB per
+  rank against the engine's own 19.07. It had looked inert locally only because
+  no checkpoint on the workstation carries such a table. It is now the estimate,
+  banded at ±20% rather than trusted flat, and a verdict is offered again.
+  Tighten the band once more checkpoints with a PLE table have been measured —
+  two points is what the ±20% is resting on.
+- **`--expert-offload-mem` is a ceiling, not an amount.** A run configured with
+  46 was measured moving 18.72 GiB. It bounds the optimistic end and never sets
+  a figure. `--expert-cache-gb` is a different quantity again — a cache staged
+  *on* the card, so it adds to what a rank holds. Parsing both into one field
+  had the second silently overwrite the first.
+- **`--expert-cache-gb` is assumed to be GPU-resident.** That reading fits the
+  flag names but has not been confirmed against vLLM's source or its memory
+  accounting. If it is actually a host-side cache, it is being added to the
+  wrong side of the ledger — worth 5.5 GiB per card on the MXFP4 checkpoint.
+- **Block-quantized FP8 had no structural size.** `bits` is unset in those
+  configs, so bytes-per-param came back "unknown" and the structural figure was
+  zero — which would make the offload residual the entire checkpoint. FP8 names
+  its own width, so it is now read as 8 bits.
+
 ## VRAM estimator: calibration still owed on compute
 
 The estimator was reworked 2026-09-16: parameter counting is MoE-aware, the
 stored estimate no longer carries a fit verdict, and fit is judged against the
 host's real cards at every tensor-parallel width rather than against an
-invented single 32 GiB card. Two things could not be finished here.
+invented single 32 GiB card. What is still owed:
 
-- **The PLE table is detected but never sized.** Sizing it from the
-  unaccounted-tensor residual (`checkpoint − structural`) reconciles with the
-  two checkpoints measured on compute — 38.8 and 47.68 GiB — but none of the
-  three checkpoints on this workstation has such a table, so the method has
-  zero validating data points locally and twice produced a "PLE is on"
-  estimate that silently subtracted nothing. It now always shows a band and
-  withholds the verdict (`depends on offload`). Decided deliberately, not by
-  omission: wider and never wrong beats precise and unvalidated. Revisit with
-  the two real checkpoints in hand.
-- **No ground-truth test.** The plan asked for per-rank weights asserted within
-  ±1 GiB of the engine's own 19.07 and 14.15 GiB. Both checkpoints live on
-  compute, and the residual depends on their real `HFConfig`, so a synthesised
-  fixture would pass by construction and prove nothing. What is pinned instead:
-  the MoE parameter count against four checkpoints (Qwen3-30B-A3B → 30.53B,
-  Qwen3-Next-80B → 79.04B, Mixtral-8x7B → 46.7B/12.9B active, and the
-  Qwen3-Next structural figure reproducing its 45.9 GiB of safetensors to
-  within 0.1 GiB).
-- Compare the panel against the engine's own `Available KV cache memory` and
-  `model loading took` lines once it is running on compute.
-- The CUDA-graph pool is a flat 0.9 GiB (measured 0.49 and 1.32 on two
-  checkpoints) and activation assumes vLLM's 2048-token default chunk. Both
-  are stand-ins for a measurement nobody has taken.
+- **Watch a real startup.** Compare the panel against the engine's own
+  `Available KV cache memory` and `model loading took` lines. The per-rank
+  weight figure has been checked against 19.07 GiB; the KV headroom and the
+  max-context column have not been checked against anything.
+- **The ±20% band on the PLE residual is a prior, not a measurement.** It rests
+  on two checkpoints. A third would justify tightening or widening it, and
+  until then the band width is the least evidenced number in the estimator.
+- **The CUDA-graph pool is a flat 0.9 GiB** (measured 0.49 and 1.32 on two
+  checkpoints) and activation assumes vLLM's 2048-token default chunk when
+  `--max-num-batched-tokens` is unset. Both are stand-ins for a measurement
+  nobody has taken.
+- **Speculative/MTP draft weights and vision-tower parameters are not counted.**
+  Both checkpoints on compute run MTP with 3 draft tokens; whatever that costs
+  is currently absorbed into the residual and attributed to the PLE table.
+- **Expert offload has no pessimistic floor, and the band shows it.** The
+  ceiling moves only the optimistic end, so the MXFP4 checkpoint predicts
+  8.5–75.4 GiB of device weights — a ninefold spread that still lands a verdict
+  at TP=4 only because the budget is generous, and reads "depends on offload"
+  at TP=1 and TP=2 where the GPTQ checkpoint gives a plain refusal. An enabled
+  offload plainly moves *something*, so a floor would tighten this a great
+  deal. Not added: there is one data point for it (18.72 GiB moved against a
+  46 GiB ceiling), and inventing a floor from a single measurement is the same
+  mistake the PLE residual made when it was calibrated on two. Measure a second
+  configuration before closing this end of the band.
+
+What is pinned by tests: the MoE parameter count against four checkpoints
+(Qwen3-30B-A3B → 30.53B, Qwen3-Next-80B → 79.04B, Mixtral-8x7B → 46.7B with
+12.9B active, and the Qwen3-Next structural figure reproducing its 45.9 GiB of
+safetensors to within 0.1 GiB), and the compute checkpoint's TP=4 verdict with
+the per-rank band containing the engine's measured 19.07 GiB.
 
 ## Second VRAM estimator in the HuggingFace client
 

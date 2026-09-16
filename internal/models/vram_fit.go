@@ -40,8 +40,12 @@ type TPOption struct {
 
 	ActivationGB float64 `json:"activation_gb"`
 	GraphsGB     float64 `json:"graphs_gb"`
-	LoadGB       float64 `json:"load_gb"`
-	BudgetGB     float64 `json:"budget_gb"`
+	// CacheGB is a staging buffer held on the card, not offloaded from it.
+	CacheGB  float64 `json:"cache_gb,omitempty"`
+	LoadGB   float64 `json:"load_gb"`
+	BudgetGB float64 `json:"budget_gb"`
+	// LoadHighGB is the pessimistic end of the same figure.
+	LoadHighGB float64 `json:"load_high_gb,omitempty"`
 
 	// KVHeadroomGB is what is left for the KV cache once the weights,
 	// activations and graphs are placed -- which is precisely what vLLM claims
@@ -54,12 +58,11 @@ type TPOption struct {
 	// the context length this model is configured for". They are different
 	// questions and conflating them is why a model could be called a fit and
 	// then refuse the context it was set to.
+	// Loads is "the engine will start", judged at the pessimistic end of the
+	// band so it is a guarantee rather than a hope. ServesConfigured adds
+	// "and it will serve the context this model is configured for".
 	Loads            bool `json:"loads"`
 	ServesConfigured bool `json:"serves_configured"`
-	// ServesWorstCase holds when the option still serves the configured
-	// context with nothing offloaded at all -- a claim that survives the band
-	// being wrong in the worst direction.
-	ServesWorstCase bool `json:"serves_worst_case,omitempty"`
 
 	// Uncertain marks an option whose bounds straddle the budget: it fits if
 	// offload behaves and does not if it does not. No verdict is offered.
@@ -133,11 +136,8 @@ func Fit(est VRAMEstimate, c VLLMConfig, inv GPUInventory) VRAMFit {
 	// ascending order. Spending four cards where two would do is a real cost
 	// on a shared box.
 	//
-	// Where every option is uncertain -- any unsized offload makes that so --
-	// fall back to the cheapest width that serves on the *upper* bound, where
-	// nothing moves off the cards. That is a guarantee rather than a guess,
-	// and it beats offering no recommendation at all on exactly the models
-	// that most need one.
+	// ServesConfigured is already judged at the pessimistic end, so the first
+	// option satisfying it is the cheapest width that is guaranteed to work.
 	for i := range fit.Options {
 		o := &fit.Options[i]
 		if o.TP == fit.ConfiguredTP {
@@ -145,14 +145,6 @@ func Fit(est VRAMEstimate, c VLLMConfig, inv GPUInventory) VRAMFit {
 		}
 		if fit.RecommendedTP == 0 && o.Loads && o.ServesConfigured && !o.Uncertain {
 			fit.RecommendedTP = o.TP
-		}
-	}
-	if fit.RecommendedTP == 0 {
-		for i := range fit.Options {
-			if o := fit.Options[i]; o.ServesWorstCase {
-				fit.RecommendedTP = o.TP
-				break
-			}
 		}
 	}
 
@@ -171,10 +163,16 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		BudgetGB:            inv.PerCardGB * util,
 	}
 
-	o.LoadGB = o.WeightsPerGPUGB + o.ActivationGB + o.GraphsGB
-	highLoad := o.WeightsPerGPUHighGB + o.ActivationGB + o.GraphsGB
+	// The staging cache sits on the card, so it is part of what a rank holds
+	// at either end of the band.
+	o.CacheGB = est.DeviceCacheGB
+	o.LoadGB = o.WeightsPerGPUGB + o.ActivationGB + o.GraphsGB + o.CacheGB
+	highLoad := o.WeightsPerGPUHighGB + o.ActivationGB + o.GraphsGB + o.CacheGB
+	o.LoadHighGB = highLoad
 
-	o.KVHeadroomGB = o.BudgetGB - o.LoadGB
+	// Headroom is reported at the pessimistic end, so the KV figure on screen
+	// is one the engine can actually deliver rather than the best case.
+	o.KVHeadroomGB = o.BudgetGB - highLoad
 	if o.KVHeadroomGB < 0 {
 		o.KVHeadroomGB = 0
 	}
@@ -184,34 +182,19 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		o.MaxTokens = int(o.KVHeadroomGB * 1024 * 1024 * 1024 / perRank)
 	}
 
-	o.Loads = o.LoadGB <= o.BudgetGB
+	// The whole band either agrees or it does not, and that is the only
+	// question worth asking of it.
+	//
+	// Loads means guaranteed: it holds at the pessimistic end, so it survives
+	// the estimate being wrong in the direction that costs memory. Uncertain
+	// is exactly disagreement -- the bounds straddle the budget -- rather than
+	// "an offload was involved". Deriving it from the latter withheld a
+	// verdict from every model with PLE enabled, including the one whose
+	// per-rank figure lands within a gigabyte of what the engine reports.
 	ctx := c.MaxModelLen
+	o.Loads = highLoad <= o.BudgetGB
+	o.Uncertain = !o.Loads && o.LoadGB <= o.BudgetGB
 	o.ServesConfigured = o.Loads && (ctx <= 0 || o.MaxTokens >= ctx)
-
-	// ServesWorstCase is the same question asked of the upper bound: it holds
-	// when the option works even if every offloaded byte stays on the card.
-	// That is the only claim a band can make without assuming its own best
-	// case, so it is what a recommendation falls back to.
-	if worstHeadroom := o.BudgetGB - highLoad; worstHeadroom > 0 && est.KVCachePerTokenB > 0 {
-		worstTokens := int(worstHeadroom * 1024 * 1024 * 1024 / (float64(est.KVCachePerTokenB) / float64(tp)))
-		o.ServesWorstCase = ctx <= 0 || worstTokens >= ctx
-	}
-
-	// Never let the worst case pass as a fit: if the upper bound does not
-	// load, the option does not load, whatever the low bound says.
-	if highLoad > o.BudgetGB {
-		o.ServesConfigured = false
-	}
-
-	// A verdict that rests on an unsized offload is not a verdict, even where
-	// both bounds land the same side of the budget: "fits" computed from the
-	// optimistic bound quietly assumes every offloaded byte really does leave
-	// the card. So this is taken from whether the offload is sized at all,
-	// not from whether the arithmetic happened to straddle -- a band that
-	// comes out narrow is still a guess, and a wide band sitting entirely
-	// under the budget is the case most likely to be believed and least
-	// entitled to be.
-	o.Uncertain = est.OffloadUnsized || highLoad > o.LoadGB+0.05
 	return o
 }
 

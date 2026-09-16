@@ -20,37 +20,36 @@ type Offload struct {
 	// estimate can say it does not model it, never to size it.
 	NVMe bool `json:"nvme,omitempty"`
 
-	// ExpertGB is the cache the operator sized explicitly, and ExpertSized
-	// says whether they did. Expert offload without a size is the case that
-	// forces a range rather than a figure: the engine picks the cache itself
-	// and we cannot know what it picked without asking it.
-	ExpertGB    float64 `json:"expert_gb,omitempty"`
-	ExpertSized bool    `json:"expert_sized,omitempty"`
+	// ExpertHostCapGB is --expert-offload-mem: a ceiling on how much expert
+	// weight may live in host RAM. It is not a statement of how much does --
+	// a run configured with 46 here was measured moving 18.72 GB -- so it
+	// bounds the optimistic end of the band and never sets a figure.
+	ExpertHostCapGB float64 `json:"expert_host_cap_gb,omitempty"`
+	ExpertCapSet    bool    `json:"expert_cap_set,omitempty"`
+
+	// ExpertCacheGB is --expert-cache-gb: the staging cache for streamed
+	// experts. It is resident on the card, so it adds to what a rank must
+	// hold rather than subtracting from it.
+	//
+	// These two were once parsed into one field, which meant a command
+	// carrying both had the second silently overwrite the first: a 46 GB
+	// offload ceiling was recorded as a 5.5 GB one.
+	ExpertCacheGB  float64 `json:"expert_cache_gb,omitempty"`
+	ExpertCacheSet bool    `json:"expert_cache_set,omitempty"`
 }
 
 // Any reports whether anything at all is being kept off the GPUs.
 func (o Offload) Any() bool { return o.PLE || o.Experts || o.NVMe }
 
-// Sized reports whether every active offload has a known size. When it is
-// false the estimate must show a band rather than a number.
+// Bounded reports whether the host-resident share can be bounded at all.
 //
-// PLE never counts as sized. Its size is inferred from the tensors the
-// structural formula cannot account for, which is a reading of a residual and
-// not a measurement: it reconciles with the two checkpoints it was calibrated
-// against, and it will misattribute any other unmodelled tensor to the
-// embedding table. On a checkpoint with no such table the residual is zero, so
-// treating it as certain would have the estimate announce an offload and then
-// apply nothing to it -- confident, and silently wrong in whichever direction
-// the residual happens to fall.
-func (o Offload) Sized() bool {
-	if o.NVMe || o.PLE {
-		return false
-	}
-	if o.Experts && !o.ExpertSized {
-		return false
-	}
-	return true
-}
+// Nothing here is ever known exactly. The PLE table is estimated from the
+// unaccounted-tensor residual, and expert offload is given only as a ceiling.
+// What matters is whether the bounds are tight enough to judge, which is a
+// question for the fit against a particular budget -- not something the flags
+// can answer on their own. So this reports only the case where no bound exists
+// at all: NVMe, whose staging behaviour is not modelled.
+func (o Offload) Bounded() bool { return !o.NVMe }
 
 // DetectOffload reads the offload settings out of a resolved launch
 // environment and the extra-flags string.
@@ -91,10 +90,15 @@ func DetectOffload(envPairs []string, extraFlags string) Offload {
 		switch name {
 		case "--enable-expert-offload":
 			o.Experts = true
-		case "--expert-offload-mem", "--expert-cache-gb":
+		case "--expert-offload-mem":
 			o.Experts = true
 			if gb, ok := parseOffloadGB(val, name); hasVal && ok {
-				o.ExpertGB, o.ExpertSized = gb, true
+				o.ExpertHostCapGB, o.ExpertCapSet = gb, true
+			}
+		case "--expert-cache-gb":
+			o.Experts = true
+			if gb, ok := parseOffloadGB(val, name); hasVal && ok {
+				o.ExpertCacheGB, o.ExpertCacheSet = gb, true
 			}
 		case "--ple-nvme-offload":
 			// Storage-backed, so nothing is resident on a card, but the

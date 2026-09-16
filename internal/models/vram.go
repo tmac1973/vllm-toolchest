@@ -41,12 +41,10 @@ type VRAMEstimate struct {
 	// offload has a stated size.
 	HostResidentGB    float64 `json:"host_resident_gb,omitempty"`
 	HostResidentMinGB float64 `json:"host_resident_min_gb,omitempty"`
-	// OffloadUnsized says an offload is active whose size cannot be known
-	// from the configuration. It is carried explicitly rather than inferred
-	// from the width of the band: a band that happens to come out narrow is
-	// still a guess, and deriving certainty from arithmetic that happened not
-	// to straddle is how a "PLE is on" estimate twice applied zero bytes and
-	// reported it as a firm figure.
+	// OffloadUnsized says an offload is active that cannot be bounded at all
+	// -- in practice NVMe, whose staging behaviour is not modelled. Everything
+	// else is bounded, loosely or tightly, and how tightly is a question for
+	// the fit against a particular budget rather than for the flags.
 	OffloadUnsized  bool    `json:"offload_unsized,omitempty"`
 	DeviceWeightsGB float64 `json:"device_weights_gb"`
 	// DeviceWeightsHighGB is the upper bound when offload is on but unsized:
@@ -57,6 +55,10 @@ type VRAMEstimate struct {
 	// KVCachePerTokenB is for the whole model, across every attention layer.
 	// Fit divides it by the tensor-parallel size.
 	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
+
+	// DeviceCacheGB is a buffer the engine stages on each card -- the expert
+	// streaming cache. Unlike offload it adds to what a rank holds.
+	DeviceCacheGB float64 `json:"device_cache_gb,omitempty"`
 
 	// ActivationBaseGB is the working memory the model needs beyond its
 	// weights, for the whole model at the configured batch size. Fit divides
@@ -188,7 +190,10 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	maxHost, minHost := hostResidentRange(est, cfg)
 	est.HostResidentGB = maxHost
 	est.HostResidentMinGB = minHost
-	est.OffloadUnsized = est.Offload.Any() && !est.Offload.Sized()
+	est.OffloadUnsized = est.Offload.Any() && !est.Offload.Bounded()
+	// A cache staged on the card is not offload: it is one more thing a rank
+	// must hold.
+	est.DeviceCacheGB = est.Offload.ExpertCacheGB
 	est.DeviceWeightsGB = est.CheckpointGB - maxHost
 	est.DeviceWeightsHighGB = est.CheckpointGB - minHost
 	if est.DeviceWeightsGB < 0 {
@@ -197,8 +202,8 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	if est.DeviceWeightsHighGB < est.DeviceWeightsGB {
 		est.DeviceWeightsHighGB = est.DeviceWeightsGB
 	}
-	if est.OffloadUnsized && est.Caveat == "" {
-		est.Caveat = "offload size is not stated, so the GPU figure is a range"
+	if est.Ranged() && est.Caveat == "" {
+		est.Caveat = "offload size is estimated, so the GPU figure is a range"
 	}
 
 	if est.Offload.NVMe {
@@ -232,24 +237,31 @@ func hostResidentRange(est VRAMEstimate, cfg HFConfig) (maxHost, minHost float64
 
 	if est.Offload.PLE {
 		if residual := est.CheckpointGB - est.StructuralGB; est.StructuralGB > 0 && residual > 0 {
-			maxHost += residual
+			// The residual is the estimate, banded rather than trusted flat.
+			// Measured against two checkpoints on a four-card host it lands
+			// 43.6 and 52.2 GiB against a table measured at 47.68 -- inside
+			// 10% both times, in opposite directions.
+			maxHost += residual * pleResidualHigh
+			minHost += residual * pleResidualLow
 		}
+		// A residual at or below zero means the method found nothing to
+		// measure. It says nothing about whether the offload did anything, so
+		// the band is left open below rather than closed at the residual.
 	}
 
 	if est.Offload.Experts {
 		// Capping at the idle share matters: the active path is resident by
-		// definition, so an oversized cache cannot push weights off the cards
-		// that every token needs.
-		idle := idleExpertGB(est, cfg)
-		if est.Offload.ExpertSized {
-			// A stated size is a fact about the host side, so it moves both
-			// bounds together rather than widening the band.
-			sized := min(est.Offload.ExpertGB, idle)
-			maxHost += sized
-			minHost += sized
-		} else {
-			maxHost += idle
+		// definition, so no ceiling can push weights off the cards that every
+		// token needs.
+		//
+		// --expert-offload-mem is a ceiling, not an amount: a run configured
+		// with 46 GB was measured moving 18.72. So it bounds the optimistic
+		// end and never moves the pessimistic one.
+		ceiling := idleExpertGB(est, cfg)
+		if est.Offload.ExpertCapSet {
+			ceiling = min(ceiling, est.Offload.ExpertHostCapGB)
 		}
+		maxHost += ceiling
 	}
 
 	if maxHost > est.CheckpointGB {
@@ -281,6 +293,15 @@ func idleExpertGB(est VRAMEstimate, cfg HFConfig) float64 {
 	idle := float64(total-active) / float64(total)
 	return est.StructuralGB * idle
 }
+
+// The PLE residual is banded rather than trusted flat. Widths chosen against
+// the two checkpoints it was calibrated on, where it lands within 10% in both
+// directions; they are a prior, not a measurement, and should tighten once
+// more checkpoints carrying such a table have been measured.
+const (
+	pleResidualLow  = 0.80
+	pleResidualHigh = 1.20
+)
 
 func isMoE(cfg HFConfig) bool {
 	if cfg.NumExperts > 0 {
