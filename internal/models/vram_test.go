@@ -381,12 +381,97 @@ func TestMeasuredCheckpointGetsAVerdict(t *testing.T) {
 		t.Errorf("per-rank band %.1f-%.1f GB does not contain the measured 19.07",
 			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB)
 	}
+	// Containing it is not enough. An earlier version of this passed while
+	// reporting 15.5-20.3, whose lower end claims a 124B model occupies less
+	// per card than it possibly can -- it took the whole residual as
+	// offloadable and the configured ceiling as the amount offloaded, both at
+	// once. A band wider than a quarter of the figure is not an estimate.
+	if spread := o.WeightsPerGPUHighGB - o.WeightsPerGPUGB; spread > 19.07*0.25 {
+		t.Errorf("per-rank band %.1f-%.1f GB spans %.1f GB, too wide to be useful",
+			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB, spread)
+	}
+}
 
-	// The narrow widths are plainly too large — not "depends on offload".
+// The other checkpoint measured on compute, and the one whose panel read
+// 2.3 GB per card: 117.2 GB on disk, PLE offload plus expert offload with a
+// 46 GB ceiling and a 5.5 GB on-card cache. The engine reported 14.15 GiB per
+// rank at TP=4.
+//
+// The ceiling is the trap. Treating it as the amount offloaded assumed the
+// maximum permitted offload and the largest plausible table simultaneously,
+// which nothing observed does.
+func TestExpertOffloadCeilingIsNotTheAmount(t *testing.T) {
+	m := &Model{
+		HFConfig: HFConfig{
+			NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24,
+			NumKeyValueHeads: 2, HeadDim: 256, VocabSize: 248320,
+			AttentionLayers: 12, NumExperts: 512, NumExpertsPerTok: 10,
+			MoEIntermediate: 640, SharedExpertInter: 640,
+		},
+		Quantization:   QuantMeta{Method: "compressed-tensors", Bits: 4, BytesPerParam: 0.5625},
+		TotalSizeBytes: 125_810_393_909,
+		VLLMConfig: VLLMConfig{
+			TensorParallelSize: 4, GPUMemoryUtilization: 0.92,
+			MaxModelLen: 262144, MaxNumBatchedTokens: 4096, KVCacheDtype: "fp8",
+			Env:        "VLLM_PLE_CPU_OFFLOAD=1",
+			ExtraFlags: "--enable-expert-offload --expert-offload-mem 46 --expert-cache-gb 5.5",
+		},
+	}
+
+	est := EstimateVRAM(m, m.OwnEnvPairs())
+	if est.HostResidentGB >= est.CheckpointGB*0.75 {
+		t.Errorf("host-resident %.1f of a %.1f GB checkpoint: the ceiling is being read as the amount",
+			est.HostResidentGB, est.CheckpointGB)
+	}
+	// The cache is staged on the card, so it is not offload.
+	if est.DeviceCacheGB != 5.5 {
+		t.Errorf("on-card cache = %.1f GB, want 5.5", est.DeviceCacheGB)
+	}
+
+	fit := Fit(est, m.VLLMConfig, GPUInventory{Count: 4, PerCardGB: 31.859375, Known: true})
+	o := fit.Configured
+	if o == nil {
+		t.Fatal("no TP=4 option on a four-card host")
+	}
+	if o.WeightsPerGPUGB > 14.15 || o.WeightsPerGPUHighGB < 14.15 {
+		t.Errorf("per-rank band %.1f-%.1f GB does not contain the measured 14.15",
+			o.WeightsPerGPUGB, o.WeightsPerGPUHighGB)
+	}
+	// The figure that prompted this: 2.3 GB per card for a 124B model.
+	if o.WeightsPerGPUGB < 5 {
+		t.Errorf("per-rank floor %.1f GB is below anything a 124B checkpoint can occupy",
+			o.WeightsPerGPUGB)
+	}
+	if !o.ServesConfigured {
+		t.Errorf("TP=4 should serve: load %.1f-%.1f against budget %.1f",
+			o.LoadGB, o.LoadHighGB, o.BudgetGB)
+	}
+
+	// TP=2 is the case the two-verdict split exists for. Its optimistic end
+	// fits the budget and its pessimistic end does not, so the honest answer
+	// is neither "fits" nor "too large" but that it turns on how much the
+	// offload really moves -- which, with the expert share resting on a single
+	// measurement, is not something to claim either way.
 	for _, opt := range fit.Options {
-		if opt.TP < 4 && opt.Uncertain {
-			t.Errorf("TP=%d: optimistic bound %.1f already exceeds the %.1f budget, so this is a refusal, not uncertainty",
-				opt.TP, opt.LoadGB, opt.BudgetGB)
+		if opt.TP != 2 {
+			continue
+		}
+		if opt.LoadGB > opt.BudgetGB || opt.LoadHighGB <= opt.BudgetGB {
+			t.Errorf("TP=2 load %.1f-%.1f no longer straddles the %.1f budget; this case has stopped testing what it means to",
+				opt.LoadGB, opt.LoadHighGB, opt.BudgetGB)
+		}
+		if !opt.Uncertain {
+			t.Error("TP=2 straddles the budget and must not claim a verdict")
+		}
+	}
+
+	// TP=1 is beyond reach at either end of the band, so it is a plain
+	// refusal. The equivalent check for TP=2 belongs only to the GPTQ
+	// checkpoint, whose band is narrow enough that both ends miss.
+	for _, opt := range fit.Options {
+		if opt.TP == 1 && opt.Uncertain {
+			t.Errorf("TP=1: even the optimistic bound %.1f exceeds the %.1f budget, so this is a refusal, not uncertainty",
+				opt.LoadGB, opt.BudgetGB)
 		}
 	}
 }

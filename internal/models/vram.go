@@ -237,12 +237,9 @@ func hostResidentRange(est VRAMEstimate, cfg HFConfig) (maxHost, minHost float64
 
 	if est.Offload.PLE {
 		if residual := est.CheckpointGB - est.StructuralGB; est.StructuralGB > 0 && residual > 0 {
-			// The residual is the estimate, banded rather than trusted flat.
-			// Measured against two checkpoints on a four-card host it lands
-			// 43.6 and 52.2 GiB against a table measured at 47.68 -- inside
-			// 10% both times, in opposite directions.
-			maxHost += residual * pleResidualHigh
-			minHost += residual * pleResidualLow
+			table := residual * pleShareOfResidual
+			maxHost += table * (1 + pleBandWidth)
+			minHost += table * (1 - pleBandWidth)
 		}
 		// A residual at or below zero means the method found nothing to
 		// measure. It says nothing about whether the offload did anything, so
@@ -253,15 +250,19 @@ func hostResidentRange(est VRAMEstimate, cfg HFConfig) (maxHost, minHost float64
 		// Capping at the idle share matters: the active path is resident by
 		// definition, so no ceiling can push weights off the cards that every
 		// token needs.
-		//
-		// --expert-offload-mem is a ceiling, not an amount: a run configured
-		// with 46 GB was measured moving 18.72. So it bounds the optimistic
-		// end and never moves the pessimistic one.
-		ceiling := idleExpertGB(est, cfg)
+		idle := idleExpertGB(est, cfg)
+		ceiling := idle
 		if est.Offload.ExpertCapSet {
 			ceiling = min(ceiling, est.Offload.ExpertHostCapGB)
 		}
-		maxHost += ceiling
+
+		// Centre on what offload was observed to move, not on what it was
+		// permitted to move. The ceiling still bounds the optimistic end --
+		// nothing can exceed what the operator allowed -- but it no longer
+		// sets it.
+		expected := min(idle*expertOffloadShare, ceiling)
+		maxHost += min(expected*(1+expertBandWidth), ceiling)
+		minHost += expected * (1 - expertBandWidth)
 	}
 
 	if maxHost > est.CheckpointGB {
@@ -294,13 +295,41 @@ func idleExpertGB(est VRAMEstimate, cfg HFConfig) float64 {
 	return est.StructuralGB * idle
 }
 
-// The PLE residual is banded rather than trusted flat. Widths chosen against
-// the two checkpoints it was calibrated on, where it lands within 10% in both
-// directions; they are a prior, not a measurement, and should tighten once
-// more checkpoints carrying such a table have been measured.
+// pleShareOfResidual is how much of the unaccounted-tensor residual is
+// actually the offloadable embedding table.
+//
+// It is not all of it. The residual is every tensor the structural formula
+// does not model, which also includes the MTP draft weights and the vision
+// tower -- both of which stay on the GPU. Taking the whole residual as
+// host-resident therefore understates what the cards hold, and the two
+// checkpoints measured on compute say by how much, consistently:
+//
+//	checkpoint   residual   table measured   ratio
+//	GPTQ         43.6       38.8             0.890
+//	MXFP4        52.2       47.7             0.913
+//
+// The band is narrow because those two agree to about a point. It widens the
+// moment a third checkpoint disagrees, and should.
 const (
-	pleResidualLow  = 0.80
-	pleResidualHigh = 1.20
+	pleShareOfResidual = 0.90
+	pleBandWidth       = 0.05
+)
+
+// expertOffloadShare is how much of the idle expert weight actually leaves the
+// card when expert offload is on.
+//
+// The configured ceiling is not the answer: a run with --expert-offload-mem 46
+// was measured moving 18.72 GiB, which is 30% of that checkpoint's idle expert
+// weight. Using the ceiling as the optimistic bound is what put a 124B model at
+// 2.3 GiB per card -- it assumed the maximum permitted offload and the maximum
+// plausible table at the same time, which nothing observed does.
+//
+// One measurement, hence the wide band. Unlike the PLE share this is fitted
+// rather than corroborated, and it stays wide until a second offload
+// configuration has been measured.
+const (
+	expertOffloadShare = 0.30
+	expertBandWidth    = 0.50
 )
 
 func isMoE(cfg HFConfig) bool {
