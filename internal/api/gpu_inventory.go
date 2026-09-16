@@ -40,6 +40,24 @@ func gpuInventoryFrom(gpus []monitor.GPUInfo) models.GPUInventory {
 		if !inv.Known || gb < inv.PerCardGB {
 			inv.PerCardGB = gb
 		}
+		// vLLM checks the fraction it was asked for against memory that is
+		// actually free, not against the card's size, and refuses to start
+		// when they disagree:
+		//
+		//   Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less
+		//   than desired GPU memory utilization (0.97, 30.9 GiB)
+		//
+		// So an estimate drawn from the card's size alone can report a
+		// comfortable fit for a configuration that cannot start. Anything
+		// already resident -- a leaked worker from a cancelled job, another
+		// user's process -- counts against the budget.
+		free := float64(g.VRAMTotalMB-g.VRAMUsedMB) / 1024
+		if free < 0 {
+			free = 0
+		}
+		if !inv.Known || free < inv.FreePerCardGB {
+			inv.FreePerCardGB = free
+		}
 		inv.Count++
 		inv.Known = true
 	}

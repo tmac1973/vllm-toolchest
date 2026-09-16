@@ -12,7 +12,23 @@ package models
 type GPUInventory struct {
 	Count     int     `json:"count"`
 	PerCardGB float64 `json:"per_card_gb"`
-	Known     bool    `json:"known"`
+	// FreePerCardGB is what the emptiest card has left right now. vLLM checks
+	// the fraction it was asked for against free memory rather than card size
+	// and refuses to start when they disagree, so a fit computed from the card
+	// size alone can promise a start that will not happen.
+	//
+	// Zero means "not reported", in which case PerCardGB stands in.
+	FreePerCardGB float64 `json:"free_per_card_gb,omitempty"`
+	Known         bool    `json:"known"`
+}
+
+// usableGB is what one card can actually offer: what is free, when that is
+// known and smaller than the card.
+func (inv GPUInventory) usableGB() float64 {
+	if inv.FreePerCardGB > 0 && inv.FreePerCardGB < inv.PerCardGB {
+		return inv.FreePerCardGB
+	}
+	return inv.PerCardGB
 }
 
 // replicationOverhead is what a rank holds beyond its arithmetic share of the
@@ -154,7 +170,7 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		OverheadGB:   r.GraphsGB + r.CacheGB + r.ActivationGB,
 		RequiredGB:   (r.TotalGB + r.TotalHighGB) / 2,
 		RequiredHigh: r.TotalHighGB,
-		AvailableGB:  float64(tp) * inv.PerCardGB * util,
+		AvailableGB:  float64(tp) * inv.usableGB() * util,
 	}
 
 	o.Fits = r.TotalHighGB <= o.AvailableGB
