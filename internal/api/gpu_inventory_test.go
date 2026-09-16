@@ -8,11 +8,12 @@ import (
 
 func TestGPUInventoryFrom(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		gpus      []monitor.GPUInfo
-		wantCount int
-		wantPerGB float64
-		wantKnown bool
+		name       string
+		gpus       []monitor.GPUInfo
+		wantCount  int
+		wantPerGB  float64
+		wantFreeGB float64
+		wantKnown  bool
 	}{
 		{
 			name:      "no reading yet",
@@ -46,9 +47,28 @@ func TestGPUInventoryFrom(t *testing.T) {
 			},
 			wantCount: 1, wantPerGB: 32, wantKnown: true,
 		},
+		{
+			// The case that let the estimator promise a fit vLLM refuses:
+			// a leaked worker from a cancelled tuning job was holding 1.2 GiB,
+			// and an estimate drawn from card size alone could not see it.
+			name: "memory already in use counts against the budget",
+			gpus: []monitor.GPUInfo{
+				{VRAMTotalMB: 32620, VRAMUsedMB: 1270},
+				{VRAMTotalMB: 32620, VRAMUsedMB: 993},
+				{VRAMTotalMB: 32620, VRAMUsedMB: 61},
+				{VRAMTotalMB: 32620, VRAMUsedMB: 61},
+			},
+			wantCount: 4, wantPerGB: 31.855, wantKnown: true,
+			wantFreeGB: 30.615,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := gpuInventoryFrom(tc.gpus)
+			if tc.wantFreeGB > 0 {
+				if diff := got.FreePerCardGB - tc.wantFreeGB; diff > 0.01 || diff < -0.01 {
+					t.Errorf("FreePerCardGB = %.3f, want %.3f", got.FreePerCardGB, tc.wantFreeGB)
+				}
+			}
 			if got.Known != tc.wantKnown {
 				t.Errorf("Known = %v, want %v", got.Known, tc.wantKnown)
 			}

@@ -55,6 +55,13 @@ comparing models" was the wrong axis to optimise. Nobody was comparing models.
 
 What is still owed:
 
+- **The estimate is compared against free memory, not card size, but only at
+  render time.** Anything already resident counts against the budget, which is
+  right — but it means the figure moves as other processes come and go, and a
+  model that "fits" while the box is idle may not while something else is
+  loaded. The panel does not currently say which it is showing. Worth a line of
+  text before it confuses someone.
+
 - **Watch a real startup.** Compare the panel against the engine's own
   `Available KV cache memory` and `model loading took` lines. The weights
   figure has been checked against 19.07 GiB per rank; the KV figure and the

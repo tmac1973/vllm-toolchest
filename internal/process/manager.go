@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tmac1973/vllm-toolchest/internal/advice"
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 )
 
@@ -87,7 +88,18 @@ type Manager struct {
 	// Log subscribers
 	subMu sync.Mutex
 	subs  map[chan string]struct{}
+
+	// What the engine said about this run, read off the log stream as it
+	// arrives. Cleared on start: advice from the previous run describes a
+	// configuration that may no longer be the one loaded.
+	adviceMu sync.Mutex
+	advice   []advice.Item
+	measured advice.Measurements
 }
+
+// adviceMax caps the list. A pathological start can repeat a warning per layer,
+// and the panel is not improved by the four hundredth copy.
+const adviceMax = 64
 
 // DefaultStartupTimeout is used when a caller passes nothing sensible. It is
 // generous on purpose: the cost of waiting too long is a stale label, and the
@@ -156,10 +168,12 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.startedAt = time.Now()
 	m.mu.Unlock()
 
-	// Clear log buffer
+	// Clear log buffer, and with it what the last run's output said. Advice
+	// describing a configuration that is no longer loaded is worse than none.
 	m.logMu.Lock()
 	m.logBuf = m.logBuf[:0]
 	m.logMu.Unlock()
+	m.resetAdvice()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
@@ -368,9 +382,9 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 		// corrupt the display and break the readiness match below.
 		line := ansi.Strip(scanner.Text())
 		m.appendLog(line)
+		m.observe(line)
 
-		// Detect ready signal
-		if strings.Contains(line, "Uvicorn running on") || strings.Contains(line, "Application startup complete") {
+		if advice.Ready(line) {
 			m.mu.Lock()
 			if m.state == StateStarting {
 				m.state = StateRunning
@@ -378,6 +392,63 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 			m.mu.Unlock()
 		}
 	}
+}
+
+// observe reads what the engine is telling us as it streams, rather than
+// leaving it to be dredged out of the ring buffer afterwards.
+//
+// Live matters: on a start that fails, the advice is wanted at the moment the
+// log panel becomes least readable, and on a start that succeeds the
+// measurements are gone as soon as the buffer rolls over.
+func (m *Manager) observe(line string) {
+	item := advice.Scan(line)
+
+	m.adviceMu.Lock()
+	defer m.adviceMu.Unlock()
+
+	advice.Observe(&m.measured, line)
+	if item == nil {
+		return
+	}
+	// A failing start prints the same complaint from every rank.
+	for _, existing := range m.advice {
+		if existing.Message == item.Message && existing.Suggested == item.Suggested {
+			return
+		}
+	}
+	if len(m.advice) < adviceMax {
+		m.advice = append(m.advice, *item)
+	}
+}
+
+// Advice returns what the engine has said worth acting on during this run.
+func (m *Manager) Advice() []advice.Item {
+	m.adviceMu.Lock()
+	defer m.adviceMu.Unlock()
+	out := make([]advice.Item, len(m.advice))
+	copy(out, m.advice)
+	return out
+}
+
+// Measured returns what the engine reported about this run: the KV pool it
+// claimed, what the weights actually took, whether offload worked.
+//
+// These are the figures the VRAM estimator infers. Reported here so the panel
+// can put the estimate beside the measurement rather than asking anyone to
+// read a terminal.
+func (m *Manager) Measured() advice.Measurements {
+	m.adviceMu.Lock()
+	defer m.adviceMu.Unlock()
+	return m.measured
+}
+
+// resetAdvice clears both, so a new run is never described by the last one's
+// output.
+func (m *Manager) resetAdvice() {
+	m.adviceMu.Lock()
+	m.advice = nil
+	m.measured = advice.Measurements{}
+	m.adviceMu.Unlock()
 }
 
 func (m *Manager) appendLog(line string) {
