@@ -116,8 +116,26 @@ measured; no schema bump, since an old record simply has none.
 **Capture.** `process.Manager` already accumulates these as the log streams.
 The fiddly part is persistence: the manager owns the measurements, the API
 layer owns the registry, and the write wants to happen once on the transition
-to running. This is the part of the plan most likely to be got wrong first
-time, so it gets its own commit and its own test.
+to running.
+
+*Built 2026-09-17.* Two things it turned out to hinge on, neither obvious from
+here:
+
+- **There are three launch paths, not one.** `startModel` covers the Start
+  button and auto-start; `handleServiceRestart` calls `process.Restart`
+  directly and bypasses it; `jobs_env.go` is the benchmark sweep. A watch hung
+  on `startModel` alone would have missed every restart -- which is the more
+  interesting case to capture, being what follows a config change.
+- **The sweep is excluded deliberately.** It serves one model at several
+  context lengths and batch sizes in succession, so recording from there would
+  attribute figures to a configuration nobody chose and let the last step win.
+  That is why the watch is an explicit call at two sites rather than something
+  buried in the process manager where it would catch all three.
+
+The write is narrow (`Registry.SetMeasurement`, in the idiom of `UpdateConfig`)
+because it happens from a background goroutine: a whole-record upsert would
+race the config panel's autosave and quietly undo an edit made while the engine
+was still coming up. Incomplete runs are refused rather than stored half-filled.
 
 ## 5. Parser corrections, first
 

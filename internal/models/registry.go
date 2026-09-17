@@ -30,6 +30,15 @@ type Model struct {
 	VRAMEstimate VRAMEstimate `json:"vram_estimate"`
 	VLLMConfig   VLLMConfig   `json:"vllm_config"`
 
+	// Measured is what the engine reported the last time this model started
+	// successfully, and nil when it never has.
+	//
+	// It outranks VRAMEstimate wherever it applies. Every figure this project
+	// derived turned out wrong and every figure the engine reported turned out
+	// right, so a measurement is not a check on the estimate -- it replaces it.
+	// See plan/phase-14-measured-vram.md.
+	Measured *RunMeasurement `json:"measured,omitempty"`
+
 	// ActiveProfile is the profile the live VLLMConfig was last restored from
 	// or saved as. It is a label, not a link: the live config keeps
 	// autosaving, so it can drift away from the profile at any time, and
@@ -430,6 +439,33 @@ func (r *Registry) UpdateConfig(id string, cfg VLLMConfig) error {
 		return fmt.Errorf("model not found: %s", id)
 	}
 	m.VLLMConfig = cfg
+	return r.save()
+}
+
+// SetMeasurement records what a successful start reported.
+//
+// Narrow on purpose: it is written from a background watcher, and a whole-record
+// upsert from there would race the config panel's autosave and quietly undo an
+// edit made while the engine was coming up.
+//
+// An incomplete run is refused rather than stored. A start that died during
+// weight loading has a weights figure and nothing else, and an estimate built
+// on that would be worse than having none.
+func (r *Registry) SetMeasurement(id string, run RunMeasurement) error {
+	if !run.Complete() {
+		return fmt.Errorf("measurement for %s is incomplete", id)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
+
+	m, ok := r.models[id]
+	if !ok {
+		return fmt.Errorf("model not found: %s", id)
+	}
+	m.Measured = &run
 	return r.save()
 }
 

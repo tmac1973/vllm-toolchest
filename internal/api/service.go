@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
@@ -124,6 +125,10 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	// Restart does not go through startModel, so it needs the watch of its
+	// own. A restart is in fact the more interesting one to capture: it is
+	// what follows a config change.
+	s.watchForMeasurement(m.ID)
 
 	if isHTMX(r) {
 		respondHTML(w)
@@ -192,12 +197,98 @@ func (s *Server) handleServiceHealth(w http.ResponseWriter, r *http.Request) {
 // button and the auto-start path so the two cannot drift into launching the
 // same model two different ways.
 func (s *Server) startModel(m *models.Model) error {
-	return s.process.Start(
+	err := s.process.Start(
 		m.ID,
 		process.ResolveModelPath(m.LocalPath),
 		process.BuildArgs(m.StartConfig()),
 		s.launchEnv(m),
 	)
+	if err == nil {
+		s.watchForMeasurement(m.ID)
+	}
+	return err
+}
+
+// measurementWatchLimit bounds the watch. The startup timeout is generous by
+// design -- a 125B MoE cold start has measured over nine minutes -- and this
+// only has to outlast it, not police it.
+const measurementWatchLimit = 45 * time.Minute
+
+// watchForMeasurement records what the engine reports, once this start
+// succeeds.
+//
+// It polls rather than subscribing because the manager offers no transition
+// signal, and it copies EnsureModelLoaded's shape deliberately: two ways of
+// deciding a start has succeeded would eventually disagree about one.
+//
+// Not called from the benchmark path, and that is the point of it being a
+// separate call rather than something buried in the process manager. A sweep
+// serves one model at several context lengths and batch sizes in succession,
+// so persisting from there would record figures under a configuration nobody
+// chose and let the last step of the sweep win.
+func (s *Server) watchForMeasurement(modelID string) {
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		deadline := time.After(measurementWatchLimit)
+
+		for {
+			st := s.process.GetStatus()
+			switch {
+			case st.ModelID != modelID:
+				// Something else was started underneath us; that start has a
+				// watcher of its own.
+				return
+			case st.State == process.StateRunning:
+				s.recordMeasurement(modelID)
+				return
+			case st.State == process.StateError, st.State == process.StateStopped:
+				return
+			}
+
+			select {
+			case <-deadline:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+// recordMeasurement copies what the engine said into the registry, against the
+// configuration it was said about.
+func (s *Server) recordMeasurement(modelID string) {
+	m, ok := s.registry.Get(modelID)
+	if !ok {
+		return
+	}
+
+	run := models.RunMeasurement{
+		At:            time.Now().UTC(),
+		TP:            m.VLLMConfig.TensorParallelSize,
+		ContextTokens: m.VLLMConfig.MaxModelLen,
+		Fingerprint:   models.MeasurementFingerprint(m),
+		Engine:        s.process.Measured(),
+	}
+	if run.TP < 1 {
+		run.TP = 1
+	}
+	if run.ContextTokens <= 0 {
+		run.ContextTokens = m.HFConfig.MaxPositionEmbeddings
+	}
+
+	// A start can reach running without having printed everything -- the
+	// figures arrive across the load, and a resumed watch can miss the early
+	// ones. Storing a partial set would put a confident number on screen that
+	// no single run produced, which is the habit this replaced.
+	if err := s.registry.SetMeasurement(modelID, run); err != nil {
+		slog.Debug("no usable measurement from this start", "model", modelID, "error", err)
+		return
+	}
+	slog.Info("recorded engine measurements",
+		"model", modelID,
+		"weights_per_rank_gb", run.Engine.WeightsPerRankGB,
+		"kv_bytes_per_token", run.KVBytesPerToken())
 }
 
 // AutoStart launches the active model if the setting is on, for the container
