@@ -2,8 +2,22 @@ package models
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+)
+
+// EstimateSource distinguishes a figure the engine reported from one this
+// package worked out.
+type EstimateSource string
+
+const (
+	// SourceProjected is arithmetic over the checkpoint's shape, for a model
+	// that has never been started. Known to be weak: see
+	// plan/phase-14-measured-vram.md for how weak, and in which direction.
+	SourceProjected EstimateSource = "projected"
+	// SourceMeasured is what a successful start reported.
+	SourceMeasured EstimateSource = "measured"
 )
 
 // VRAMEstimate is what a model needs, independent of the hardware it might run
@@ -54,6 +68,17 @@ type VRAMEstimate struct {
 
 	// KVCachePerTokenB is for the whole model, across every attention layer.
 	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
+
+	// Source says where these figures came from, and it is the most important
+	// field here. "measured" is what a real start reported; "projected" is
+	// arithmetic over the checkpoint's shape, which this project has now been
+	// shown to get wrong by factors of two and twenty-three.
+	//
+	// MeasuredAt and MeasuredTP describe the run, so the panel can say how old
+	// it is and at what width it holds.
+	Source     EstimateSource `json:"source,omitempty"`
+	MeasuredAt time.Time      `json:"measured_at,omitempty"`
+	MeasuredTP int            `json:"measured_tp,omitempty"`
 
 	// TotalRequiredGB is the headline: how much GPU memory it takes to load
 	// this model and serve the context it is configured for, summed across
