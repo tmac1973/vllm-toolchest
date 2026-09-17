@@ -405,6 +405,36 @@ func TestSuggestedValuesAreNotPunctuated(t *testing.T) {
 	}
 }
 
+// The PLE offload helper runs a small engine of its own. A live start reported
+// its scheduler's 2048 tokens alongside the real engine's 8192, pointing at a
+// config field nobody had set to that value.
+func TestTheOffloadHelpersHousekeepingIsNotAdvice(t *testing.T) {
+	const engine = `(APIServer pid=109) INFO [scheduler.py:270] Chunked prefill is enabled with max_num_batched_tokens=8192.`
+	const helper = `(PleOffloadWorker pid=996) INFO [scheduler.py:270] Chunked prefill is enabled with max_num_batched_tokens=2048.`
+
+	it := Scan(engine)
+	if it == nil || it.Suggested != "8192" {
+		t.Fatalf("the engine's own setting was not reported: %+v", it)
+	}
+	if got := Scan(helper); got != nil {
+		t.Errorf("the helper's scheduler was reported as advice about the model's config: %+v", got)
+	}
+
+	// Its failures are still its own, and still matter.
+	const failure = `(PleOffloadWorker pid=996) ERROR torch.cuda.OutOfMemoryError: CUDA out of memory`
+	if got := Scan(failure); got == nil || got.Severity != Error {
+		t.Errorf("a real failure in the helper was suppressed: %+v", got)
+	}
+
+	// Measurements from the helper are still wanted -- the offload figure only
+	// ever comes from it.
+	var m Measurements
+	Observe(&m, `(PleOffloadWorker pid=996) INFO [worker.py:222] PLE offload: locked 38.8 GiB of PLE weights in RAM`)
+	if m.PLEOffloadGB != 38.8 {
+		t.Errorf("PLE offload = %v, want 38.8 -- suppressing advice must not suppress measurement", m.PLEOffloadGB)
+	}
+}
+
 func TestReady(t *testing.T) {
 	for _, line := range []string{
 		"INFO:     Uvicorn running on http://0.0.0.0:8000",
