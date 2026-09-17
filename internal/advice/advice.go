@@ -145,9 +145,20 @@ func Scan(line string) *Item {
 		if !strings.Contains(lower, r.hint) {
 			continue
 		}
-		if item := r.match(line); item != nil {
-			return item
+		item := r.match(line)
+		if item == nil {
+			continue
 		}
+		// The PLE offload helper runs a small engine of its own, with its own
+		// scheduler settings, and those are not the operator's configuration.
+		// A live start reported "batching 2048 tokens per step" from the
+		// helper beside the engine's real 8192, pointing at a config field
+		// nobody had set to that. Its failures still matter; its housekeeping
+		// does not.
+		if item.Severity != Error && strings.Contains(line, "(PleOffloadWorker") {
+			return nil
+		}
+		return item
 	}
 	return nil
 }
