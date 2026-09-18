@@ -55,12 +55,17 @@ comparing models" was the wrong axis to optimise. Nobody was comparing models.
 
 What is still owed:
 
-- **The estimate is compared against free memory, not card size, but only at
-  render time.** Anything already resident counts against the budget, which is
-  right — but it means the figure moves as other processes come and go, and a
-  model that "fits" while the box is idle may not while something else is
-  loaded. The panel does not currently say which it is showing. Worth a line of
-  text before it confuses someone.
+- ~~**The estimate is compared against free memory, not card size.**~~ It
+  confused someone, and the someone was foreseeable. Written as a warning here
+  before the change shipped, then shipped unheeded: with the engine loaded, the
+  panel subtracted vLLM's own 28.68 GiB per card and reported "of 12.3 GB
+  available" beside a model that had been serving for twenty-four minutes.
+  Fixed 2026-09-18 — while the engine is up the cards count as empty, because
+  the question the panel asks is whether the model *could* be started and the
+  engine is not its own competition. With the engine down, resident memory
+  still counts, which is the leaked-worker case that motivated the change.
+  The lesson worth keeping is about the note, not the code: a risk recorded in
+  todo.md and not acted on is indistinguishable from one nobody noticed.
 
 - **Watch a real startup.** Compare the panel against the engine's own
   `Available KV cache memory` and `model loading took` lines. The weights

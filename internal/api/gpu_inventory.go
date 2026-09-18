@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // gpuInventory is the hardware the fit calculation is judged against.
@@ -15,7 +16,21 @@ func (s *Server) gpuInventory() models.GPUInventory {
 		// it: figures without a verdict.
 		return models.GPUInventory{}
 	}
-	return gpuInventoryFrom(s.monitor.Current().GPU)
+
+	// The panel asks "could this be started", so memory the engine under
+	// discussion is already holding must not count against it. While a model
+	// is loaded it occupies most of every card, and subtracting that reported
+	// "of 12.3 GB available" beside a model that had been serving for
+	// twenty-four minutes -- a risk written into todo.md before the change
+	// shipped, and shipped anyway.
+	//
+	// Giving the whole of the used figure back over-credits when something
+	// else is also resident, and that is the direction to err: it restores
+	// exactly the behaviour that held before free memory was consulted at all,
+	// and the pre-flight refusal this was meant to catch is reported by the
+	// engine itself as advice rather than guessed at here.
+	engineUp := s.process != nil && s.process.GetStatus().State == process.StateRunning
+	return gpuInventoryFrom(s.monitor.Current().GPU, engineUp)
 }
 
 // gpuInventoryFrom reduces a monitor reading to how many cards this host has
@@ -30,7 +45,11 @@ func (s *Server) gpuInventory() models.GPUInventory {
 // process, or a host with no GPU. Callers must then show the figures without a
 // verdict, rather than falling back to an invented card size: inventing one is
 // what had a four-card host judged against a single 32 GiB card.
-func gpuInventoryFrom(gpus []monitor.GPUInfo) models.GPUInventory {
+// engineUp says the model under discussion is the thing occupying the cards,
+// in which case what is resident is not competition for the budget and the
+// card counts as empty. With the engine down, anything resident is somebody
+// else's -- a leaked worker from a cancelled job, most often -- and does count.
+func gpuInventoryFrom(gpus []monitor.GPUInfo, engineUp bool) models.GPUInventory {
 	var inv models.GPUInventory
 	for _, g := range gpus {
 		if g.VRAMTotalMB <= 0 {
@@ -54,6 +73,11 @@ func gpuInventoryFrom(gpus []monitor.GPUInfo) models.GPUInventory {
 		free := float64(g.VRAMTotalMB-g.VRAMUsedMB) / 1024
 		if free < 0 {
 			free = 0
+		}
+		// engineUp means what is resident is mostly the engine we are being
+		// asked about, so the card counts as empty. See gpuInventory.
+		if engineUp {
+			free = gb
 		}
 		if !inv.Known || free < inv.FreePerCardGB {
 			inv.FreePerCardGB = free
