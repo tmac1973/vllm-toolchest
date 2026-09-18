@@ -65,6 +65,80 @@ func (r RunMeasurement) TotalRequiredGB(contextTokens int) float64 {
 	return total
 }
 
+// MeasuredEstimate builds an estimate from what a start actually reported,
+// re-scaled to whatever context length is configured now.
+//
+// Reports false when the model has never run, when the run did not get far
+// enough, or when the configuration has moved in a way that retires it -- in
+// which case the caller falls back to the projected arithmetic and says so.
+//
+// Only the KV term is re-scaled. The weights, the allocator's overhead, the
+// working set and the graph pool were all measured per rank and are carried
+// across unchanged, because nothing in the configuration that would move them
+// can change without retiring the measurement outright.
+func MeasuredEstimate(m *Model) (VRAMEstimate, bool) {
+	if m == nil || m.Measured == nil || !m.Measured.Applies(m) {
+		return VRAMEstimate{}, false
+	}
+	run := *m.Measured
+	e := run.Engine
+
+	ctx := m.VLLMConfig.MaxModelLen
+	if ctx <= 0 {
+		ctx = m.HFConfig.MaxPositionEmbeddings
+	}
+
+	est := VRAMEstimate{
+		Source:     SourceMeasured,
+		MeasuredAt: run.At,
+		MeasuredTP: run.TP,
+
+		ContextTokens: ctx,
+		CheckpointGB:  float64(m.TotalSizeBytes) / (1024 * 1024 * 1024),
+
+		// Per-rank figures multiplied back out. ConsumedGB is weights plus the
+		// allocator's overhead, which the projected path never modelled at all.
+		WeightsTotalGB: e.ConsumedGB * float64(run.TP),
+		GraphPoolGB:    e.GraphPoolGB * float64(run.TP),
+
+		// The offload figure is measured too, rather than inferred from a
+		// residual as the projected path has to.
+		HostResidentGB:    e.PLEOffloadGB,
+		HostResidentMinGB: e.PLEOffloadGB,
+
+		Offload: DetectOffload(m.OwnEnvPairs(), m.VLLMConfig.ExtraFlags),
+	}
+
+	// Params are a property of the checkpoint, not of a run, so they come from
+	// the structural count either way.
+	if params := estimateParamCount(m.HFConfig); params > 0 {
+		est.ParamCountBillion = float64(params) / 1e9
+		est.ActiveParamBillion = float64(ActiveParamCount(m.HFConfig)) / 1e9
+	}
+
+	if b := run.KVBytesPerToken(); b > 0 {
+		est.KVCachePerTokenB = int64(b)
+		est.KVAtContextGB = b * float64(ctx) / (1024 * 1024 * 1024)
+	}
+	est.ActivationBaseGB = e.PeakActivationGB * float64(run.TP)
+	// DeviceCacheGB is left at zero deliberately: an on-card expert cache is
+	// already inside the measured ConsumedGB, and adding the configured figure
+	// on top would count it twice.
+
+	total := run.TotalRequiredGB(ctx)
+	est.TotalRequiredGB = total
+	est.TotalRequiredLowGB = total
+	est.TotalRequiredHighGB = total
+
+	// Kept so the panel can show the split, though the measured total does not
+	// depend on them.
+	est.DeviceWeightsGB = est.WeightsTotalGB
+	est.DeviceWeightsHighGB = est.WeightsTotalGB
+	est.StructuralGB = est.WeightsTotalGB
+
+	return est, true
+}
+
 // MeasurementFingerprint identifies the configuration a measurement belongs to.
 //
 // What is in it is a deliberately conservative choice. A fingerprint that is

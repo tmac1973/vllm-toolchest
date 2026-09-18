@@ -25,6 +25,17 @@ type vramBanner struct {
 	// figures beside it still stand: those are measured from the files.
 	Caveat string
 
+	// Measured says the figures came from a real start rather than from
+	// arithmetic over the checkpoint's shape. It is the most important thing
+	// on the panel: the projected path is the same arithmetic that was wrong
+	// about a real model by a third, and the two must not look alike.
+	//
+	// MeasuredWhen and MeasuredTP describe that run, so the reader can judge
+	// how old it is and at what width it holds.
+	Measured     bool
+	MeasuredWhen string
+	MeasuredTP   int
+
 	// RequiredGB is the headline. Ranged marks it widened by an offload whose
 	// size the configuration does not state.
 	RequiredGB     float64
@@ -70,6 +81,9 @@ type vramTPRow struct {
 	Fits           bool
 	Uncertain      bool
 	ConcurrentSeqs int
+	// Measured marks the one row a real start produced. The others project it
+	// onto a width nothing has run at.
+	Measured bool
 }
 
 func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
@@ -78,6 +92,8 @@ func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
 	}
 
 	b := vramBanner{
+		Measured:       est.Source == models.SourceMeasured,
+		MeasuredTP:     est.MeasuredTP,
 		ParamLabel:     models.FormatParamCount(est.ParamCountBillion),
 		RequiredGB:     est.TotalRequiredGB,
 		RequiredLowGB:  est.TotalRequiredLowGB,
@@ -104,6 +120,9 @@ func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
 	}
 	if est.ActiveParamBillion > 0 {
 		b.ActiveLabel = models.FormatParamCount(est.ActiveParamBillion)
+	}
+	if !est.MeasuredAt.IsZero() {
+		b.MeasuredWhen = est.MeasuredAt.Format("2 Jan 15:04")
 	}
 
 	if fit.Known {
@@ -135,6 +154,7 @@ func newVRAMTPRows(est models.VRAMEstimate, fit models.VRAMFit) []vramTPRow {
 			Fits:           o.Fits,
 			Uncertain:      o.Uncertain,
 			ConcurrentSeqs: o.ConcurrentSeqs,
+			Measured:       o.Measured,
 		})
 	}
 	return rows

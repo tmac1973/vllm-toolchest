@@ -82,6 +82,12 @@ type TPOption struct {
 	// buys -- the number to tune max_num_seqs against.
 	SpareGB        float64 `json:"spare_gb,omitempty"`
 	ConcurrentSeqs int     `json:"concurrent_seqs,omitempty"`
+
+	// Measured marks the one row an actual start produced. The others are
+	// projections of it onto a width nothing has run at, and the difference
+	// matters: the projected arithmetic is the same arithmetic that was wrong
+	// about this model by a third.
+	Measured bool `json:"measured,omitempty"`
 }
 
 // VRAMFit compares a requirement against real hardware. It is computed at
@@ -161,17 +167,44 @@ func Fit(est VRAMEstimate, c VLLMConfig, inv GPUInventory) VRAMFit {
 }
 
 func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util float64) TPOption {
-	r := RequiredAt(est, c, tp)
-
 	o := TPOption{
-		TP:           tp,
-		WeightsGB:    (r.WeightsGB + r.WeightsHighGB) / 2,
-		KVGB:         r.KVGB,
-		OverheadGB:   r.GraphsGB + r.CacheGB + r.ActivationGB,
-		RequiredGB:   (r.TotalGB + r.TotalHighGB) / 2,
-		RequiredHigh: r.TotalHighGB,
-		AvailableGB:  float64(tp) * inv.usableGB() * util,
+		TP:          tp,
+		AvailableGB: float64(tp) * inv.usableGB() * util,
 	}
+
+	// At the width a real start ran at, the stored totals are the answer and
+	// re-deriving them would corrupt them: RequiredAt would replace the
+	// measured graph pool with its own constant, and re-apply the replication
+	// surcharge to a consumed figure that already carries the allocator's
+	// overhead. Both are corrections to a projection, and there is nothing
+	// here left to correct.
+	if est.Source == SourceMeasured && tp == est.MeasuredTP && est.TotalRequiredGB > 0 {
+		o.Measured = true
+		o.WeightsGB = est.WeightsTotalGB
+		o.KVGB = est.KVAtContextGB
+		o.OverheadGB = est.TotalRequiredGB - est.WeightsTotalGB - est.KVAtContextGB
+		if o.OverheadGB < 0 {
+			o.OverheadGB = 0
+		}
+		o.RequiredGB = est.TotalRequiredGB
+		o.RequiredHigh = est.TotalRequiredGB
+
+		o.Fits = o.RequiredGB <= o.AvailableGB
+		if spare := o.AvailableGB - o.RequiredGB; spare > 0 {
+			o.SpareGB = spare
+			if est.KVAtContextGB > 0 {
+				o.ConcurrentSeqs = 1 + int(spare/est.KVAtContextGB)
+			}
+		}
+		return o
+	}
+
+	r := RequiredAt(est, c, tp)
+	o.WeightsGB = (r.WeightsGB + r.WeightsHighGB) / 2
+	o.KVGB = r.KVGB
+	o.OverheadGB = r.GraphsGB + r.CacheGB + r.ActivationGB
+	o.RequiredGB = (r.TotalGB + r.TotalHighGB) / 2
+	o.RequiredHigh = r.TotalHighGB
 
 	o.Fits = r.TotalHighGB <= o.AvailableGB
 	o.Uncertain = !o.Fits && r.TotalGB <= o.AvailableGB

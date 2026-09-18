@@ -9,10 +9,12 @@
     {{- if .Unknown}}
     <strong>VRAM Estimate:</strong> not available &mdash; {{.Why}}
     {{- else}}
-    <strong>VRAM Estimate:</strong>
+    <strong>VRAM {{if .Measured}}Measured{{else}}Estimate{{end}}:</strong>
     <strong>{{printf "%.1f" .RequiredGB}} GB</strong>{{if .Ranged}} <small>({{printf "%.1f" .RequiredLowGB}}&ndash;{{printf "%.1f" .RequiredHighGB}})</small>{{end}}
     total to load as configured{{if gt .ConfiguredTP 1}} across {{.ConfiguredTP}} GPUs{{end}}
     {{- if .HasInventory}}, of {{printf "%.1f" .AvailableGB}} GB available{{end}}
+    {{- if .Measured}} <small style="color:#2d8a4e;" title="Reported by the engine on a real start, not derived from the model's shape">&#x2713; from a real start{{if .MeasuredWhen}}, {{.MeasuredWhen}}{{end}}</small>
+    {{- else}} <small style="opacity:0.7;" title="Derived from the checkpoint's shape. Start the model once and these figures are replaced by what the engine reports.">projected &mdash; run it once to measure</small>{{end}}
     <br>
     <small>
       {{printf "%.1f" .WeightsTotalGB}} GB weights
@@ -32,7 +34,7 @@
       <tbody>
       {{- range .}}
         <tr{{if .Configured}} style="font-weight:600;"{{end}}>
-          <td>TP={{.TP}}{{if .Recommended}} &starf;{{end}}</td>
+          <td>TP={{.TP}}{{if .Recommended}} &starf;{{end}}{{if .Measured}} <span style="color:#2d8a4e;" title="Measured on a real start at this width">&#x2713;</span>{{end}}</td>
           <td>{{printf "%.1f" .WeightsGB}} GB</td>
           <td>{{printf "%.1f" .KVGB}} GB</td>
           <td>{{printf "%.1f" .OverheadGB}} GB</td>

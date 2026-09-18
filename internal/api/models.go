@@ -392,17 +392,26 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int, hasBNB bo
 
 // effectiveVRAM is the estimate to display for a model.
 //
-// It recomputes rather than reading the stored value, because the stored one
-// was written with the model's own environment alone: the registry has no way
-// to resolve the machine-wide and variant-knob layers that sit under it. A
-// variable like VLLM_PLE_CPU_OFFLOAD set machine-wide changes what the engine
-// keeps in host RAM, and an estimate blind to it is wrong by tens of gigabytes.
+// A measurement wins wherever one applies. It is not a check on the projected
+// arithmetic — it replaces it. Every figure this project derived from the
+// checkpoint's shape turned out wrong, two of them by more than a factor of
+// two, while every figure the engine reported turned out right.
 //
-// Passing the resolved environment is also what stops the estimate and the
-// launch command from drifting apart — they read the same layers, through the
-// same parser, in the same order.
+// Falling back, the projection is recomputed rather than read from the stored
+// value, because the stored one was written with the model's own environment
+// alone: the registry has no way to resolve the machine-wide and variant-knob
+// layers beneath it. A variable like VLLM_PLE_CPU_OFFLOAD set machine-wide
+// changes what the engine keeps in host RAM, and an estimate blind to it is
+// wrong by tens of gigabytes. Resolving it here is also what stops the
+// estimate and the launch command from drifting apart: same layers, same
+// parser, same order.
 func (s *Server) effectiveVRAM(m *models.Model) models.VRAMEstimate {
-	return models.EstimateVRAM(m, s.configuredEnvPairs(m))
+	if est, ok := models.MeasuredEstimate(m); ok {
+		return est
+	}
+	est := models.EstimateVRAM(m, s.configuredEnvPairs(m))
+	est.Source = models.SourceProjected
+	return est
 }
 
 // vramFit judges that estimate against this host's cards.
