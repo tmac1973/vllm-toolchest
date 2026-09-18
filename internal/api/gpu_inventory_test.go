@@ -63,7 +63,7 @@ func TestGPUInventoryFrom(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gpuInventoryFrom(tc.gpus)
+			got := gpuInventoryFrom(tc.gpus, false)
 			if tc.wantFreeGB > 0 {
 				if diff := got.FreePerCardGB - tc.wantFreeGB; diff > 0.01 || diff < -0.01 {
 					t.Errorf("FreePerCardGB = %.3f, want %.3f", got.FreePerCardGB, tc.wantFreeGB)
@@ -89,5 +89,34 @@ func TestGPUInventoryToleratesNoMonitor(t *testing.T) {
 	s := &Server{}
 	if inv := s.gpuInventory(); inv.Known {
 		t.Errorf("reported a known inventory with no monitor: %+v", inv)
+	}
+}
+
+// The panel asks whether a model could be started. While it is already running
+// it occupies most of every card, and counting that against the budget told the
+// operator that a model serving happily for twenty-four minutes did not fit:
+// "of 12.3 GB available", against four cards of 31.86.
+func TestARunningEngineDoesNotCompeteWithItself(t *testing.T) {
+	loaded := []monitor.GPUInfo{
+		{VRAMTotalMB: 32620, VRAMUsedMB: 29368},
+		{VRAMTotalMB: 32620, VRAMUsedMB: 29378},
+		{VRAMTotalMB: 32620, VRAMUsedMB: 29368},
+		{VRAMTotalMB: 32620, VRAMUsedMB: 29358},
+	}
+
+	up := gpuInventoryFrom(loaded, true)
+	if up.Count != 4 {
+		t.Fatalf("count = %d, want 4", up.Count)
+	}
+	if diff := up.FreePerCardGB - up.PerCardGB; diff > 0.01 || diff < -0.01 {
+		t.Errorf("with the engine up, free = %.2f of a %.2f card; the engine is not its own competition",
+			up.FreePerCardGB, up.PerCardGB)
+	}
+
+	// With the engine down the same residue is somebody else's, and does count
+	// -- that is the leaked-worker case a cancelled tuning job produced.
+	down := gpuInventoryFrom(loaded, false)
+	if down.FreePerCardGB > 4 {
+		t.Errorf("with the engine down, free = %.2f; resident memory must still count", down.FreePerCardGB)
 	}
 }
