@@ -98,8 +98,9 @@ func MeasuredEstimate(m *Model) (VRAMEstimate, bool) {
 
 		// Per-rank figures multiplied back out. ConsumedGB is weights plus the
 		// allocator's overhead, which the projected path never modelled at all.
-		WeightsTotalGB: e.ConsumedGB * float64(run.TP),
-		GraphPoolGB:    e.GraphPoolGB * float64(run.TP),
+		WeightsTotalGB:         e.ConsumedGB * float64(run.TP),
+		GraphPoolGB:            e.GraphPoolGB * float64(run.TP),
+		MeasuredGraphPerRankGB: e.GraphPoolGB,
 
 		// The offload figure is measured too, rather than inferred from a
 		// residual as the projected path has to.

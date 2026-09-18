@@ -166,28 +166,77 @@ func Fit(est VRAMEstimate, c VLLMConfig, inv GPUInventory) VRAMFit {
 	return fit
 }
 
+// projectWeights carries a measured weight total from the width it was taken
+// at onto another.
+//
+// Splitting it is the whole job. Part of the weights shard across the ranks and
+// part is replicated on every one of them, and only the second grows as the
+// width grows. One measurement cannot separate them, but the replication
+// surcharge is the ratio between them, and it is the figure the projected path
+// already rests on.
+//
+// A measurement taken at one rank has no replication in it to find, so
+// projecting from there onto a wider split understates. Said here rather than
+// hidden: it is the one direction this cannot do better than guess, and the
+// answer is to run the model at the width in question.
+func projectWeights(measuredTotal float64, measuredTP, tp int) float64 {
+	if measuredTP < 1 {
+		measuredTP = 1
+	}
+	if tp < 1 {
+		tp = 1
+	}
+	if tp == measuredTP || measuredTotal <= 0 {
+		return measuredTotal
+	}
+
+	sharded, perRank := measuredTotal, 0.0
+	if measuredTP >= 2 {
+		sharded = measuredTotal / replicationOverhead
+		perRank = (measuredTotal - sharded) / float64(measuredTP)
+	}
+	return sharded + perRank*float64(tp)
+}
+
 func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util float64) TPOption {
 	o := TPOption{
 		TP:          tp,
 		AvailableGB: float64(tp) * inv.usableGB() * util,
 	}
 
-	// At the width a real start ran at, the stored totals are the answer and
-	// re-deriving them would corrupt them: RequiredAt would replace the
-	// measured graph pool with its own constant, and re-apply the replication
-	// surcharge to a consumed figure that already carries the allocator's
-	// overhead. Both are corrections to a projection, and there is nothing
-	// here left to correct.
-	if est.Source == SourceMeasured && tp == est.MeasuredTP && est.TotalRequiredGB > 0 {
-		o.Measured = true
-		o.WeightsGB = est.WeightsTotalGB
+	// A measurement never goes through RequiredAt, at any width.
+	//
+	// At the width it was taken, re-deriving would corrupt it: RequiredAt
+	// replaces the measured graph pool with its own constant and re-applies
+	// the replication surcharge to a consumed figure that already carries the
+	// allocator's overhead.
+	//
+	// At any *other* width it is worse, because the units disagree.
+	// WeightsTotalGB is a total across ranks with replication already inside
+	// it, and RequiredAt reads that field as a pre-replication figure -- so it
+	// left TP=1 with no replication cost at all and charged TP=2 the surcharge
+	// twice. On a real model that produced a table where two cards needed more
+	// than four: 123.6 GB against 113.9.
+	if est.Source == SourceMeasured && est.MeasuredTP > 0 && est.TotalRequiredGB > 0 {
+		o.Measured = tp == est.MeasuredTP
 		o.KVGB = est.KVAtContextGB
-		o.OverheadGB = est.TotalRequiredGB - est.WeightsTotalGB - est.KVAtContextGB
+
+		if o.Measured {
+			o.WeightsGB = est.WeightsTotalGB
+			o.OverheadGB = est.TotalRequiredGB - est.WeightsTotalGB - est.KVAtContextGB
+			o.RequiredGB = est.TotalRequiredGB
+		} else {
+			o.WeightsGB = projectWeights(est.WeightsTotalGB, est.MeasuredTP, tp)
+			// Activation is a function of the batch and the model's width, not
+			// of how it is split, so the total holds. The graph ladder is
+			// captured per rank, so it grows with the width.
+			o.OverheadGB = est.ActivationBaseGB + est.MeasuredGraphPerRankGB*float64(tp)
+			o.RequiredGB = o.WeightsGB + o.KVGB + o.OverheadGB
+		}
 		if o.OverheadGB < 0 {
 			o.OverheadGB = 0
 		}
-		o.RequiredGB = est.TotalRequiredGB
-		o.RequiredHigh = est.TotalRequiredGB
+		o.RequiredHigh = o.RequiredGB
 
 		o.Fits = o.RequiredGB <= o.AvailableGB
 		if spare := o.AvailableGB - o.RequiredGB; spare > 0 {

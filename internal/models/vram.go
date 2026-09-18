@@ -97,6 +97,11 @@ type VRAMEstimate struct {
 	TotalRequiredLowGB  float64 `json:"total_required_low_gb,omitempty"`
 	TotalRequiredHighGB float64 `json:"total_required_high_gb,omitempty"`
 
+	// MeasuredGraphPerRankGB is the graph pool one rank captured, kept
+	// separately from GraphPoolGB because projecting onto another width
+	// multiplies it by that width rather than carrying the total across.
+	MeasuredGraphPerRankGB float64 `json:"measured_graph_per_rank_gb,omitempty"`
+
 	// The parts of that total, kept so the panel can show the working.
 	WeightsTotalGB float64 `json:"weights_total_gb"`
 	KVAtContextGB  float64 `json:"kv_at_context_gb"`
