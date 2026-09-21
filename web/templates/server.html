@@ -134,6 +134,16 @@
     </div>
 
     <div class="log-section">
+        <article>
+            <header>What the engine said</header>
+            <div id="service-advice"
+                 hx-get="/api/service/advice"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <p aria-busy="true">Loading...</p>
+            </div>
+        </article>
+
         <article class="log-panel" data-clear-url="/api/service/logs">
             <header>
                 <div style="display: flex; justify-content: space-between; align-items: center;">

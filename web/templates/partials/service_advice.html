@@ -1,0 +1,23 @@
+{{/* What the engine said during this run. Takes an adviceView. */}}
+{{define "service_advice"}}
+{{- if .Quiet}}
+<p style="margin:0;opacity:0.7;font-size:0.85rem;">Nothing to report from this start.</p>
+{{- else}}
+<ul style="margin:0;padding:0;list-style:none;">
+  {{- range .Rows}}
+  <li style="margin:0 0 0.6rem;padding:0 0 0 0.6rem;border-left:3px solid {{.Hue}};">
+    <div style="font-size:0.9rem;">{{.Message}}</div>
+    {{- if .Field}}
+    <div style="font-size:0.8rem;opacity:0.8;">
+      <code>{{.Field}}</code>{{if .Suggested}} &rarr; <code>{{.Suggested}}</code>{{end}}
+    </div>
+    {{- end}}
+    <details style="margin:0.2rem 0 0;">
+      <summary style="font-size:0.75rem;opacity:0.6;cursor:pointer;">what vLLM wrote</summary>
+      <pre style="margin:0.3rem 0 0;font-size:0.72rem;white-space:pre-wrap;word-break:break-all;opacity:0.85;">{{.Line}}</pre>
+    </details>
+  </li>
+  {{- end}}
+</ul>
+{{- end}}
+{{end}}

@@ -179,7 +179,20 @@ before any regexp is touched.
   ad-hoc `strings.Contains` pair sitting there now.
 - `benchmark.DetectOOM` delegates to `advice`, keeping its signature and tests.
 
-## 6. Display — NOT BUILT
+## 6. Display — half built
+
+The **measurements** half shipped in phase 14: the config panel shows measured
+figures beside the estimate and says which it is showing.
+
+The **advice** half is still not built, and the cost of that is now visible.
+The process manager's log buffer caps at 5000 lines, and on a host serving
+steadily that is a few hours -- by 2026-09-21 a start from the 18th had been
+pushed entirely out of the log, startup lines and all. The advice items
+themselves survive in `Manager.advice` the whole time, capped at 64 and
+unreachable, because nothing reads them back.
+
+So the panel must read `Advice()` rather than re-parse the log. Re-parsing
+looks equivalent and stops working within an afternoon.
 
 The service page gets an advice panel beneath the log: severity, message, and
 the field it implicates. Errors persist after a failed start — that is when

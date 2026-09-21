@@ -1,6 +1,19 @@
 # Phase 14: Measure, then stop estimating
 
-**Status:** planned 2026-09-16, not built.
+**Status:** built 2026-09-17/18 across four pull requests. The parser
+corrections (§5) in #15, capture and persistence (§4) in #16, the estimate
+preferring a measurement and the panel saying which it shows (§4, §6) in #17,
+and two defects found by running it: a running engine counted against its own
+budget (#18), and a measurement projected onto other widths in the wrong units
+(#19).
+
+Verified on compute 2026-09-18: `KV bytes/token` measured 32,126 / 32,087 /
+32,126 across three starts on two days, against 12,288 counted from the
+architecture. The panel reads "VRAM Measured: 113.9 GB — from a real start"
+where it previously projected 83.1.
+
+What §7 keeps out of scope is unchanged, and the projected path's constants are
+still deliberately untouched.
 
 ## About this document
 
