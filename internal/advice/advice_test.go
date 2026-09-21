@@ -403,8 +403,22 @@ func TestSuggestedValuesAreNotPunctuated(t *testing.T) {
 	if it.Severity != Info {
 		t.Errorf("severity = %q, want info -- this is accounting, not a failure", it.Severity)
 	}
-	if it.Suggested != "0.9826" {
-		t.Errorf("suggested = %q, want %q", it.Suggested, "0.9826")
+
+	// The figure is a ceiling, not a setting, so it is carried as prose rather
+	// than as a suggestion: a real start reported 1.0000 here, and the panel
+	// renders a suggestion as "field -> value", which reads as something to
+	// type in.
+	if it.Suggested != "" {
+		t.Errorf("suggested = %q; a ceiling must not be offered as a value", it.Suggested)
+	}
+	if it.Applicable {
+		t.Error("a ceiling was marked applicable")
+	}
+
+	// The punctuation bug moved rather than went away: [\d.]+ would now put
+	// "0.9826." mid-sentence instead of into a config field.
+	if !strings.Contains(it.Message, "0.9826,") {
+		t.Errorf("the figure is missing or punctuated in the message: %q", it.Message)
 	}
 }
 

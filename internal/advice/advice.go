@@ -408,12 +408,23 @@ var rules = []rule{
 		match: func(line string) *Item {
 			item := &Item{
 				Severity: Info,
-				Message:  "Graph-capture memory is counted inside gpu_memory_utilization, so the configured fraction buys slightly less KV cache than it did before that accounting existed.",
+				Message:  "Graph-capture memory is counted inside gpu_memory_utilization, so the configured fraction buys less KV cache than it did before that accounting existed.",
 				Field:    "gpu_memory_utilization",
 				Line:     line,
 			}
+			// The figure here is a ceiling, not a setting: it is what the
+			// fraction would have to be to preserve the old cache size, and
+			// the engine will happily name a value that cannot be used. On a
+			// real start it said 1.0000, which leaves nothing on the card for
+			// anything else.
+			//
+			// Carried as prose rather than as Suggested, because the panel
+			// renders a suggestion as "field -> value" and that reads as
+			// something to type in. Not applicable either way, but a number
+			// shown like a setting is one somebody will copy by hand.
 			if g := reProfilingEquiv.FindStringSubmatch(line); g != nil {
-				item.Suggested = g[1]
+				item.Message += " Preserving it would need " + g[1] +
+					", which is a ceiling rather than a recommendation -- at that fraction nothing else fits on the card."
 			}
 			return item
 		},

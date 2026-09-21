@@ -91,6 +91,22 @@ What is still owed:
   different ceiling, different model — would either corroborate it or show it
   for the coincidence it might be. Until then this is the weakest number in the
   estimator, and the band is wide on purpose.
+- **The projected path is not wrong in a fixable direction.** Measured on a
+  second machine 2026-09-21 -- a 4B AWQ model on one RX 7900 XTX -- against
+  what the formula projected for the same configuration:
+
+  | | projected | measured |
+  |---|---|---|
+  | total | 13.9 GB | 16.9 GB |
+  | KV per token | 73,728 | 17,301 |
+  | activation | 0.20 GB | 6.3 GB |
+  | graph pool | 0.9 GB | 3.58 GB |
+
+  On the 124B MXFP4 the KV figure was 2.6x too *low*; here it is 4.3x too
+  *high*. Activation is 31x low on this model and 23x low on the other. So the
+  errors do not share a direction and no coefficient corrects them -- which is
+  the case for measuring rather than tuning, stated in numbers rather than as
+  an opinion. Leave the projected constants alone.
 - **The PLE share is corroborated but only twice.** 0.890 and 0.913 of the
   residual across two checkpoints, hence 0.90 ±5%. The gap between residual and
   table is presumably the MTP draft weights and the vision tower; if those were
