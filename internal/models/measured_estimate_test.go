@@ -47,7 +47,7 @@ func measuredModel() *Model {
 
 func TestMeasuredEstimateUsesTheEngineNotTheFormula(t *testing.T) {
 	m := measuredModel()
-	est, ok := MeasuredEstimate(m)
+	est, ok := MeasuredEstimate(m, EngineIdentity{})
 	if !ok {
 		t.Fatal("a model that has run produced no measured estimate")
 	}
@@ -85,10 +85,10 @@ func TestMeasuredEstimateUsesTheEngineNotTheFormula(t *testing.T) {
 
 func TestMeasuredEstimateRescalesOnlyTheCache(t *testing.T) {
 	m := measuredModel()
-	full, _ := MeasuredEstimate(m)
+	full, _ := MeasuredEstimate(m, EngineIdentity{})
 
 	m.VLLMConfig.MaxModelLen = 131072
-	half, ok := MeasuredEstimate(m)
+	half, ok := MeasuredEstimate(m, EngineIdentity{})
 	if !ok {
 		t.Fatal("halving the context retired the measurement; it scales exactly")
 	}
@@ -116,7 +116,7 @@ func TestMeasuredEstimateStandsDownWhenItNoLongerApplies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := measuredModel()
 			tc.apply(m)
-			if _, ok := MeasuredEstimate(m); ok {
+			if _, ok := MeasuredEstimate(m, EngineIdentity{}); ok {
 				t.Error("a measurement was reused for a configuration it never described")
 			}
 		})

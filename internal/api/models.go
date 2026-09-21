@@ -406,7 +406,7 @@ func compatibleQuantOptions(detectedMethod string, sym bool, bits int, hasBNB bo
 // estimate and the launch command from drifting apart: same layers, same
 // parser, same order.
 func (s *Server) effectiveVRAM(m *models.Model) models.VRAMEstimate {
-	if est, ok := models.MeasuredEstimate(m); ok {
+	if est, ok := models.MeasuredEstimate(m, s.engineIdentity()); ok {
 		return est
 	}
 	est := models.EstimateVRAM(m, s.configuredEnvPairs(m))

@@ -1,6 +1,19 @@
 # Phase 14: Measure, then stop estimating
 
-**Status:** planned 2026-09-16, not built.
+**Status:** built 2026-09-17/18 across four pull requests. The parser
+corrections (§5) in #15, capture and persistence (§4) in #16, the estimate
+preferring a measurement and the panel saying which it shows (§4, §6) in #17,
+and two defects found by running it: a running engine counted against its own
+budget (#18), and a measurement projected onto other widths in the wrong units
+(#19).
+
+Verified on compute 2026-09-18: `KV bytes/token` measured 32,126 / 32,087 /
+32,126 across three starts on two days, against 12,288 counted from the
+architecture. The panel reads "VRAM Measured: 113.9 GB — from a real start"
+where it previously projected 83.1.
+
+What §7 keeps out of scope is unchanged, and the projected path's constants are
+still deliberately untouched.
 
 ## About this document
 
@@ -106,8 +119,37 @@ change the answer:
 whole point, and the KV term scales with it exactly. `MaxNumBatchedTokens`
 changes activation and is a judgement call left for §7.
 
-When the fingerprint differs, the measurement is shown but marked stale rather
-than silently reused or silently discarded.
+When the fingerprint differs the measurement is retired, and the panel falls
+back to the projection under its own label. (An earlier draft of this section
+said the measurement was "shown but marked stale". It is not shown at all —
+the marking is the banner reading *VRAM Estimate* rather than *VRAM Measured*.)
+
+**The engine is part of the identity too.** *Added 2026-09-21.* The fingerprint
+is a pure function of the model record, so it cannot see the thing underneath
+the configuration: which vLLM is installed. Rebuilding onto a different image
+moves memory accounting without touching a single configuration field — vLLM's
+own graph-profiling note dates that default to v0.21.0 — and the measurement
+would go on being presented as authoritative for an engine no longer on the
+machine. The case that prompted it was a planned switch from `rocm-source`
+(0.27.2.dev0) to the AMD prebuilt `rocm` image (0.23.1.dev1): four minor
+versions backwards, zero config fields changed.
+
+Two axes, because they become knowable at different moments:
+
+- `ImageVariant`, stamped into every build as `VLLMCTL_IMAGE_VARIANT`, is known
+  from boot. It catches a variant switch **before the first start** — the
+  window where a stale measurement is most misleading, because the operator is
+  looking at the panel to decide what to do next.
+- `EngineVersion`, read from the banner vLLM prints on the way up, is known
+  only once something has run. It catches a rebuild of the *same* variant onto
+  a different engine, which the variant id alone cannot see.
+
+Both retire conservatively: an unknown on either side retires nothing. That is
+what stops this from discarding every measurement recorded before the fields
+existed, and what stops a freshly built image from throwing away a good figure
+merely because nothing has started in it yet. Deliberately kept *out* of the
+fingerprint hash, which identifies a configuration and must stay computable
+from the model record alone; the engine identity is passed in beside it.
 
 **Storage.** A field on the `Model` record, beside `VRAMEstimate`. Not on
 `VLLMConfig`, which must stay comparable with `==`. Absent means never

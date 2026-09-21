@@ -42,6 +42,21 @@ type Item struct {
 	// Suggested is a value extracted from the engine's own wording, when it
 	// offered one. Never inferred -- an empty string means vLLM did not say.
 	Suggested string `json:"suggested,omitempty"`
+	// Applicable says the suggestion is a value that could be written to
+	// Field. Declared per rule rather than inferred from having a suggestion,
+	// because most suggestions are not settings:
+	//
+	//	unrecognized arguments  the flag named is the problem, not the fix
+	//	chunked prefill         an echo of what is already configured
+	//	graph accounting        an equivalence figure; applying it chases an
+	//	                        artefact of how memory is counted
+	//
+	// Acting on those would be worse than ignoring them.
+	Applicable bool `json:"applicable,omitempty"`
+	// Ours marks a suggestion this package computed rather than read out of
+	// the engine's own words. Both can be right; they do not deserve equal
+	// confidence, and the difference is the whole lesson of the estimator.
+	Ours bool `json:"ours,omitempty"`
 	// Line is the source line, verbatim, so the user can see what was really
 	// written rather than only our paraphrase of it.
 	Line string `json:"line"`
@@ -95,6 +110,17 @@ type Measurements struct {
 	PLEOffloadGB     float64 `json:"ple_offload_gb,omitempty"`
 	PLEOffloadFailed bool    `json:"ple_offload_failed,omitempty"`
 	PLEOffloadWanted float64 `json:"ple_offload_wanted_gb,omitempty"`
+
+	// EngineVersion is the vLLM build that produced these figures, taken from
+	// the banner it prints on the way up.
+	//
+	// A measurement is only as good as the engine that took it. Swapping the
+	// image -- a prebuilt base for a source build, or one pin for another --
+	// moves memory accounting without touching a single configuration field,
+	// so nothing else recorded here would notice. vLLM's own graph-profiling
+	// note ("default since v0.21.0") is an example of exactly that kind of
+	// change.
+	EngineVersion string `json:"engine_version,omitempty"`
 }
 
 // Any reports whether anything at all was captured.
@@ -265,6 +291,15 @@ func Observe(m *Measurements, line string) {
 			m.GraphPoolGB = v
 		}
 	}
+	// Which engine is reporting all of the above. First spelling wins: both
+	// appear on a normal start, and the banner is printed before the figures
+	// so a later line cannot describe a different build.
+	if m.EngineVersion == "" &&
+		(strings.Contains(lower, "llm engine (v") || strings.Contains(lower, "api server version")) {
+		if g := reEngineVersion.FindStringSubmatch(line); g != nil {
+			m.EngineVersion = g[1]
+		}
+	}
 	// One line carries both halves on a partial failure:
 	//   PLE offload: locked 0.0 GiB, FAILED to lock 47.7 GiB
 	if strings.Contains(lower, "locked") {
@@ -324,11 +359,14 @@ var rules = []rule{
 				return nil
 			}
 			return &Item{
-				Severity:  Error,
-				Message:   "The configured context is longer than the KV cache can hold. Lower it, or free VRAM for the cache.",
-				Field:     "max_model_len",
-				Suggested: g[2],
-				Line:      line,
+				Severity: Error,
+				Message:  "The configured context is longer than the KV cache can hold. Lower it, or free VRAM for the cache.",
+				Field:    "max_model_len",
+				// The engine states the ceiling it measured, so this is a
+				// value rather than a direction.
+				Suggested:  g[2],
+				Applicable: true,
+				Line:       line,
 			}
 		},
 	},
@@ -365,8 +403,14 @@ var rules = []rule{
 			}
 			// Round down to a 0.05 step so every rank agrees on one number
 			// and the panel shows a single suggestion rather than one per card.
+			//
+			// Ours, not the engine's: it names the shortfall, and the fraction
+			// that would clear it is arithmetic done here. Applicable all the
+			// same, but marked so the panel can say whose number it is.
 			if step := math.Floor(free/total*20) / 20; step > 0 && step < 1 {
 				item.Suggested = strconv.FormatFloat(step, 'f', 2, 64)
+				item.Applicable = true
+				item.Ours = true
 			}
 			return item
 		},
@@ -384,12 +428,23 @@ var rules = []rule{
 		match: func(line string) *Item {
 			item := &Item{
 				Severity: Info,
-				Message:  "Graph-capture memory is counted inside gpu_memory_utilization, so the configured fraction buys slightly less KV cache than it did before that accounting existed.",
+				Message:  "Graph-capture memory is counted inside gpu_memory_utilization, so the configured fraction buys less KV cache than it did before that accounting existed.",
 				Field:    "gpu_memory_utilization",
 				Line:     line,
 			}
+			// The figure here is a ceiling, not a setting: it is what the
+			// fraction would have to be to preserve the old cache size, and
+			// the engine will happily name a value that cannot be used. On a
+			// real start it said 1.0000, which leaves nothing on the card for
+			// anything else.
+			//
+			// Carried as prose rather than as Suggested, because the panel
+			// renders a suggestion as "field -> value" and that reads as
+			// something to type in. Not applicable either way, but a number
+			// shown like a setting is one somebody will copy by hand.
 			if g := reProfilingEquiv.FindStringSubmatch(line); g != nil {
-				item.Suggested = g[1]
+				item.Message += " Preserving it would need " + g[1] +
+					", which is a ceiling rather than a recommendation -- at that fraction nothing else fits on the card."
 			}
 			return item
 		},
@@ -404,11 +459,12 @@ var rules = []rule{
 				return nil
 			}
 			return &Item{
-				Severity:  Info,
-				Message:   "The engine reports the exact KV pool it allocated. Pinning kv_cache_memory to it makes the split reproducible instead of dependent on what else is resident at startup.",
-				Field:     "kv_cache_memory",
-				Suggested: g[1],
-				Line:      line,
+				Severity:   Info,
+				Message:    "The engine reports the exact KV pool it allocated. Pinning kv_cache_memory to it makes the split reproducible instead of dependent on what else is resident at startup.",
+				Field:      "kv_cache_memory",
+				Suggested:  g[1],
+				Applicable: true,
+				Line:       line,
 			}
 		},
 	},
@@ -447,6 +503,42 @@ var rules = []rule{
 				}
 			}
 			return nil
+		},
+	},
+	{
+		// A checkpoint whose quantization the card cannot execute.
+		//
+		// Found by a real failed start on an RX 7900 XTX, where the panel had
+		// nothing at all to say: an FP8 checkpoint needs an FP8 matmul unit,
+		// RDNA3 has none, and no setting changes that. This project had the
+		// limitation written down for a week and the parser still could not
+		// see it.
+		//
+		// Deliberately carries no Field and is not applicable. There is no
+		// setting to offer, and a button here would be worse than silence.
+		hint: "_scaled_mm",
+		match: func(line string) *Item {
+			// The same substring appears in the stack frame above the error.
+			if !strings.Contains(line, "only supported on") {
+				return nil
+			}
+			return &Item{
+				Severity: Error,
+				Message: "This checkpoint needs an FP8 matrix multiply that this GPU does not have. " +
+					"No setting changes that -- serving it needs a checkpoint in another format, such as " +
+					"AWQ or GPTQ 4-bit, which dequantize before the multiply and run on these cards.",
+				Line: line,
+			}
+		},
+	},
+	{
+		hint: "engine core initialization failed",
+		match: func(line string) *Item {
+			return &Item{
+				Severity: Error,
+				Message:  "The engine core did not start. The reason is in the lines above this one.",
+				Line:     line,
+			}
 		},
 	},
 	{
@@ -577,9 +669,16 @@ var (
 	// The trailing \d matters: [\d.]+ alone swallows the sentence's full stop
 	// and yields "0.9826." -- a value destined for a config field.
 	reProfilingEquiv = regexp.MustCompile(`(?i)increase --gpu-memory-utilization to\s*(\d+(?:\.\d+)?)`)
-	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
-	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
-	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	// The engine names itself on the way up, in two spellings:
+	//   Initializing a V1 LLM engine (v0.27.2.dev0+g6e448d0ea.d20260921) with config: ...
+	//   vLLM API server version 0.27.2.dev0+g6e448d0ea.d20260921
+	// The class stops at ")" so the first spelling does not capture the
+	// closing bracket -- the same trailing-punctuation trap that gave
+	// reProfilingEquiv a value of "0.9826." destined for a config field.
+	reEngineVersion = regexp.MustCompile(`(?i)(?:LLM engine \(v|vLLM API server version\s+)([^\s),]+)`)
+	reLocked        = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	reFailedLock    = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
+	reSeqLenVsKV    = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
 	// The refusal names the device:
 	//   Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
 	//   desired GPU memory utilization (0.97, 30.9 GiB).

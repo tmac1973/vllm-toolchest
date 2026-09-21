@@ -85,6 +85,8 @@ it implicates and a suggested value where one can be extracted:
 | `Free memory on device cuda:N (X/Y GiB) … less than desired` | `gpu_memory_utilization`, suggest ⌊X/Y⌋ to a 0.05 step | error |
 | `Decrease` / `increase` **GPU memory utilization** | `gpu_memory_utilization` | error |
 | `max seq len (N) is larger than the maximum number of tokens that can be stored in KV cache (M)` | `max_model_len`, suggest M | error |
+| `torch._scaled_mm is only supported on …` | — | error |
+| `Engine core initialization failed` | — | error |
 | `WorkerProc failed to start` | — | error |
 | `num_speculative_tokens > 1 … lower acceptance rate` | `speculative_config` | warning |
 | `Using fp8 data type to store kv cache … accuracy drop` | `kv_cache_dtype` | info |
@@ -179,7 +181,20 @@ before any regexp is touched.
   ad-hoc `strings.Contains` pair sitting there now.
 - `benchmark.DetectOOM` delegates to `advice`, keeping its signature and tests.
 
-## 6. Display — NOT BUILT
+## 6. Display — half built
+
+The **measurements** half shipped in phase 14: the config panel shows measured
+figures beside the estimate and says which it is showing.
+
+The **advice** half is still not built, and the cost of that is now visible.
+The process manager's log buffer caps at 5000 lines, and on a host serving
+steadily that is a few hours -- by 2026-09-21 a start from the 18th had been
+pushed entirely out of the log, startup lines and all. The advice items
+themselves survive in `Manager.advice` the whole time, capped at 64 and
+unreachable, because nothing reads them back.
+
+So the panel must read `Advice()` rather than re-parse the log. Re-parsing
+looks equivalent and stops working within an afternoon.
 
 The service page gets an advice panel beneath the log: severity, message, and
 the field it implicates. Errors persist after a failed start — that is when
@@ -197,6 +212,35 @@ phase. The parser has to be trusted before anything is allowed to rewrite a
 config from it, and trust here means a few weeks of watching it read real
 starts correctly — including the ones where vLLM's own advice is wrong, which
 it sometimes is: "increase gpu_memory_utilization" is unhelpful at 0.97.
+
+### Revisited 2026-09-21: a narrow apply
+
+Acting on it is now in, for three suggestions out of six, behind an explicit
+click with the engine's own line visible beside it. Nothing happens on its own.
+
+The distinction that makes it safe is that **applicability is declared per rule
+rather than inferred from an item having a value**. Half the suggestions are
+not settings at all, and applying them would be worse than ignoring them:
+
+| suggestion | apply? | why |
+|---|---|---|
+| `max_model_len` from seq-len-vs-KV | yes | the engine states the ceiling it measured |
+| `kv_cache_memory` from `--kv-cache-memory=` | yes | the engine's own pool byte count |
+| `gpu_memory_utilization` from the free-memory refusal | yes, marked *ours* | the shortfall is the engine's; the fraction that clears it is arithmetic done here |
+| `--gpu-memory-utilization to 0.9826` | **no** | an equivalence figure; applying it chases an artefact of how memory is counted |
+| `extra_flags` from unrecognized arguments | **no** | the flag named is the problem, not the fix |
+| `max_num_batched_tokens` from chunked prefill | **no** | an echo of what is already configured |
+
+Two things the panel has to say out loud. A suggestion computed here is
+labelled as ours, because a derived number and a reported one do not deserve
+equal confidence — that is the whole lesson of phase 14. And pinning
+`kv_cache_memory` stops the pool being measured again, which is the one
+suggestion that costs something to take; the button says so.
+
+The caution has earned itself twice over: this parser has produced advice that
+was confidently backwards (telling the operator to raise a setting the engine
+had asked them to lower) and advice that fired on a healthy start. Both would
+have been propagated by a button that acted without being asked.
 
 The estimator scoring itself against captured measurements is the phase after
 that, and it is the one worth wanting. It is also why §3 lists measurements

@@ -10,7 +10,7 @@ import "testing"
 // measurement has nothing left to correct.
 func TestTheMeasuredWidthIsNotReDerived(t *testing.T) {
 	m := measuredModel()
-	est, ok := MeasuredEstimate(m)
+	est, ok := MeasuredEstimate(m, EngineIdentity{})
 	if !ok {
 		t.Fatal("no measured estimate")
 	}
@@ -54,7 +54,7 @@ func TestTheMeasuredWidthIsNotReDerived(t *testing.T) {
 // at, and must not claim otherwise.
 func TestOtherWidthsStayProjections(t *testing.T) {
 	m := measuredModel()
-	est, _ := MeasuredEstimate(m)
+	est, _ := MeasuredEstimate(m, EngineIdentity{})
 	fit := Fit(est, m.VLLMConfig, GPUInventory{Count: 4, PerCardGB: 31.86, Known: true})
 
 	measured := 0

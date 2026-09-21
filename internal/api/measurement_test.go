@@ -115,7 +115,7 @@ func TestASuccessfulStartIsRecorded(t *testing.T) {
 	if got.Fingerprint != models.MeasurementFingerprint(m) {
 		t.Error("the measurement was stored without a matching fingerprint")
 	}
-	if !got.Applies(m) {
+	if !got.Applies(m, models.EngineIdentity{}) {
 		t.Error("a measurement of this very configuration does not apply to it")
 	}
 }
@@ -151,7 +151,7 @@ func TestAConfigChangeRetiresTheMeasurement(t *testing.T) {
 	s.recordMeasurement(id)
 
 	m, _ := s.registry.Get(id)
-	if m.Measured == nil || !m.Measured.Applies(m) {
+	if m.Measured == nil || !m.Measured.Applies(m, models.EngineIdentity{}) {
 		t.Fatal("nothing recorded to retire")
 	}
 
@@ -162,7 +162,7 @@ func TestAConfigChangeRetiresTheMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _ = s.registry.Get(id)
-	if !m.Measured.Applies(m) {
+	if !m.Measured.Applies(m, models.EngineIdentity{}) {
 		t.Error("changing only the context length retired a measurement that still holds")
 	}
 
@@ -172,7 +172,7 @@ func TestAConfigChangeRetiresTheMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _ = s.registry.Get(id)
-	if m.Measured.Applies(m) {
+	if m.Measured.Applies(m, models.EngineIdentity{}) {
 		t.Error("a measurement taken at TP=4 still claims to describe TP=2")
 	}
 }

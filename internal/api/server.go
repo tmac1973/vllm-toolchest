@@ -260,6 +260,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Delete("/logs", s.handleClearServiceLogs)
 			r.Get("/log-stream", s.handleServiceLogStream)
 			r.Get("/health", s.handleServiceHealth)
+			r.Get("/advice", s.handleServiceAdvice)
+			r.Post("/advice/apply", s.handleApplyAdvice)
 		})
 		r.Route("/benchmarks", func(r chi.Router) {
 			r.Get("/", s.handleListBenchmarks)

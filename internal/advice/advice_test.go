@@ -1,6 +1,9 @@
 package advice
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The lines here are real ones this project has hit, not invented shapes. Each
 // case that names a checkpoint or a bug is one that cost somebody an afternoon.
@@ -400,8 +403,22 @@ func TestSuggestedValuesAreNotPunctuated(t *testing.T) {
 	if it.Severity != Info {
 		t.Errorf("severity = %q, want info -- this is accounting, not a failure", it.Severity)
 	}
-	if it.Suggested != "0.9826" {
-		t.Errorf("suggested = %q, want %q", it.Suggested, "0.9826")
+
+	// The figure is a ceiling, not a setting, so it is carried as prose rather
+	// than as a suggestion: a real start reported 1.0000 here, and the panel
+	// renders a suggestion as "field -> value", which reads as something to
+	// type in.
+	if it.Suggested != "" {
+		t.Errorf("suggested = %q; a ceiling must not be offered as a value", it.Suggested)
+	}
+	if it.Applicable {
+		t.Error("a ceiling was marked applicable")
+	}
+
+	// The punctuation bug moved rather than went away: [\d.]+ would now put
+	// "0.9826." mid-sentence instead of into a config field.
+	if !strings.Contains(it.Message, "0.9826,") {
+		t.Errorf("the figure is missing or punctuated in the message: %q", it.Message)
 	}
 }
 
@@ -435,6 +452,54 @@ func TestTheOffloadHelpersHousekeepingIsNotAdvice(t *testing.T) {
 	}
 }
 
+// A real failed start on an RX 7900 XTX, 2026-09-21. The panel reported
+// "nothing to report" on a start that had failed for a perfectly clear reason,
+// which is the feature failing at its only job.
+//
+// The limitation had been written down in plan/todo.md for a week -- an FP8
+// checkpoint cannot run on RDNA3, which has no FP8 matmul -- and the parser
+// still could not see it. Reasoning about what vLLM might say had not found
+// it; one real failure did.
+func TestTheCardCannotRunTheCheckpoint(t *testing.T) {
+	const refusal = `(EngineCore pid=879) RuntimeError: torch._scaled_mm is only supported on CUDA devices with compute capability >= 9.0 or 8.9, or ROCm MI300+`
+
+	it := Scan(refusal)
+	if it == nil {
+		t.Fatal("a start that failed on the card's capabilities produced no advice")
+	}
+	if it.Severity != Error {
+		t.Errorf("severity = %q, want error", it.Severity)
+	}
+	// There is no setting to change, so offering one would be worse than
+	// saying nothing.
+	if it.Field != "" || it.Applicable {
+		t.Errorf("offered a setting for a hardware limit: field=%q applicable=%v", it.Field, it.Applicable)
+	}
+	if !strings.Contains(it.Message, "AWQ") {
+		t.Errorf("the message does not say what would work instead: %q", it.Message)
+	}
+
+	// The same substring appears in the stack frame above the error, and that
+	// is a traceback line rather than advice.
+	const frame = `(EngineCore pid=879) ERROR     extern_kernels._scaled_mm(buf8, arg8_1, buf9, buf10, out_dtype=torch.float32, use_fast_accum=False, out=buf11)`
+	if got := Scan(frame); got != nil {
+		t.Errorf("a stack frame was read as advice: %+v", got)
+	}
+}
+
+// The failure summary, matching the worker rule that already exists for the
+// same shape of event.
+func TestEngineCoreFailureIsReported(t *testing.T) {
+	const line = `(APIServer pid=269) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}`
+	it := Scan(line)
+	if it == nil || it.Severity != Error {
+		t.Fatalf("the engine core failing to start was not reported: %+v", it)
+	}
+	if it.Applicable {
+		t.Error("a failure summary is not something to apply")
+	}
+}
+
 func TestReady(t *testing.T) {
 	for _, line := range []string{
 		"INFO:     Uvicorn running on http://0.0.0.0:8000",
@@ -446,5 +511,42 @@ func TestReady(t *testing.T) {
 	}
 	if Ready("INFO: loading weights") {
 		t.Error("an ordinary line was read as the ready signal")
+	}
+}
+
+// The engine names itself on every start, in two spellings. Neither was read
+// until a rebuild onto a different image made a stored measurement go on
+// describing an engine that was no longer installed.
+func TestObserveCapturesTheEngineVersion(t *testing.T) {
+	for _, tc := range []struct{ name, line, want string }{
+		{
+			"the engine banner",
+			"(EngineCore pid=1910) INFO 09-21 15:50:02 [core.py:93] Initializing a V1 LLM engine (v0.27.2.dev0+g6e448d0ea.d20260921) with config: model='x',",
+			"0.27.2.dev0+g6e448d0ea.d20260921",
+		},
+		{
+			"the api server banner",
+			"INFO 09-21 15:49:58 [api_server.py:1943] vLLM API server version 0.23.1.dev1+g9ddef7117",
+			"0.23.1.dev1+g9ddef7117",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m Measurements
+			Observe(&m, tc.line)
+			if m.EngineVersion != tc.want {
+				t.Errorf("EngineVersion = %q, want %q", m.EngineVersion, tc.want)
+			}
+		})
+	}
+}
+
+// Both spellings appear on a normal start, the engine banner first. Whichever
+// is seen first describes the run, and a later line must not overwrite it.
+func TestTheFirstEngineVersionSeenWins(t *testing.T) {
+	var m Measurements
+	Observe(&m, "INFO [core.py:93] Initializing a V1 LLM engine (v0.27.2.dev0) with config: x")
+	Observe(&m, "INFO [api_server.py:1943] vLLM API server version 9.9.9")
+	if m.EngineVersion != "0.27.2.dev0" {
+		t.Errorf("EngineVersion = %q, want the first seen, 0.27.2.dev0", m.EngineVersion)
 	}
 }
