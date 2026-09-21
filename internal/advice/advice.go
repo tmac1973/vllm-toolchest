@@ -475,6 +475,42 @@ var rules = []rule{
 		},
 	},
 	{
+		// A checkpoint whose quantization the card cannot execute.
+		//
+		// Found by a real failed start on an RX 7900 XTX, where the panel had
+		// nothing at all to say: an FP8 checkpoint needs an FP8 matmul unit,
+		// RDNA3 has none, and no setting changes that. This project had the
+		// limitation written down for a week and the parser still could not
+		// see it.
+		//
+		// Deliberately carries no Field and is not applicable. There is no
+		// setting to offer, and a button here would be worse than silence.
+		hint: "_scaled_mm",
+		match: func(line string) *Item {
+			// The same substring appears in the stack frame above the error.
+			if !strings.Contains(line, "only supported on") {
+				return nil
+			}
+			return &Item{
+				Severity: Error,
+				Message: "This checkpoint needs an FP8 matrix multiply that this GPU does not have. " +
+					"No setting changes that -- serving it needs a checkpoint in another format, such as " +
+					"AWQ or GPTQ 4-bit, which dequantize before the multiply and run on these cards.",
+				Line: line,
+			}
+		},
+	},
+	{
+		hint: "engine core initialization failed",
+		match: func(line string) *Item {
+			return &Item{
+				Severity: Error,
+				Message:  "The engine core did not start. The reason is in the lines above this one.",
+				Line:     line,
+			}
+		},
+	},
+	{
 		hint: "worker",
 		match: func(line string) *Item {
 			lower := strings.ToLower(line)

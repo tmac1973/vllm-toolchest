@@ -85,6 +85,8 @@ it implicates and a suggested value where one can be extracted:
 | `Free memory on device cuda:N (X/Y GiB) … less than desired` | `gpu_memory_utilization`, suggest ⌊X/Y⌋ to a 0.05 step | error |
 | `Decrease` / `increase` **GPU memory utilization** | `gpu_memory_utilization` | error |
 | `max seq len (N) is larger than the maximum number of tokens that can be stored in KV cache (M)` | `max_model_len`, suggest M | error |
+| `torch._scaled_mm is only supported on …` | — | error |
+| `Engine core initialization failed` | — | error |
 | `WorkerProc failed to start` | — | error |
 | `num_speculative_tokens > 1 … lower acceptance rate` | `speculative_config` | warning |
 | `Using fp8 data type to store kv cache … accuracy drop` | `kv_cache_dtype` | info |

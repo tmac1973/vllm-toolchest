@@ -1,6 +1,9 @@
 package advice
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The lines here are real ones this project has hit, not invented shapes. Each
 // case that names a checkpoint or a bug is one that cost somebody an afternoon.
@@ -432,6 +435,54 @@ func TestTheOffloadHelpersHousekeepingIsNotAdvice(t *testing.T) {
 	Observe(&m, `(PleOffloadWorker pid=996) INFO [worker.py:222] PLE offload: locked 38.8 GiB of PLE weights in RAM`)
 	if m.PLEOffloadGB != 38.8 {
 		t.Errorf("PLE offload = %v, want 38.8 -- suppressing advice must not suppress measurement", m.PLEOffloadGB)
+	}
+}
+
+// A real failed start on an RX 7900 XTX, 2026-09-21. The panel reported
+// "nothing to report" on a start that had failed for a perfectly clear reason,
+// which is the feature failing at its only job.
+//
+// The limitation had been written down in plan/todo.md for a week -- an FP8
+// checkpoint cannot run on RDNA3, which has no FP8 matmul -- and the parser
+// still could not see it. Reasoning about what vLLM might say had not found
+// it; one real failure did.
+func TestTheCardCannotRunTheCheckpoint(t *testing.T) {
+	const refusal = `(EngineCore pid=879) RuntimeError: torch._scaled_mm is only supported on CUDA devices with compute capability >= 9.0 or 8.9, or ROCm MI300+`
+
+	it := Scan(refusal)
+	if it == nil {
+		t.Fatal("a start that failed on the card's capabilities produced no advice")
+	}
+	if it.Severity != Error {
+		t.Errorf("severity = %q, want error", it.Severity)
+	}
+	// There is no setting to change, so offering one would be worse than
+	// saying nothing.
+	if it.Field != "" || it.Applicable {
+		t.Errorf("offered a setting for a hardware limit: field=%q applicable=%v", it.Field, it.Applicable)
+	}
+	if !strings.Contains(it.Message, "AWQ") {
+		t.Errorf("the message does not say what would work instead: %q", it.Message)
+	}
+
+	// The same substring appears in the stack frame above the error, and that
+	// is a traceback line rather than advice.
+	const frame = `(EngineCore pid=879) ERROR     extern_kernels._scaled_mm(buf8, arg8_1, buf9, buf10, out_dtype=torch.float32, use_fast_accum=False, out=buf11)`
+	if got := Scan(frame); got != nil {
+		t.Errorf("a stack frame was read as advice: %+v", got)
+	}
+}
+
+// The failure summary, matching the worker rule that already exists for the
+// same shape of event.
+func TestEngineCoreFailureIsReported(t *testing.T) {
+	const line = `(APIServer pid=269) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}`
+	it := Scan(line)
+	if it == nil || it.Severity != Error {
+		t.Fatalf("the engine core failing to start was not reported: %+v", it)
+	}
+	if it.Applicable {
+		t.Error("a failure summary is not something to apply")
 	}
 }
 
