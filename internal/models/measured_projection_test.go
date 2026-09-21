@@ -13,7 +13,7 @@ import "testing"
 // surcharge and TP=2 paid it twice.
 func TestAddingRanksNeverReducesWhatIsNeeded(t *testing.T) {
 	m := measuredModel()
-	est, ok := MeasuredEstimate(m)
+	est, ok := MeasuredEstimate(m, EngineIdentity{})
 	if !ok {
 		t.Fatal("no measured estimate")
 	}
@@ -41,7 +41,7 @@ func TestAddingRanksNeverReducesWhatIsNeeded(t *testing.T) {
 // projections of it and must not equal it by accident.
 func TestTheMeasuredWidthKeepsItsFigureAndOthersMove(t *testing.T) {
 	m := measuredModel()
-	est, _ := MeasuredEstimate(m)
+	est, _ := MeasuredEstimate(m, EngineIdentity{})
 	fit := Fit(est, m.VLLMConfig, GPUInventory{
 		Count: 8, PerCardGB: 31.86, FreePerCardGB: 31.86, Known: true,
 	})

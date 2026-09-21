@@ -110,6 +110,17 @@ type Measurements struct {
 	PLEOffloadGB     float64 `json:"ple_offload_gb,omitempty"`
 	PLEOffloadFailed bool    `json:"ple_offload_failed,omitempty"`
 	PLEOffloadWanted float64 `json:"ple_offload_wanted_gb,omitempty"`
+
+	// EngineVersion is the vLLM build that produced these figures, taken from
+	// the banner it prints on the way up.
+	//
+	// A measurement is only as good as the engine that took it. Swapping the
+	// image -- a prebuilt base for a source build, or one pin for another --
+	// moves memory accounting without touching a single configuration field,
+	// so nothing else recorded here would notice. vLLM's own graph-profiling
+	// note ("default since v0.21.0") is an example of exactly that kind of
+	// change.
+	EngineVersion string `json:"engine_version,omitempty"`
 }
 
 // Any reports whether anything at all was captured.
@@ -278,6 +289,15 @@ func Observe(m *Measurements, line string) {
 	if strings.Contains(lower, "cuda graph pool memory") {
 		if v, ok := firstFloat(reGraphPool, line); ok {
 			m.GraphPoolGB = v
+		}
+	}
+	// Which engine is reporting all of the above. First spelling wins: both
+	// appear on a normal start, and the banner is printed before the figures
+	// so a later line cannot describe a different build.
+	if m.EngineVersion == "" &&
+		(strings.Contains(lower, "llm engine (v") || strings.Contains(lower, "api server version")) {
+		if g := reEngineVersion.FindStringSubmatch(line); g != nil {
+			m.EngineVersion = g[1]
 		}
 	}
 	// One line carries both halves on a partial failure:
@@ -649,9 +669,16 @@ var (
 	// The trailing \d matters: [\d.]+ alone swallows the sentence's full stop
 	// and yields "0.9826." -- a value destined for a config field.
 	reProfilingEquiv = regexp.MustCompile(`(?i)increase --gpu-memory-utilization to\s*(\d+(?:\.\d+)?)`)
-	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
-	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
-	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	// The engine names itself on the way up, in two spellings:
+	//   Initializing a V1 LLM engine (v0.27.2.dev0+g6e448d0ea.d20260921) with config: ...
+	//   vLLM API server version 0.27.2.dev0+g6e448d0ea.d20260921
+	// The class stops at ")" so the first spelling does not capture the
+	// closing bracket -- the same trailing-punctuation trap that gave
+	// reProfilingEquiv a value of "0.9826." destined for a config field.
+	reEngineVersion = regexp.MustCompile(`(?i)(?:LLM engine \(v|vLLM API server version\s+)([^\s),]+)`)
+	reLocked        = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	reFailedLock    = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
+	reSeqLenVsKV    = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
 	// The refusal names the device:
 	//   Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
 	//   desired GPU memory utilization (0.97, 30.9 GiB).

@@ -28,6 +28,15 @@ type RunMeasurement struct {
 	// different one describes a different model, whatever the id says.
 	Fingerprint string `json:"fingerprint"`
 
+	// ImageVariant is the image this was measured in, stamped into every
+	// build as VLLMCTL_IMAGE_VARIANT.
+	//
+	// Deliberately outside Fingerprint. The fingerprint identifies a
+	// *configuration*, and is a pure function of the model record; this
+	// identifies the engine underneath it, which no model record knows. Both
+	// have to match for a measurement to apply, for different reasons.
+	ImageVariant string `json:"image_variant,omitempty"`
+
 	Engine advice.Measurements `json:"engine"`
 }
 
@@ -76,8 +85,8 @@ func (r RunMeasurement) TotalRequiredGB(contextTokens int) float64 {
 // working set and the graph pool were all measured per rank and are carried
 // across unchanged, because nothing in the configuration that would move them
 // can change without retiring the measurement outright.
-func MeasuredEstimate(m *Model) (VRAMEstimate, bool) {
-	if m == nil || m.Measured == nil || !m.Measured.Applies(m) {
+func MeasuredEstimate(m *Model, id EngineIdentity) (VRAMEstimate, bool) {
+	if m == nil || m.Measured == nil || !m.Measured.Applies(m, id) {
 		return VRAMEstimate{}, false
 	}
 	run := *m.Measured
@@ -167,8 +176,48 @@ func MeasurementFingerprint(m *Model) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
+// EngineIdentity is which vLLM the machine is running, as distinct from how a
+// model is configured.
+//
+// Two fields, because they become knowable at different moments. Variant is
+// stamped into the image at build time and is therefore known from boot,
+// before anything has been started; Version comes from the engine's own
+// banner and is known only once something has. Switching images moves both;
+// rebuilding a source-tracking variant moves only the second.
+type EngineIdentity struct {
+	Variant string
+	Version string
+}
+
+// retires reports whether this identity describes a different engine from the
+// one that took the measurement.
+//
+// Conservative on purpose: an unknown on either side retires nothing. A
+// freshly built image has no version to compare until something has run in
+// it, and discarding a measurement on that absence would throw away a figure
+// that is very likely still good. Only a known mismatch counts -- which is
+// also what keeps this from retiring everything the first time these fields
+// appear on records written before they existed.
+func (id EngineIdentity) retires(r RunMeasurement) bool {
+	if id.Variant != "" && r.ImageVariant != "" && id.Variant != r.ImageVariant {
+		return true
+	}
+	if id.Version != "" && r.Engine.EngineVersion != "" && id.Version != r.Engine.EngineVersion {
+		return true
+	}
+	return false
+}
+
 // Applies reports whether a measurement still describes this model's current
-// configuration.
-func (r RunMeasurement) Applies(m *Model) bool {
-	return r.Complete() && r.Fingerprint != "" && r.Fingerprint == MeasurementFingerprint(m)
+// configuration, taken on the engine now installed.
+//
+// Two separate questions, and both have to answer yes. The fingerprint covers
+// the configuration; the identity covers the engine, which no amount of
+// configuration hashing can see. Passing a zero EngineIdentity asks the
+// configuration question alone.
+func (r RunMeasurement) Applies(m *Model, id EngineIdentity) bool {
+	if !r.Complete() || r.Fingerprint == "" || r.Fingerprint != MeasurementFingerprint(m) {
+		return false
+	}
+	return !id.retires(r)
 }

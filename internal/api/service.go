@@ -255,6 +255,21 @@ func (s *Server) watchForMeasurement(modelID string) {
 	}()
 }
 
+// engineIdentity is which vLLM this container is running, for deciding whether
+// a stored measurement still describes it.
+//
+// The variant is stamped into the image, so it is known even with nothing
+// running -- which is the case that matters, because the window where a stale
+// measurement is most misleading is after a rebuild and before the first
+// start. The version is only knowable once an engine has printed its banner.
+func (s *Server) engineIdentity() models.EngineIdentity {
+	id := models.EngineIdentity{Variant: s.vllmEnv.Variant}
+	if s.process != nil {
+		id.Version = s.process.Measured().EngineVersion
+	}
+	return id
+}
+
 // recordMeasurement copies what the engine said into the registry, against the
 // configuration it was said about.
 func (s *Server) recordMeasurement(modelID string) {
@@ -268,6 +283,7 @@ func (s *Server) recordMeasurement(modelID string) {
 		TP:            m.VLLMConfig.TensorParallelSize,
 		ContextTokens: m.VLLMConfig.MaxModelLen,
 		Fingerprint:   models.MeasurementFingerprint(m),
+		ImageVariant:  s.vllmEnv.Variant,
 		Engine:        s.process.Measured(),
 	}
 	if run.TP < 1 {

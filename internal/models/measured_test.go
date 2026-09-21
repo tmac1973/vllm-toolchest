@@ -133,12 +133,65 @@ func TestAppliesNeedsBothCompletenessAndAMatch(t *testing.T) {
 
 	r := liveRun()
 	r.Fingerprint = MeasurementFingerprint(m)
-	if !r.Applies(m) {
+	if !r.Applies(m, EngineIdentity{}) {
 		t.Error("a complete measurement of this very configuration does not apply to it")
 	}
 
 	m.VLLMConfig.TensorParallelSize = 2
-	if r.Applies(m) {
+	if r.Applies(m, EngineIdentity{}) {
 		t.Error("a measurement taken at TP=4 still claims to describe TP=2")
+	}
+}
+
+// A measurement describes a configuration *and* the engine that took it.
+// Rebuilding onto another image moves memory accounting without touching a
+// single configuration field, so the fingerprint alone cannot notice: vLLM's
+// own graph-profiling default moved in exactly that way at v0.21.0.
+func TestAMeasurementRetiresWhenTheEngineChanges(t *testing.T) {
+	m := measuredModel()
+	r := *m.Measured
+	r.ImageVariant = "rocm-source"
+	r.Engine.EngineVersion = "0.27.2.dev0"
+
+	here := EngineIdentity{Variant: "rocm-source", Version: "0.27.2.dev0"}
+	if !r.Applies(m, here) {
+		t.Error("the very engine that took the measurement does not apply to it")
+	}
+
+	// The switch this was written for: prebuilt image in place of the source
+	// build, known before anything has started.
+	if r.Applies(m, EngineIdentity{Variant: "rocm", Version: "0.27.2.dev0"}) {
+		t.Error("a measurement taken on rocm-source still claims to describe the rocm image")
+	}
+
+	// And a rebuild of the same variant onto a different engine, which only
+	// the version can catch.
+	if r.Applies(m, EngineIdentity{Variant: "rocm-source", Version: "0.23.1.dev1"}) {
+		t.Error("a measurement taken on 0.27.2 still claims to describe 0.23.1")
+	}
+}
+
+// Conservative where it cannot know. An absent identity on either side is not
+// evidence of a mismatch, and treating it as one would discard every
+// measurement recorded before these fields existed, plus every measurement in
+// a freshly built image before its first start.
+func TestAnUnknownEngineRetiresNothing(t *testing.T) {
+	m := measuredModel()
+	r := *m.Measured
+
+	if !r.Applies(m, EngineIdentity{}) {
+		t.Error("an unknown engine retired a measurement it knows nothing about")
+	}
+
+	// Written before the fields existed: nothing stored, so nothing to clash.
+	if !r.Applies(m, EngineIdentity{Variant: "rocm", Version: "0.23.1.dev1"}) {
+		t.Error("a record with no engine recorded was retired on a guess")
+	}
+
+	// Stored, but nothing running yet to compare against.
+	r.ImageVariant = "rocm-source"
+	r.Engine.EngineVersion = "0.27.2.dev0"
+	if !r.Applies(m, EngineIdentity{}) {
+		t.Error("a measurement was retired because nothing had started yet")
 	}
 }

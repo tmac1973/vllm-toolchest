@@ -513,3 +513,40 @@ func TestReady(t *testing.T) {
 		t.Error("an ordinary line was read as the ready signal")
 	}
 }
+
+// The engine names itself on every start, in two spellings. Neither was read
+// until a rebuild onto a different image made a stored measurement go on
+// describing an engine that was no longer installed.
+func TestObserveCapturesTheEngineVersion(t *testing.T) {
+	for _, tc := range []struct{ name, line, want string }{
+		{
+			"the engine banner",
+			"(EngineCore pid=1910) INFO 09-21 15:50:02 [core.py:93] Initializing a V1 LLM engine (v0.27.2.dev0+g6e448d0ea.d20260921) with config: model='x',",
+			"0.27.2.dev0+g6e448d0ea.d20260921",
+		},
+		{
+			"the api server banner",
+			"INFO 09-21 15:49:58 [api_server.py:1943] vLLM API server version 0.23.1.dev1+g9ddef7117",
+			"0.23.1.dev1+g9ddef7117",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m Measurements
+			Observe(&m, tc.line)
+			if m.EngineVersion != tc.want {
+				t.Errorf("EngineVersion = %q, want %q", m.EngineVersion, tc.want)
+			}
+		})
+	}
+}
+
+// Both spellings appear on a normal start, the engine banner first. Whichever
+// is seen first describes the run, and a later line must not overwrite it.
+func TestTheFirstEngineVersionSeenWins(t *testing.T) {
+	var m Measurements
+	Observe(&m, "INFO [core.py:93] Initializing a V1 LLM engine (v0.27.2.dev0) with config: x")
+	Observe(&m, "INFO [api_server.py:1943] vLLM API server version 9.9.9")
+	if m.EngineVersion != "0.27.2.dev0" {
+		t.Errorf("EngineVersion = %q, want the first seen, 0.27.2.dev0", m.EngineVersion)
+	}
+}

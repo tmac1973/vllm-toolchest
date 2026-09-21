@@ -192,9 +192,12 @@ func (e *jobEnv) HFCacheDir() string {
 	return filepath.Join(e.s.cfg.DataDir, "cache", "huggingface")
 }
 
-// VLLMVersion is best-effort; we don't have a stable source for it yet.
-// Returning "" lets the run save without failing.
+// VLLMVersion is the engine's own banner, captured on the way up. Still
+// best-effort -- "" when nothing has started in this container yet -- which
+// lets the run save without failing.
 func (e *jobEnv) VLLMVersion() string {
-	// Future: parse process startup logs for the "vLLM <version>" line.
-	return ""
+	if e.s == nil || e.s.process == nil {
+		return ""
+	}
+	return e.s.process.Measured().EngineVersion
 }
