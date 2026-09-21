@@ -949,6 +949,30 @@ is_port_available() {
     fi
 }
 
+# port_published_by_us — is this host port published by the vllm-toolchest
+# container that is already running?
+#
+# prompt_ports runs before container_install stops that container, so on any
+# machine that already has one, the install warned that 3000 and 8000 were
+# taken -- by the very thing it was about to replace -- and then said "Please
+# choose alternative ports". Taking that advice moves a working UI off 3000
+# for no reason, and the wording makes it sound obligatory rather than
+# optional. Seen on a real install, 2026-09-21.
+#
+# Matching ":PORT->" reads the host side of a mapping only. podman renders one
+# as "0.0.0.0:3001->3000/tcp", so a container forwarding 3000 from a different
+# host port genuinely does not hold 3000, and must not silence a real clash.
+# The container name is spelled literally here, as it is in container_down,
+# container_rebuild and get_restart_policy; PODMAN_SERVICE_NAME happens to
+# carry the same string but names the systemd unit, not the container.
+port_published_by_us() {
+    local port="$1" ports
+    [[ -n "${CONTAINER_CMD:-}" ]] || return 1
+    ports="$($CONTAINER_CMD ps --filter "name=vllm-toolchest" --format '{{.Ports}}' 2>/dev/null)" || return 1
+    [[ -n "$ports" ]] || return 1
+    grep -q -- ":${port}->" <<<"$ports"
+}
+
 prompt_ports() {
     echo ""
     echo -e "${BOLD}Port configuration${NC}"
@@ -959,13 +983,21 @@ prompt_ports() {
     echo ""
 
     local ports_ok=true
-    if ! is_port_available "$VLLMCTL_PORT"; then
-        warn "Port ${VLLMCTL_PORT} is already in use"
-        ports_ok=false
-    fi
-    if ! is_port_available "$VLLMCTL_INFERENCE_PORT"; then
-        warn "Port ${VLLMCTL_INFERENCE_PORT} is already in use"
-        ports_ok=false
+    local -a ours=()
+    local p
+    for p in "$VLLMCTL_PORT" "$VLLMCTL_INFERENCE_PORT"; do
+        is_port_available "$p" && continue
+        if port_published_by_us "$p"; then
+            ours+=("$p")
+        else
+            warn "Port ${p} is already in use"
+            ports_ok=false
+        fi
+    done
+
+    if [[ "${#ours[@]}" -gt 0 ]]; then
+        local held="${ours[*]}"
+        ok "Port ${held// /, } held by the running vllm-toolchest, which this install replaces"
     fi
 
     if [[ "$ports_ok" == true ]]; then
