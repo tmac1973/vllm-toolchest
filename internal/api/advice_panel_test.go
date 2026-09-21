@@ -6,6 +6,21 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/advice"
 )
 
+// The server page polls the advice endpoint every ten seconds. A server with
+// no process manager must answer it rather than panicking: this reached the
+// tests as a nil-receiver dereference in Manager.Advice, and in a browser it
+// would have taken the page down on a timer.
+func TestTheAdvicePanelToleratesNoProcess(t *testing.T) {
+	s := &Server{}
+	v := s.adviceSnapshot()
+	if !v.Quiet {
+		t.Errorf("no process, but the panel claims something was said: %+v", v)
+	}
+	if len(v.Rows) != 0 {
+		t.Errorf("got %d rows with no process", len(v.Rows))
+	}
+}
+
 // A healthy start says nothing, and that deserves saying rather than rendering
 // an empty box.
 func TestAQuietStartSaysSo(t *testing.T) {

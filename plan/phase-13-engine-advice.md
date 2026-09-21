@@ -211,6 +211,35 @@ config from it, and trust here means a few weeks of watching it read real
 starts correctly — including the ones where vLLM's own advice is wrong, which
 it sometimes is: "increase gpu_memory_utilization" is unhelpful at 0.97.
 
+### Revisited 2026-09-21: a narrow apply
+
+Acting on it is now in, for three suggestions out of six, behind an explicit
+click with the engine's own line visible beside it. Nothing happens on its own.
+
+The distinction that makes it safe is that **applicability is declared per rule
+rather than inferred from an item having a value**. Half the suggestions are
+not settings at all, and applying them would be worse than ignoring them:
+
+| suggestion | apply? | why |
+|---|---|---|
+| `max_model_len` from seq-len-vs-KV | yes | the engine states the ceiling it measured |
+| `kv_cache_memory` from `--kv-cache-memory=` | yes | the engine's own pool byte count |
+| `gpu_memory_utilization` from the free-memory refusal | yes, marked *ours* | the shortfall is the engine's; the fraction that clears it is arithmetic done here |
+| `--gpu-memory-utilization to 0.9826` | **no** | an equivalence figure; applying it chases an artefact of how memory is counted |
+| `extra_flags` from unrecognized arguments | **no** | the flag named is the problem, not the fix |
+| `max_num_batched_tokens` from chunked prefill | **no** | an echo of what is already configured |
+
+Two things the panel has to say out loud. A suggestion computed here is
+labelled as ours, because a derived number and a reported one do not deserve
+equal confidence — that is the whole lesson of phase 14. And pinning
+`kv_cache_memory` stops the pool being measured again, which is the one
+suggestion that costs something to take; the button says so.
+
+The caution has earned itself twice over: this parser has produced advice that
+was confidently backwards (telling the operator to raise a setting the engine
+had asked them to lower) and advice that fired on a healthy start. Both would
+have been propagated by a button that acted without being asked.
+
 The estimator scoring itself against captured measurements is the phase after
 that, and it is the one worth wanting. It is also why §3 lists measurements
 first and advice second, though the feature is named for the advice.

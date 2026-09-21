@@ -42,6 +42,21 @@ type Item struct {
 	// Suggested is a value extracted from the engine's own wording, when it
 	// offered one. Never inferred -- an empty string means vLLM did not say.
 	Suggested string `json:"suggested,omitempty"`
+	// Applicable says the suggestion is a value that could be written to
+	// Field. Declared per rule rather than inferred from having a suggestion,
+	// because most suggestions are not settings:
+	//
+	//	unrecognized arguments  the flag named is the problem, not the fix
+	//	chunked prefill         an echo of what is already configured
+	//	graph accounting        an equivalence figure; applying it chases an
+	//	                        artefact of how memory is counted
+	//
+	// Acting on those would be worse than ignoring them.
+	Applicable bool `json:"applicable,omitempty"`
+	// Ours marks a suggestion this package computed rather than read out of
+	// the engine's own words. Both can be right; they do not deserve equal
+	// confidence, and the difference is the whole lesson of the estimator.
+	Ours bool `json:"ours,omitempty"`
 	// Line is the source line, verbatim, so the user can see what was really
 	// written rather than only our paraphrase of it.
 	Line string `json:"line"`
@@ -324,11 +339,14 @@ var rules = []rule{
 				return nil
 			}
 			return &Item{
-				Severity:  Error,
-				Message:   "The configured context is longer than the KV cache can hold. Lower it, or free VRAM for the cache.",
-				Field:     "max_model_len",
-				Suggested: g[2],
-				Line:      line,
+				Severity: Error,
+				Message:  "The configured context is longer than the KV cache can hold. Lower it, or free VRAM for the cache.",
+				Field:    "max_model_len",
+				// The engine states the ceiling it measured, so this is a
+				// value rather than a direction.
+				Suggested:  g[2],
+				Applicable: true,
+				Line:       line,
 			}
 		},
 	},
@@ -365,8 +383,14 @@ var rules = []rule{
 			}
 			// Round down to a 0.05 step so every rank agrees on one number
 			// and the panel shows a single suggestion rather than one per card.
+			//
+			// Ours, not the engine's: it names the shortfall, and the fraction
+			// that would clear it is arithmetic done here. Applicable all the
+			// same, but marked so the panel can say whose number it is.
 			if step := math.Floor(free/total*20) / 20; step > 0 && step < 1 {
 				item.Suggested = strconv.FormatFloat(step, 'f', 2, 64)
+				item.Applicable = true
+				item.Ours = true
 			}
 			return item
 		},
@@ -404,11 +428,12 @@ var rules = []rule{
 				return nil
 			}
 			return &Item{
-				Severity:  Info,
-				Message:   "The engine reports the exact KV pool it allocated. Pinning kv_cache_memory to it makes the split reproducible instead of dependent on what else is resident at startup.",
-				Field:     "kv_cache_memory",
-				Suggested: g[1],
-				Line:      line,
+				Severity:   Info,
+				Message:    "The engine reports the exact KV pool it allocated. Pinning kv_cache_memory to it makes the split reproducible instead of dependent on what else is resident at startup.",
+				Field:      "kv_cache_memory",
+				Suggested:  g[1],
+				Applicable: true,
+				Line:       line,
 			}
 		},
 	},
