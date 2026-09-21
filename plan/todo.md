@@ -180,6 +180,28 @@ smallest card and the whole host rather than against GPU 0.
   unproven on RDNA4. Not a defect, but worth knowing: an FP8 checkpoint fails
   on RDNA3 in `torch._scaled_mm`, which needs MI300+ or Ada — the card has no
   FP8 matmul, so no image can serve it.
+- **The unified ROCm 10 image starts slowly, and compilation is not why.**
+  Measured on gfx1100 2026-09-21, same checkpoint and flags throughout
+  (4B AWQ, `max_model_len=131072`, fp8 KV):
+
+  | image | vLLM | init engine | of which compilation |
+  |---|---|---|---|
+  | `rocm-source` | 0.27.2.dev0 | 177.46 s | 140.19 s |
+  | `rocm`, 0.23 base | 0.23.1.dev1 | 56.66 s | 44.74 s |
+  | `rocm`, ROCm 10 base | 0.27.1.dev5 | **200.27 s** | 53.23 s |
+
+  Compilation fell from 140 s to 53 s and total init still rose to 200 s, so
+  something near 147 s is spent elsewhere -- memory profiling, CUDA-graph
+  capture or warmup are the candidates, and none of them has been attributed.
+  Worth doing before anyone tunes for it.
+
+  Two cautions on reading that table. Every figure is a *first* start after an
+  image changed, so the torch.compile cache was cold for that engine version
+  each time; `VLLM_CACHE_ROOT` lives on the data volume and survives a rebuild,
+  so a warm second start may look very different and has not been measured.
+  And the variants' summaries said "no compile" where they meant "no compile
+  *at build time*" -- which is how this got presented as an iteration-speed win
+  that it is not, for startup. The `rocm` summary now says "no local compile".
 - End-to-end test on RDNA4 hardware (9070 XT)
 - Validate flash-attention triton backend on gfx1201
 - `plan/archive/` still refers to `scripts/patch_vllm.py`, which is gone. Left
