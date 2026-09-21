@@ -176,3 +176,42 @@ func contains(hay []string, needle string) bool {
 	}
 	return false
 }
+
+// AMD publishes an arch-specific CDNA image and an unsuffixed unified one, and
+// since 2026-09-21 the rocm variant points at the unified build. An Instinct
+// machine therefore matches both, and should be offered both: they are real
+// alternatives -- a much newer engine against an arch-specific build carrying
+// AITER -- rather than one of them being wrong.
+func TestCDNAIsOfferedBothAMDImages(t *testing.T) {
+	const state = `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx942`
+
+	got := splitLines(runMatch(t, state, "matching_variants"))
+	for _, w := range []string{"rocm", "rocm-cdna"} {
+		if !contains(got, w) {
+			t.Errorf("%s should be offered to an Instinct machine; got %v", w, got)
+		}
+	}
+
+	// Both name architectures, so both score 1000 on specificity and the
+	// ordering rests entirely on priority. `sort -rn` is not stable, so
+	// without the deliberate one-point gap the recommended arrow would land
+	// arbitrarily -- green on one machine and wrong on the next.
+	rec := strings.TrimSpace(runMatch(t, state, "recommended_variant"))
+	if rec != "rocm" {
+		t.Errorf("recommended = %q, want rocm: the unified image carries a vLLM four "+
+			"minor versions newer, and 0.23 cannot be measured at all", rec)
+	}
+}
+
+// The converse: the CDNA-only image must not be offered to a consumer card.
+// rocm covering both families is what makes this worth asserting -- it would
+// be easy to widen the wrong manifest.
+func TestRDNAIsNotOfferedTheCDNAImage(t *testing.T) {
+	got := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
+	if contains(got, "rocm-cdna") {
+		t.Errorf("rocm-cdna is built for MI200/MI300/MI350 and must not be offered to gfx1100; got %v", got)
+	}
+	if !contains(got, "rocm") {
+		t.Errorf("rocm covers gfx1100 and should still be offered; got %v", got)
+	}
+}

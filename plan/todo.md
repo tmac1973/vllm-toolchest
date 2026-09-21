@@ -107,6 +107,34 @@ What is still owed:
   errors do not share a direction and no coefficient corrects them -- which is
   the case for measuring rather than tuning, stated in numbers rather than as
   an opinion. Leave the projected constants alone.
+- **A measurement cannot be captured on vLLM 0.23 at all.** Found on a real
+  start 2026-09-21, after this box moved from `rocm-source` (0.27.2.dev0) to
+  AMD's prebuilt `rocm` image (0.23.1.dev1). `RunMeasurement.Complete()`
+  requires `ConsumedGB`, and 0.23 never prints the line it comes from:
+
+  | line | 0.27 | 0.23 |
+  |---|---|---|
+  | `Model loading took N GiB` | yes | yes |
+  | `Available KV cache memory` | yes | yes |
+  | `GPU KV cache size: N tokens` | yes | yes |
+  | `Actual usage is … for consumed memory` | yes | **no** |
+  | `CUDA graph pool memory:` | yes | **no** — says `Graph capturing finished in N secs, took X GiB` |
+  | `--kv-cache-memory=` | yes | **no** |
+
+  So `SetMeasurement` refuses, the previous engine's measurement stays on
+  screen looking authoritative, and the only sign is one debug line. The
+  panel read 10.85 GiB of KV while the live engine held 15.72. The `rocm`
+  variant now points at AMD's unified ROCm 10 / vLLM 0.27.0 image, which fixes
+  it there — but `rocm-cdna` pins v0.23.0 and `gfx906` pins v0.23.1rc0, so
+  neither can be measured. Teaching `internal/advice` the 0.23 spellings is
+  the outstanding half, and the graph-pool line is the easy one.
+- **KV bytes per token survives an engine change.** The same model and dtype
+  measured 17,301 B/token on 0.27.2 and 17,302 on 0.23.1 — across four minor
+  versions and a whole different image. It really is a property of the
+  checkpoint and the cache dtype, not of the engine, which is what makes it
+  safe to re-scale to another context length. The pool *size* moved a lot
+  (10.85 → 15.72 GiB) and the graph pool moved (3.58 → 3.21); those are
+  engine behaviour and must not be carried across.
 - **The PLE share is corroborated but only twice.** 0.890 and 0.913 of the
   residual across two checkpoints, hence 0.90 ±5%. The gap between residual and
   table is presumably the MTP draft weights and the vision tower; if those were
