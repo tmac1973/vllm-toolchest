@@ -343,3 +343,36 @@ func withEnvFile(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Remove(path) })
 }
+
+// Three commands rebuild the container, and all three change things the
+// auto-start unit names: the image it runs, the ports it publishes, the models
+// directory it mounts, the GPU selection. install and rebuild rewrote the unit
+// afterwards; quick did not.
+//
+// That left the path used most often producing a container from the new image
+// while the unit still described the old one, until somebody happened to run a
+// full install. The machine works all day and comes up wrong after a reboot --
+// the same failure TestQuadletMatchesCompose guards against, reached through
+// the one door it cannot see, since that test compares the unit's *contents*
+// and says nothing about whether the unit was rewritten at all.
+//
+// Checked against the function bodies rather than by running them: running
+// these builds images.
+func TestEveryRebuildPathRefreshesTheQuadletUnit(t *testing.T) {
+	for _, fn := range []string{
+		"container_install",
+		"container_rebuild",
+		"container_quick_rebuild",
+	} {
+		t.Run(fn, func(t *testing.T) {
+			body := runSetupSh(t, "declare -f "+fn+"\n")
+			if !strings.Contains(body, fn) {
+				t.Fatalf("%s is not defined in setup.sh, so this asserts nothing", fn)
+			}
+			if !strings.Contains(body, "refresh_quadlet") {
+				t.Errorf("%s never calls refresh_quadlet, so auto-start keeps describing "+
+					"the previous build:\n%s", fn, body)
+			}
+		})
+	}
+}
