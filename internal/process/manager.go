@@ -410,15 +410,62 @@ func (m *Manager) observe(line string) {
 	if item == nil {
 		return
 	}
-	// A failing start prints the same complaint from every rank.
-	for _, existing := range m.advice {
-		if existing.Message == item.Message && existing.Suggested == item.Suggested {
-			return
+	// A failing start prints the same complaint from every rank -- and the
+	// ranks do not always agree on the number. Each one measures its own KV
+	// pool, so a four-card start produced four notes differing in their last
+	// few digits:
+	//
+	//	kv_cache_memory -> 4545302242
+	//	kv_cache_memory -> 4532719330
+	//	kv_cache_memory -> 4536913634
+	//
+	// The old key included Suggested, so those read as three separate pieces
+	// of advice about one thing. Identity is the rule that fired -- severity,
+	// field and message -- and the number is reconciled rather than repeated.
+	//
+	// The free-memory rule already solved this for itself by rounding to a
+	// 0.05 step "so every rank agrees on one number"; kv_cache_memory cannot,
+	// because it hands over an exact byte count the engine reported.
+	for i, existing := range m.advice {
+		if existing.Severity != item.Severity ||
+			existing.Field != item.Field ||
+			existing.Message != item.Message {
+			continue
 		}
+		if smallerSuggestion(item.Suggested, existing.Suggested) {
+			m.advice[i] = *item
+		}
+		return
 	}
 	if len(m.advice) < adviceMax {
 		m.advice = append(m.advice, *item)
 	}
+}
+
+// smallerSuggestion reports whether a is the more conservative of two values
+// for the same piece of advice.
+//
+// Every applicable suggestion is a ceiling: the KV pool to pin, the context
+// length that fits, the fraction that clears a shortfall. A figure measured
+// per rank has to hold on the tightest rank, so the smallest is the one that
+// is safe everywhere -- taking the largest would hand back a value that the
+// most crowded card cannot honour.
+//
+// Anything non-numeric, or a missing value on either side, expresses no
+// preference and the first one seen stands.
+func smallerSuggestion(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	av, err := strconv.ParseFloat(a, 64)
+	if err != nil {
+		return false
+	}
+	bv, err := strconv.ParseFloat(b, 64)
+	if err != nil {
+		return false
+	}
+	return av < bv
 }
 
 // Advice returns what the engine has said worth acting on during this run.

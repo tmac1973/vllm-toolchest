@@ -1,6 +1,11 @@
 package process
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"github.com/tmac1973/vllm-toolchest/internal/advice"
+)
 
 // The manager reads the engine's output as it streams. These drive observe
 // directly rather than launching anything: the wiring being tested is the
@@ -100,5 +105,71 @@ func TestPartialOffloadFailureIsBothAtOnce(t *testing.T) {
 	}
 	if measured.PLEOffloadWanted != 47.7 {
 		t.Errorf("wanted = %v, want 47.7", measured.PLEOffloadWanted)
+	}
+}
+
+// The ranks do not always agree on the number. Each measures its own KV pool,
+// so a four-card start reports four byte counts differing in their last few
+// digits -- and with Suggested in the dedup key those read as four separate
+// pieces of advice about one thing. Seen on a real multi-GPU start.
+//
+// The existing dedup test cannot catch this: it feeds four *identical* lines,
+// so the values match and any key collapses them.
+func TestRanksDisagreeingOnANumberAreStillOneNote(t *testing.T) {
+	m := NewManager("127.0.0.1", 0, 0)
+
+	const tmpl = "(Worker_TP%d) INFO [gpu_worker.py:789] Free memory on device (23.91/23.98 GiB) on startup. " +
+		"Desired GPU memory utilization is (0.92, 22.07 GiB). Actual usage is 4.77 GiB for consumed memory " +
+		"(weights + non-torch), 5.4 GiB for peak activation, and 3.74 GiB for CUDAGraph memory. Replace " +
+		"gpu_memory_utilization config with `--kv-cache-memory=%d` (4.23 GiB) to fit into requested memory."
+
+	// Deliberately not in ascending order: the smallest must win because it is
+	// the smallest, not because it arrived last.
+	for i, bytes := range []int64{4545302242, 4532719330, 4536913634} {
+		m.observe(fmt.Sprintf(tmpl, i, bytes))
+	}
+
+	got := m.Advice()
+	var kv []advice.Item
+	for _, it := range got {
+		if it.Field == "kv_cache_memory" {
+			kv = append(kv, it)
+		}
+	}
+	if len(kv) != 1 {
+		t.Fatalf("three ranks reporting one pool produced %d notes: %+v", len(kv), kv)
+	}
+
+	// A per-rank pool has to fit the tightest rank, so the smallest is the
+	// only value that is safe on every card.
+	if kv[0].Suggested != "4532719330" {
+		t.Errorf("kept %q; the smallest figure is the one that holds on every rank", kv[0].Suggested)
+	}
+}
+
+// Reconciling numbers must not merge genuinely different advice, and two
+// rules really do implicate max_model_len: the seq-len-vs-KV ceiling, which
+// names the length that would fit, and a plain out-of-memory failure, which
+// suggests lowering it among other things. They say different things about
+// the same setting, so a key of field alone would silently drop one.
+//
+// The assertions check the premise as well as the result: pairing two rules
+// with *different* fields would pass under either key and prove nothing.
+func TestTwoRulesSharingAFieldStaySeparate(t *testing.T) {
+	m := NewManager("127.0.0.1", 0, 0)
+	m.observe("ValueError: max seq len (262144) is larger than the maximum number of tokens that can be stored in KV cache (65536)")
+	m.observe("(Worker_TP0) torch.cuda.OutOfMemoryError: CUDA out of memory")
+
+	got := m.Advice()
+	if len(got) != 2 {
+		t.Fatalf("got %d items, want 2 -- same field, different advice: %+v", len(got), got)
+	}
+	for _, it := range got {
+		if it.Field != "max_model_len" {
+			t.Errorf("field = %q, want max_model_len: this is no longer exercising a field collision", it.Field)
+		}
+	}
+	if got[0].Message == got[1].Message {
+		t.Error("both items carry the same message, so the separation proves nothing")
 	}
 }
