@@ -91,22 +91,43 @@ What is still owed:
   different ceiling, different model — would either corroborate it or show it
   for the coincidence it might be. Until then this is the weakest number in the
   estimator, and the band is wide on purpose.
-- **The projected path is not wrong in a fixable direction.** Measured on a
-  second machine 2026-09-21 -- a 4B AWQ model on one RX 7900 XTX -- against
-  what the formula projected for the same configuration:
+- **The projected path is wrong in two terms, both in the same direction.**
+  Re-measured 2026-09-22 on the 4B AWQ model on one RX 7900 XTX, against what
+  the formula projects for the configuration it is running under:
 
-  | | projected | measured |
-  |---|---|---|
-  | total | 13.9 GB | 16.9 GB |
-  | KV per token | 73,728 | 17,301 |
-  | activation | 0.20 GB | 6.3 GB |
-  | graph pool | 0.9 GB | 3.58 GB |
+  | | projected | measured | error |
+  |---|---|---|---|
+  | weights | 3.78 GB | 3.9 GB | −3% |
+  | KV per token | 16,384 | 17,304 | −5% |
+  | activation | 0.073 GB | 5.4 GB | **74x low** |
+  | graph pool | 0.9 GB | 3.74 GB | **4.2x low** |
+  | total | 6.75 GB | ~16.2 GB | **2.4x low** |
 
-  On the 124B MXFP4 the KV figure was 2.6x too *low*; here it is 4.3x too
-  *high*. Activation is 31x low on this model and 23x low on the other. So the
-  errors do not share a direction and no coefficient corrects them -- which is
-  the case for measuring rather than tuning, stated in numbers rather than as
-  an opinion. Leave the projected constants alone.
+  Weights and KV are within 5%. The estimate is not broadly unreliable: it is
+  wrong in two specific terms, and both make the model look smaller than it
+  is, so a fit verdict built on it is optimistic rather than merely noisy.
+
+  The graph pool is a flat constant and the engine reports the real figure on
+  every start, so it is correctable. Activation is not a calibration problem:
+  `activationBaseGB` models `tokens x hidden x 2 bytes x 6 buffers` plus
+  logits, which is 63 MB here, while the engine's 5.4 GB "peak activation"
+  covers the encoder cache (16,384 tokens with image items on this model),
+  Mamba conv and state workspaces, and Triton scratch -- none of which scale
+  with `hidden_size`. The formula is measuring a different quantity, so no
+  coefficient fixes it.
+
+  **Correcting the record.** An earlier version of this entry gave the
+  projection as 13.9 GB total with 73,728 B/token, and concluded the errors
+  had no consistent direction. `internal/models` has not changed since, and
+  the same code now yields 16,384 B/token -- exactly `2 x 8 x 4 x 256 x 1`
+  from this model's own config -- and 6.75 GB total. The other three figures
+  in that table all followed from the KV one (73,728 B/token over a 131,072
+  window is 9.0 GB of KV, which is the whole of the 13.9). Reproducing 73,728
+  needs 36 KV layers, 18 KV heads or a head dim of 1152, and this model has 8,
+  4 and 256; the likeliest cause is an `HFConfig` that had not yet been
+  re-read, but it has not been reconstructed and is not asserted. The figure
+  overstated the error at the one term the formula gets right, and the
+  conclusion drawn from it -- leave the constants alone -- was wrong.
 - **A measurement cannot be captured on vLLM 0.23 at all.** Found on a real
   start 2026-09-21, after this box moved from `rocm-source` (0.27.2.dev0) to
   AMD's prebuilt `rocm` image (0.23.1.dev1). `RunMeasurement.Complete()`
