@@ -21,6 +21,28 @@ things that turned out to be wrong.
   figures from the engine's own report instead of deriving them. A reversal of
   phase 13's assumption that the estimator could be calibrated into
   correctness; §1 is the evidence that it could not.
+- [`recommend-models-overview.md`](recommend-models-overview.md) — the shared
+  definition for phases 15–19: a hardware- and runtime-aware "Recommended for
+  this machine" feed on the Download Models page, generated from the Hub
+  rather than from a shipped list. Planned, not built.
+- [`phase-15-exact-model-sizes.md`](phase-15-exact-model-sizes.md) — take model
+  sizes from the Hub's `safetensors` metadata instead of a dense-transformer
+  formula that understates a mixture-of-experts checkpoint by its expert
+  count. Ships on its own; everything after it depends on the figures.
+- [`phase-16-arch-registry-probe.md`](phase-16-arch-registry-probe.md) — read
+  the running image's supported model architectures out of vLLM's own
+  registry, by the probe-and-cache pattern the device name already uses.
+  Independent of phase 15.
+- [`phase-17-recommend-engine.md`](phase-17-recommend-engine.md) — the
+  `internal/recommend` package: the machine profile, the candidate pool, the
+  staged ranking the Hub's two-tier API forces, and the four objectives. Ends
+  at a JSON endpoint, with no UI.
+- [`phase-18-recommend-feed.md`](phase-18-recommend-feed.md) — the feed itself:
+  the profile line that makes a wrong recommendation traceable, the four
+  intent chips, and the verified and unverified lists.
+- [`phase-19-fit-handoff.md`](phase-19-fit-handoff.md) — seed a downloaded
+  model's config from the fit that ranked it. §"What seeding is not" records
+  why measurement does not supersede it, which an earlier draft assumed.
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive
