@@ -9,14 +9,47 @@
         overflow-y: auto;
     }
     .server-top { flex-shrink: 0; }
+    /* Two panes share what is left below the cards. The advice pane was added
+       to this section without being given a size, and as a plain block child
+       it displaced the log pane by its own height -- under overflow:hidden
+       that pushed the logs out of the section and clipped them, with nothing
+       to scroll. So both panes are sized here: advice by its content up to a
+       share of the section, logs by whatever remains. */
     .server-page .log-section {
         flex: 1;
-        min-height: 300px;
+        /* Enough for both panes. When the window is too short for it, the
+           page scrolls rather than one pane eating the other. */
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
         overflow: hidden;
+    }
+    .server-page .advice-section {
+        flex: 0 1 auto;
+        margin: 0;
+        /* Sized by its content -- usually one line -- but never more than its
+           share, however much the engine had to say. */
+        max-height: 40%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .server-page .advice-section > header { flex-shrink: 0; }
+    .server-page .advice-section > div {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
     }
     .server-page .log-section .log-panel {
         margin: 0;
-        height: 100%;
+        /* flex:1 with min-height:0, not height:100%: 100% of the section was
+           the whole section, which is why a second pane above it had nowhere
+           to go. min-height:0 is what lets this shrink past its content so
+           the <pre> inside scrolls. */
+        flex: 1;
+        min-height: 0;
         display: flex;
         flex-direction: column;
     }
@@ -134,7 +167,7 @@
     </div>
 
     <div class="log-section">
-        <article>
+        <article class="advice-section">
             <header>What the engine said</header>
             <div id="service-advice"
                  hx-get="/api/service/advice"
