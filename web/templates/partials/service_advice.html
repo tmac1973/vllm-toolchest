@@ -1,9 +1,38 @@
-{{/* What the engine said during this run. Takes an adviceView. */}}
+{{/* Engine Notes: what vLLM reported during this start. Takes an adviceView.
+
+     Two pieces come back from one render. The strip above the logs is the main
+     content, swapped into #service-advice; the list is swapped out of band into
+     the dialog's body. They are split because the dialog itself must survive
+     the ten-second poll -- were it inside the swapped element, a poll landing
+     while someone was reading would replace the <dialog> and close it. */}}
 {{define "service_advice"}}
+<div class="engine-notes" data-level="{{.Level}}" data-sig="{{.Sig}}">
+  {{- if .Quiet}}
+  <span class="engine-notes-text">Engine notes &mdash; nothing to report from this start</span>
+  <button type="button" class="outline secondary" onclick="openEngineNotes()">View</button>
+  {{- else}}
+  <span class="engine-notes-icon" aria-hidden="true">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
+      <path d="M8 2.2L14.5 13.5h-13z" stroke-linejoin="round"/>
+      <path d="M8 6.4v3.2" stroke-linecap="round"/>
+      <path d="M8 11.6v.1" stroke-linecap="round"/>
+    </svg>
+  </span>
+  <span class="engine-notes-text">{{.Summary}}</span>
+  <button type="button" onclick="openEngineNotes()">Review</button>
+  {{- end}}
+</div>
+
+<div hx-swap-oob="innerHTML:#engine-notes-body">
 {{- if .OK}}<p style="margin:0 0 0.6rem;"><mark>{{.OK}}</mark></p>{{end}}
 {{- if .Error}}<p style="margin:0 0 0.6rem;"><del>{{.Error}}</del></p>{{end}}
 {{- if .Quiet}}
 <p style="margin:0;opacity:0.7;font-size:0.85rem;">Nothing to report from this start.</p>
+<p style="margin:0.6rem 0 0;opacity:0.7;font-size:0.8rem;">
+  vLLM says what it measured and what it would change while it starts. Anything
+  it says worth acting on is collected here, and the strip above the logs turns
+  amber or red when there is something.
+</p>
 {{- else}}
 <ul style="margin:0;padding:0;list-style:none;">
   {{- range .Rows}}
@@ -24,7 +53,7 @@
       <input type="hidden" name="field" value="{{.Field}}">
       <input type="hidden" name="value" value="{{.Suggested}}">
       <button type="submit" class="outline secondary"
-              style="margin:0;padding:0.15rem 0.6rem;font-size:0.75rem;"
+              style="margin:0;padding:0.15rem 0.6rem;font-size:0.75rem;width:auto;"
               title="{{if .Pins}}Pins the KV pool at this size. While pinned it stops responding to other memory changes, and the pool can no longer be measured — clear it before measuring again.{{else}}Writes this value to the model's config. It takes effect on the next restart.{{end}}">
         Set {{.Field}} to {{.Suggested}}
       </button>
@@ -41,4 +70,5 @@
   {{- end}}
 </ul>
 {{- end}}
+</div>
 {{end}}
