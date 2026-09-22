@@ -110,9 +110,40 @@
         white-space: pre-wrap;
     }
 
+    /* --- The top of the page --- */
+    /* Everything above the logs is reference material: a status, some counts,
+       an endpoint to copy. Pico's article padding and paragraph rhythm are set
+       for prose, and across five cards they were costing the log pane two
+       thirds of the section -- 596px of 813, leaving the <pre> three lines.
+       These rules tighten this page's top only; the same partials keep their
+       normal spacing everywhere else they are used. */
+    .server-top article {
+        padding-top: 0.7rem;
+        padding-bottom: 0.7rem;
+        margin-bottom: 0;
+    }
+    /* Pico pads an article header for prose, which was 46px of card for the
+       single word "Server". Only the vertical padding is touched: the header
+       is bled to the card's edges by negative margins, and its horizontal
+       padding is what puts the title back in line with the body. Zeroing the
+       top padding instead of shrinking it lets the negative top margin carry
+       the title out above the card's border. */
+    .server-top article > header {
+        padding-top: 0.45rem;
+        padding-bottom: 0.45rem;
+        margin-bottom: 0.5rem;
+    }
+    .server-top article p { margin-bottom: 0.3rem; }
+    .server-top article p:last-child { margin-bottom: 0; }
+    .server-top .grid { margin-bottom: 0.5rem; }
+
     /* Compact controls inside the Server card */
-    .server-card header { margin-bottom: 0.4rem; }
-    .server-card label { font-size: 0.75rem; margin-bottom: 0.5rem; }
+    .server-card label { font-size: 0.75rem; margin-bottom: 0.25rem; }
+    /* Pico gives a form element a full spacing unit below it, for stacked
+       fields. This form has one field and a button row of its own beneath,
+       so that margin was only padding the card out. */
+    .server-card select { margin-bottom: 0; }
+    .server-card #server-settings-form { margin-bottom: 0.35rem; }
     .server-card select,
     .server-card input[type="number"] {
         padding: 0.25rem 0.4rem;
@@ -132,12 +163,14 @@
         white-space: nowrap;
         overflow: hidden;
     }
-    #server-status-badge { font-size: 0.85rem; margin-bottom: 0.5rem; }
+    #server-status-badge { font-size: 0.85rem; margin-bottom: 0.4rem; }
+    .server-top #server-status-badge p { margin-bottom: 0.15rem; }
     #model-save-status { font-size: 0.75rem; color: var(--pico-muted-color); min-height: 1rem; }
     #model-save-status p { margin: 0; }
-    .live-perf header { margin-bottom: 0.3rem; font-size: 0.9rem; }
-    .live-perf { margin-bottom: 0.5rem; padding-top: 0.75rem; padding-bottom: 0.75rem; }
-    .live-perf table { margin: 0; }
+    /* Spacing comes from the .server-top rules above, which are more
+       specific; only the size is this card's own. */
+    .live-perf > header { font-size: 0.9rem; }
+    .live-perf table { margin: 0 0 0.3rem; }
 </style>
 
 <div class="server-page">
