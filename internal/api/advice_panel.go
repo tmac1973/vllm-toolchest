@@ -1,8 +1,12 @@
 package api
 
 import (
+	"fmt"
+	"hash/fnv"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/advice"
 )
@@ -52,6 +56,22 @@ type adviceView struct {
 	// no separate element on the server page to put a notice in.
 	OK    string
 	Error string
+
+	// Level, Summary and Sig are the banner: the one line that stands in for
+	// the panel on the server page, which is now a strip above the logs rather
+	// than a pane competing with them for height.
+	//
+	// Level tints it -- the worst severity present, since that is what decides
+	// how loudly the strip should ask to be opened.
+	Level string
+	// Summary is what the strip says when there is something to say. Composed
+	// here rather than in the template: counting by severity and pluralising is
+	// not something Go templates do without becoming unreadable.
+	Summary string
+	// Sig fingerprints the rows so the page can tell a changed panel from the
+	// same panel polled again. The strip pulses on a change and then stops;
+	// without this it would pulse every ten seconds forever.
+	Sig string
 }
 
 // applyTarget is the element an apply swaps into. The panel lives on the
@@ -89,7 +109,10 @@ func (s *Server) handleServiceAdvice(w http.ResponseWriter, r *http.Request) {
 // No process is the same answer as a process that said nothing.
 func (s *Server) adviceSnapshot() adviceView {
 	if s.process == nil {
-		return adviceView{Quiet: true}
+		// Through newAdviceView rather than a bare literal, so the banner's
+		// level and fingerprint are the quiet ones rather than empty strings
+		// the strip would have to guess at.
+		return newAdviceView(nil)
 	}
 	v := newAdviceView(s.process.Advice())
 	v.ModelID = s.process.GetStatus().ModelID
@@ -121,7 +144,77 @@ func newAdviceView(items []advice.Item) adviceView {
 	sort.SliceStable(v.Rows, func(i, j int) bool {
 		return adviceRank(v.Rows[i].Severity) < adviceRank(v.Rows[j].Severity)
 	})
+
+	v.Level, v.Summary = adviceBanner(v.Rows)
+	v.Sig = adviceSig(v.Rows)
 	return v
+}
+
+// adviceBanner reduces the rows to the one line the strip shows.
+//
+// The counts are per severity because "3 notes" and "1 error, 2 warnings" ask
+// for very different amounts of attention, and a bare total would flatten the
+// difference at exactly the moment it matters.
+func adviceBanner(rows []adviceRow) (level, summary string) {
+	if len(rows) == 0 {
+		return "quiet", ""
+	}
+
+	var errs, warns, notes int
+	for _, r := range rows {
+		switch advice.Severity(r.Severity) {
+		case advice.Error:
+			errs++
+		case advice.Warning:
+			warns++
+		default:
+			notes++
+		}
+	}
+
+	var parts []string
+	for _, c := range []struct {
+		n    int
+		word string
+	}{{errs, "error"}, {warns, "warning"}, {notes, "note"}} {
+		if c.n > 0 {
+			parts = append(parts, plural(c.n, c.word))
+		}
+	}
+
+	switch {
+	case errs > 0:
+		level = "error"
+	case warns > 0:
+		level = "warning"
+	default:
+		level = "note"
+	}
+	return level, strings.Join(parts, ", ") + " from this start"
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
+// adviceSig fingerprints the panel's contents.
+//
+// Severity, field and message rather than the whole row: those are what the
+// reader would notice changing. The verbatim line moves with the message, and
+// hashing it too would only make the fingerprint more expensive to compute
+// without making it more sensitive.
+func adviceSig(rows []adviceRow) string {
+	if len(rows) == 0 {
+		return "quiet"
+	}
+	h := fnv.New64a()
+	for _, r := range rows {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00", r.Severity, r.Field, r.Message)
+	}
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 func adviceRank(severity string) int {
