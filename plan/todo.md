@@ -180,6 +180,47 @@ smallest card and the whole host rather than against GPU 0.
   unproven on RDNA4. Not a defect, but worth knowing: an FP8 checkpoint fails
   on RDNA3 in `torch._scaled_mm`, which needs MI300+ or Ada — the card has no
   FP8 matmul, so no image can serve it.
+- **Start-up cost is per image, not per start.** Measured on gfx1100
+  2026-09-21, same checkpoint and flags throughout (4B AWQ,
+  `max_model_len=131072`, fp8 KV):
+
+  | image | vLLM | init engine | of which compilation |
+  |---|---|---|---|
+  | `rocm-source` | 0.27.2.dev0 | 177.46 s | 140.19 s |
+  | `rocm`, 0.23 base | 0.23.1.dev1 | 56.66 s | 44.74 s |
+  | `rocm`, ROCm 10 base, **first** start | 0.27.1.dev5 | 200.27 s | 53.23 s |
+  | `rocm`, ROCm 10 base, **restart** | 0.27.1.dev5 | **31.66 s** | 0.44 s |
+
+  A restart is 6.3x faster, and the log says why outright:
+  `Directly load AOT compilation from path
+  /data/cache/vllm/torch_compile_cache/torch_aot_compile/ab8999fd…`. That
+  directory is 612 MB, sits on the `vllmctl-data` volume, and therefore
+  survives a rebuild -- but it is keyed to the engine build and model config,
+  so switching base image invalidates it and the next start pays in full, once.
+
+  Where the warm 31.66 s goes, from the timestamps:
+
+  | phase | cost |
+  |---|---|
+  | loading weights | 3.0 s |
+  | reconstructing AOT artifacts (13 artifacts, 33 submods) | **~21 s** |
+  | `torch.compile` | 0.44 s |
+  | profiling / warmup | 0.6 s |
+  | graph-memory profiling and KV sizing | ~3 s |
+  | CUDA graph capture (3.74 GiB) | 6 s |
+
+  So even a warm start is dominated by the compile cache -- the *read* side of
+  it. Deserializing 13 artifacts takes two thirds of the start, which is the
+  thing to attack if 30 s is still too slow; profiling and graph capture are
+  not where the time is.
+
+  Two corrections to what this entry said an hour earlier, both mine. It
+  claimed ~147 s was unattributed and blamed profiling, graph capture or
+  warmup: wrong, it was cold-cache AOT compilation, and the phase table above
+  is what attributing it actually looks like. And it said a warm start "has not
+  been measured" while asserting startup was simply slow -- stated as a caveat,
+  but load-bearing, and it took one restart to settle. Measure before
+  characterising.
 - End-to-end test on RDNA4 hardware (9070 XT)
 - Validate flash-attention triton backend on gfx1201
 - `plan/archive/` still refers to `scripts/patch_vllm.py`, which is gone. Left
