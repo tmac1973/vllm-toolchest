@@ -1598,6 +1598,10 @@ container_down() {
 container_install() {
     ensure_base_image
     write_env_file
+    # Ports, the models directory and the GPU selection were just re-asked;
+    # the auto-start unit has to be rewritten from them or a reboot undoes the
+    # answers.
+    refresh_quadlet
 
     # Remove any existing container before bringing one up. `up -d` alone does
     # NOT apply a changed environment under podman-compose -- it sees the
@@ -1630,6 +1634,7 @@ container_rebuild() {
     container_down
     $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
     write_env_file
+    refresh_quadlet
     BUILDKIT_PROGRESS=plain $(compose_cmd) build --no-cache --progress=plain
 
     if [[ "$quadlet_active" == true ]]; then
@@ -1699,36 +1704,69 @@ get_volume_name() {
         || echo "vllmctl-data"
 }
 
+# generate_quadlet writes the auto-start unit.
+#
+# Everything compose grants has to be granted here too, or auto-start quietly
+# produces a weaker container than `setup.sh install` does and the difference
+# only shows after a reboot. The list is checked against the compose files by
+# TestQuadletMatchesCompose -- add a setting to one, add it to the other.
 generate_quadlet() {
     local image_name="localhost/vllm-toolchest:latest"
     local volume_name
     volume_name="$(get_volume_name)"
-    local gpu_args=""
 
-    if [[ "$GPU_VENDOR" == "cuda" ]]; then
-        gpu_args="AddDevice=nvidia.com/gpu=all"
-    elif [[ "$GPU_VENDOR" == "rocm" ]]; then
-        local hsa_env=""
-        if [[ -n "$AMD_GFX_VERSION" ]]; then
-            hsa_env="Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
-        fi
-        # Extra capabilities come from the variant's manifest. Unlike compose,
-        # a Quadlet unit is generated per install, so this can be per-variant
-        # rather than the union across a vendor.
-        local extra_caps="" cap
-        for cap in $(variant_field "$BUILD_VARIANT" CAPS); do
-            extra_caps+="AddCapability=${cap}"$'\n'
-        done
-        extra_caps="${extra_caps%$'\n'}"
-        gpu_args="AddDevice=/dev/kfd
+    # Capabilities come from the variant's manifest. Unlike compose, a Quadlet
+    # unit is generated per install, so this can be per-variant rather than the
+    # union across a vendor.
+    local extra_caps="" cap
+    for cap in $(variant_field "$BUILD_VARIANT" CAPS); do
+        extra_caps+="AddCapability=${cap}"$'\n'
+    done
+    extra_caps="${extra_caps%$'\n'}"
+
+    # Collected into one key rather than several. PodmanArgs= may be repeated
+    # on current podman, but older generators keep only the last line, and a
+    # silently dropped --ipc=host is exactly the kind of divergence this unit
+    # keeps being fixed for.
+    local podman_args="--ipc=host"
+
+    # Only the device wiring differs by vendor.
+    local gpu_args=""
+    case "$GPU_VENDOR" in
+        cuda)
+            gpu_args="AddDevice=nvidia.com/gpu=all"
+            ;;
+        rocm)
+            # seccomp=unconfined matches docker-compose.amd.yml; the ROCm
+            # runtime trips the default profile.
+            podman_args+=" --security-opt seccomp=unconfined"
+            gpu_args="AddDevice=/dev/kfd
 AddDevice=/dev/dri
 SecurityLabelDisable=true
-PodmanArgs=--ipc=host
-ShmSize=${VLLMCTL_SHM_SIZE:-8gb}
 GroupAdd=${HOST_VIDEO_GID:-video}
-GroupAdd=${HOST_RENDER_GID:-render}
-${extra_caps}
-${hsa_env}"
+GroupAdd=${HOST_RENDER_GID:-render}"
+            if [[ -n "$AMD_GFX_VERSION" ]]; then
+                gpu_args+=$'\n'"Environment=HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
+            fi
+            ;;
+        xpu)
+            gpu_args="AddDevice=/dev/dri
+GroupAdd=${HOST_VIDEO_GID:-video}
+GroupAdd=${HOST_RENDER_GID:-render}"
+            ;;
+    esac
+
+    # The knob variables, the GPU selection and the HuggingFace token all live
+    # in .env, and compose loads it wholesale via env_file. Without this the
+    # systemd-started container runs with none of them: every feature switch
+    # off, every GPU visible, gated models unreachable.
+    #
+    # Emitted only when the file is there, mirroring compose's required:false.
+    # podman fails the unit outright on a missing --env-file, and the unit is
+    # rewritten on every install anyway (refresh_quadlet).
+    local env_file_line=""
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        env_file_line="EnvironmentFile=${SCRIPT_DIR}/.env"
     fi
 
     cat <<EOF
@@ -1747,8 +1785,27 @@ ContainerName=vllm-toolchest
 PublishPort=${VLLMCTL_PORT}:3000
 PublishPort=${VLLMCTL_INFERENCE_PORT}:8000
 Volume=${volume_name}:/data:z
+# The models bind mount, when one is configured. docker-compose.models.yml
+# adds it on the compose path; without this line a container started by
+# systemd after a reboot sees an empty /data/models while the same install
+# run through compose sees every model.
+${VLLMCTL_MODELS_DIR:+Volume=${VLLMCTL_MODELS_DIR}:/data/models:z}
+${env_file_line}
+# No ShmSize= here, deliberately. --ipc=host hands the container the host's
+# /dev/shm, so there is nothing left to size, and podman refuses the pair
+# outright -- the unit died on every boot with exit 125:
+#
+#   Error: invalid config provided: cannot set shmsize when running in the
+#   {host } IPC Namespace
+#
+# The compose files do carry shm_size alongside ipc:host, and must: podman-
+# compose silently drops ipc:host, so shm_size is the only thing that gives
+# the container more than the 64 MB default there. Quadlet applies ipc:host
+# for real, so it needs neither the key nor VLLMCTL_SHM_SIZE.
+PodmanArgs=${podman_args}
+${extra_caps}
 # Match what the compose files grant, or auto-start silently produces a weaker
-# container than `setup.sh install` does. memlock is the one that matters: an
+# container than \`setup.sh install\` does. memlock is the one that matters: an
 # offload path that pins host memory -- the PLE n-gram table, pinned expert
 # buffers -- fails against the 8 MiB default and falls back to unpinned, or
 # does not load at all.
@@ -1769,6 +1826,20 @@ LimitMEMLOCK=infinity
 [Install]
 WantedBy=default.target
 EOF
+}
+
+# refresh_quadlet rewrites an existing auto-start unit from the current
+# settings. The unit is a snapshot of one install -- ports, models directory,
+# GPU wiring, .env -- so an install or rebuild that changes any of those has to
+# rewrite it, or systemd keeps starting the container the *previous* install
+# described. Does nothing when auto-start was never enabled.
+refresh_quadlet() {
+    has_quadlet || return 0
+    local qdir
+    qdir="$(quadlet_dir)"
+    log "Refreshing Quadlet unit: ${qdir}/${PODMAN_SERVICE_NAME}.container"
+    generate_quadlet > "${qdir}/${PODMAN_SERVICE_NAME}.container"
+    systemctl_cmd daemon-reload
 }
 
 autostart_enable() {
