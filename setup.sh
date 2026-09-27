@@ -1650,6 +1650,13 @@ container_quick_rebuild() {
     ensure_base_image
     container_down
     write_env_file
+    # For the same reason install and rebuild do it. The unit names the image
+    # and the settings write_env_file just rewrote, and this is the path used
+    # most often -- so leaving it out meant the auto-start unit went on
+    # describing the previous build until somebody happened to run a full
+    # install. That is the divergence TestQuadletMatchesCompose exists to
+    # catch, arriving through the one door it does not watch.
+    refresh_quadlet
     BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
 }
 
