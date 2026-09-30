@@ -1,6 +1,7 @@
 package process
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -12,7 +13,7 @@ import (
 )
 
 // readyHarness is a Manager pointed at a health endpoint the test controls,
-// with a real live child process so processAlive() means something.
+// with a real live child process standing in for the engine.
 func readyHarness(t *testing.T, healthy *atomic.Bool, timeout time.Duration) *Manager {
 	t.Helper()
 
@@ -69,6 +70,19 @@ func waitForState(t *testing.T, m *Manager, want State, within time.Duration) {
 		m.GetStatus().State, within, want, m.GetStatus().Error)
 }
 
+// waitForOverdue waits for a start to be marked as past its deadline.
+func waitForOverdue(t *testing.T, m *Manager, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if m.GetStatus().Overdue {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("start was never marked overdue (state %s)", m.GetStatus().State)
+}
+
 // The case this was written for. A 125B MoE printed "Application startup
 // complete" at 9m26s while the poll had already given up, so a serving engine
 // was reported as failed until someone restarted it.
@@ -77,18 +91,86 @@ func TestAServerThatComesUpLateIsNotLeftMarkedFailed(t *testing.T) {
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
 	go m.waitForReady()
-
-	waitForState(t, m, StateError, 2*time.Second)
-	if e := m.GetStatus().Error; !strings.Contains(e, "still watching") {
-		t.Errorf("error text = %q, want it to say the watch continues", e)
-	}
+	waitForOverdue(t, m, 2*time.Second)
 
 	// The engine finishes loading well after the deadline.
 	healthy.Store(true)
 
 	waitForState(t, m, StateRunning, 2*time.Second)
-	if e := m.GetStatus().Error; e != "" {
-		t.Errorf("error text = %q, want it cleared once healthy", e)
+	st := m.GetStatus()
+	if st.Error != "" || st.Notice != "" || st.Overdue {
+		t.Errorf("a late start that came good still carries error %q, notice %q, overdue %v",
+			st.Error, st.Notice, st.Overdue)
+	}
+}
+
+// Past the deadline with the process alive is a slow start, not a failed one.
+// It was reported as "error" while the watch went on, and an operator reading
+// that beside a first start would reasonably stop it.
+func TestASlowStartIsNotReportedAsAnError(t *testing.T) {
+	var healthy atomic.Bool
+	m := readyHarness(t, &healthy, 60*time.Millisecond)
+
+	go m.waitForReady()
+	waitForOverdue(t, m, 2*time.Second)
+
+	st := m.GetStatus()
+	if st.State != StateStarting {
+		t.Errorf("state = %s past the startup timeout, want it still %s", st.State, StateStarting)
+	}
+	if st.Error != "" {
+		t.Errorf("error = %q for a start that has not failed", st.Error)
+	}
+	for _, want := range []string{"Still starting", "Nothing has failed"} {
+		if !strings.Contains(st.Notice, want) {
+			t.Errorf("notice = %q, want it to say %q", st.Notice, want)
+		}
+	}
+	if st.Uptime == "" {
+		t.Error("no elapsed time reported for a start still in progress")
+	}
+}
+
+// The error state was also unmanageable while the process lived: Stop refuses
+// it and Start accepts it, so a slow engine could not be stopped and could
+// have a second one launched on top of it, onto GPUs it was still holding.
+func TestAnOverdueStartCannotBeStartedOver(t *testing.T) {
+	var healthy atomic.Bool
+	m := readyHarness(t, &healthy, 60*time.Millisecond)
+
+	go m.waitForReady()
+	waitForOverdue(t, m, 2*time.Second)
+
+	err := m.Start("org/other", "/nowhere", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Errorf("Start during an overdue start returned %v, want a refusal", err)
+	}
+	if got := m.GetStatus().ModelID; got != "org/model" {
+		t.Errorf("model = %q, the overdue start was replaced", got)
+	}
+}
+
+// The other start that never finishes. The engine says it failed and the
+// process does not exit -- seen on a checkpoint newer than its image, where
+// the API server raised and then sat there. That must not read as slow.
+func TestAStartTheEngineGaveUpOnIsNotCalledSlow(t *testing.T) {
+	var healthy atomic.Bool
+	m := readyHarness(t, &healthy, 60*time.Millisecond)
+
+	m.streamOutput(io.NopCloser(strings.NewReader(
+		"(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above.\n")))
+
+	st := m.GetStatus()
+	if !st.StartFailed || !strings.Contains(st.Notice, "failed to start") {
+		t.Errorf("start_failed = %v, notice = %q, want the failure reported", st.StartFailed, st.Notice)
+	}
+
+	// Still so once the deadline passes: the failure outranks the lateness.
+	go m.waitForReady()
+	time.Sleep(200 * time.Millisecond)
+	st = m.GetStatus()
+	if !st.StartFailed || st.Overdue || strings.Contains(st.Notice, "Nothing has failed") {
+		t.Errorf("a failed start reads as a slow one: %+v", st)
 	}
 }
 

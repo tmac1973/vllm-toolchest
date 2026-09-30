@@ -38,6 +38,18 @@ type Status struct {
 	Uptime    string    `json:"uptime,omitempty"`
 	Error     string    `json:"error,omitempty"`
 
+	// Overdue is set while a start has outlasted the startup timeout and its
+	// process is still alive. The state stays "starting": nothing has failed,
+	// and a first start that compiles and tunes kernels is routinely slower
+	// than any start after it.
+	Overdue bool `json:"overdue,omitempty"`
+	// StartFailed is set while the engine has said it could not start and
+	// its process has not exited. It is the other thing a start that never
+	// finishes can be, and it must not read as a slow one.
+	StartFailed bool `json:"start_failed,omitempty"`
+	// Notice is what to tell the operator about either of those.
+	Notice string `json:"notice,omitempty"`
+
 	// Args is the flag list the running engine was launched with, after the
 	// model path and host/port. Recorded because "is the right thing running?"
 	// cannot be answered by the model id alone: a benchmark sweep serves one
@@ -74,8 +86,11 @@ type Manager struct {
 	vllmPort   int
 	launcher   Launcher
 	// startupTimeout is how long a launch may take before it is reported as
-	// failed. The watch continues past it; see waitForReady.
+	// overdue. The watch continues past it; see waitForReady.
 	startupTimeout time.Duration
+	// overdue and startFailed describe a start still in progress; see Status.
+	overdue     bool
+	startFailed bool
 	// pollInterval is how often /health is checked. A field so tests do not
 	// wait two seconds per state transition; nothing else sets it.
 	pollInterval time.Duration
@@ -102,8 +117,8 @@ type Manager struct {
 const adviceMax = 64
 
 // DefaultStartupTimeout is used when a caller passes nothing sensible. It is
-// generous on purpose: the cost of waiting too long is a stale label, and the
-// cost of giving up too early used to be a healthy server reported as failed.
+// generous on purpose: passing it only marks a start overdue, and a label that
+// says so about every first start of a large model tells nobody anything.
 const DefaultStartupTimeout = 30 * time.Minute
 
 func NewManager(vllmHost string, vllmPort int, startupTimeout time.Duration) *Manager {
@@ -148,6 +163,20 @@ func (m *Manager) GetStatus() Status {
 		s.StartedAt = m.startedAt
 		s.Uptime = time.Since(m.startedAt).Truncate(time.Second).String()
 	}
+	if m.state == StateStarting {
+		switch {
+		case m.startFailed:
+			s.StartFailed = true
+			s.Notice = "The engine reported that it failed to start, but its process has not exited. " +
+				"The log says why. Stop clears it."
+		case m.overdue:
+			s.Overdue = true
+			s.Notice = fmt.Sprintf("Still starting after %s, which is longer than the startup timeout. "+
+				"Nothing has failed: the process is alive and being watched, and the log shows what it is doing. "+
+				"A model's first start is often much slower than later ones. "+
+				"This changes to Running when the engine answers.", m.startupTimeout)
+		}
+	}
 	if m.lastError != "" {
 		s.Error = m.lastError
 	}
@@ -165,6 +194,8 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.modelID = modelID
 	m.args = append([]string(nil), args...)
 	m.lastError = ""
+	m.overdue = false
+	m.startFailed = false
 	m.startedAt = time.Now()
 	m.mu.Unlock()
 
@@ -391,6 +422,11 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 			}
 			m.mu.Unlock()
 		}
+		if advice.StartFailed(line) {
+			m.mu.Lock()
+			m.startFailed = true
+			m.mu.Unlock()
+		}
 	}
 }
 
@@ -538,16 +574,23 @@ func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc) {
 	}
 }
 
-// waitForReady polls vLLM's /health until it answers, and keeps polling after
-// the startup deadline for as long as the process is alive.
+// waitForReady polls vLLM's /health until it answers, for as long as the
+// process is alive.
 //
-// The deadline marks the state as failed, because an operator staring at
-// "starting" forever learns nothing. It does not stop the watch. This used to
-// return there, and a model that became healthy one second late stayed marked
-// failed until someone restarted it -- which happened on a 125B MoE whose
-// engine printed "Application startup complete" at 9m26s, inside the old
-// 10-minute deadline, while the poll had already given up. The server was
-// serving on its own port and the proxy in front of it refused every request.
+// The startup deadline does not end the watch and does not fail the start. It
+// marks the start overdue, which the status reports beside a state that is
+// still "starting".
+//
+// It used to do more than that, twice. First it returned at the deadline, and
+// a model that became healthy one second late stayed marked failed until
+// someone restarted it -- which happened on a 125B MoE whose engine printed
+// "Application startup complete" at 9m26s, inside the old 10-minute deadline,
+// while the poll had already given up. Then it kept watching but set the state
+// to error in the meantime, and that was wrong in a quieter way: an operator
+// reading "Error" beside a first start that was simply slow would reasonably
+// stop it. It also made the process unmanageable. Stop refuses a state of
+// error, and Start accepts one, so a live engine past its deadline could not
+// be stopped and could have a second one launched on top of it.
 //
 // The health GET carries its own timeout. With http.Get's default of none, a
 // request issued just before the deadline could hang past it, and the loop
@@ -560,19 +603,13 @@ func (m *Manager) waitForReady() {
 	ticker := time.NewTicker(m.pollInterval)
 	defer ticker.Stop()
 
-	lateStart := false
-
 	for {
 		select {
 		case <-deadline:
 			m.mu.Lock()
 			if m.state == StateStarting {
-				m.state = StateError
-				m.lastError = fmt.Sprintf(
-					"startup timeout (%s) -- still watching; it will report running if it finishes",
-					m.startupTimeout)
-				lateStart = true
-				slog.Warn("vLLM startup timed out; still polling",
+				m.overdue = true
+				slog.Warn("vLLM is taking longer than the startup timeout; still polling",
 					"model", m.modelID, "timeout", m.startupTimeout)
 			}
 			m.mu.Unlock()
@@ -582,17 +619,11 @@ func (m *Manager) waitForReady() {
 			state := m.state
 			m.mu.RUnlock()
 
-			// Stop when the process is gone or on its way out. A state of
-			// StateError is not a reason to stop while the process is still
-			// up: after the deadline that is exactly the state a late but
-			// healthy engine is in, and it is the case this loop exists for.
-			switch state {
-			case StateStopped, StateStopping:
+			// Anything but starting means there is nothing left to wait for:
+			// the process exited, is being stopped, or the log stream already
+			// saw it come up.
+			if state != StateStarting {
 				return
-			case StateError:
-				if !lateStart || !m.processAlive() {
-					return
-				}
 			}
 
 			resp, err := client.Get(healthURL)
@@ -605,8 +636,8 @@ func (m *Manager) waitForReady() {
 			}
 
 			m.mu.Lock()
-			if m.state == StateStarting || (lateStart && m.state == StateError) {
-				if lateStart {
+			if m.state == StateStarting {
+				if m.overdue {
 					slog.Info("vLLM came up after the startup timeout",
 						"model", m.modelID, "after", time.Since(m.startedAt).Truncate(time.Second))
 				} else {
@@ -619,15 +650,6 @@ func (m *Manager) waitForReady() {
 			return
 		}
 	}
-}
-
-// processAlive reports whether the launched process is still running. Used to
-// decide whether a failed state is worth continuing to watch: a timeout with a
-// live process may still come good, an exited one never will.
-func (m *Manager) processAlive() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.cmd != nil && m.cmd.Process != nil && m.cmd.ProcessState == nil
 }
 
 // BuildArgs constructs vLLM CLI arguments from a model config.

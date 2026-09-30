@@ -110,6 +110,18 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 			return fmt.Errorf("vLLM entered error state: %s", st.Error)
 		case process.StateStopped:
 			return errors.New("vLLM stopped before becoming ready")
+		case process.StateStarting:
+			// An interactive start waits for as long as the process lives,
+			// because somebody is watching it. A job is unattended, and one
+			// cell that never comes up would otherwise hold the whole queue;
+			// the startup timeout is still the bound here, as it was when
+			// passing it put the manager in its error state.
+			if st.StartFailed {
+				return errors.New("vLLM reported that the engine failed to start; see the server log")
+			}
+			if st.Overdue {
+				return errors.New("vLLM did not become ready within the startup timeout")
+			}
 		}
 		select {
 		case <-ctx.Done():

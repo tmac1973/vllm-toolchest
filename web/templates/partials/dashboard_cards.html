@@ -44,7 +44,13 @@
 
 {{define "service_status" -}}
 <div>
-  <p>Status: {{template "service_badge" .State}}</p>
+  {{- /* A start that is slow and a start that has failed are both still
+         "starting" to the process manager, and have to look different from
+         each other and from an error: the first is not one, and reading it
+         as one is how a first start gets stopped nine minutes in. */}}
+  <p>Status: {{if .StartFailed}}<del>Failed to start</del>
+    {{- else if .Overdue}}<mark>Still starting...</mark>
+    {{- else}}{{template "service_badge" .State}}{{end}}</p>
   {{- if .ModelID}}
   <p>Model: <strong>{{.ModelID}}</strong></p>
   {{- end}}
@@ -53,6 +59,9 @@
   {{- end}}
   {{- if .Error}}
   <p><small><del>{{.Error}}</del></small></p>
+  {{- end}}
+  {{- if .Notice}}
+  <p><small>{{.Notice}}</small></p>
   {{- end}}
 </div>
 {{- /* Once the state settles, wipe the start/stop message that was left

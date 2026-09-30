@@ -158,6 +158,13 @@ func Ready(line string) bool {
 		strings.Contains(line, "Application startup complete")
 }
 
+// StartFailed reports whether the line is the API server giving up on its
+// engine. It is the last thing a failed start says, and it is said by a
+// process that does not always exit afterwards.
+func StartFailed(line string) bool {
+	return strings.Contains(line, "Engine core initialization failed")
+}
+
 // Scan matches one log line, returning nil when it says nothing useful --
 // which is almost every line, so that path is kept cheap: one lowercase copy
 // and a substring test per rule before any expression is run.
