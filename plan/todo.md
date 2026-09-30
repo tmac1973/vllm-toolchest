@@ -1,9 +1,35 @@
 # Remaining Work
 
-## Start here: two estimator defects, 2026-09-30
+## Direction, decided 2026-09-30
 
-Written as a handover. Everything needed to begin is in this section; the
-sections below are the evidence behind it.
+The end goal is **autoconfigure**: one action that sets a model up properly,
+as llama-toolchest does by having a helper model read the card. Nothing in
+phases 15-19 is that -- the recommend feed stops at seeding three values on
+download and lists a config optimizer among its non-goals -- so it needs a
+phase of its own, not yet written.
+
+What the estimator work is for, in that light: autoconfigure has a card half
+(sampling, parsers, template, drafter) that needs no estimate at all, and a
+hardware half (width, context, KV dtype, concurrency) that has two sources. A
+measurement is exact and exists after one start. A projection exists before
+it and only has to be good enough that the first start succeeds.
+
+Decisions taken:
+
+- **Estimator first, but bounded.** Two more fixes to the projection -- the
+  drafter's KV, and a band for what a rank consumes beyond its weights -- and
+  then it stops. No further calibration runs are planned for their own sake.
+- **Measurement may correct a config, by proposal.** After a start,
+  autoconfigure offers a corrected profile built from measured figures and
+  the operator applies it. This reverses "no automatic re-configuration after
+  a run" in `recommend-models-overview.md` and the "what seeding is not"
+  section of phase 19, which both still say otherwise and need amending when
+  the autoconfigure phase is written. Nothing rewrites `VLLMConfig` unasked.
+
+## Estimator: two defects fixed 2026-09-30, and what they leave open
+
+Both fixes are on `todo-handover-estimator-fixes`. The evidence table stays
+here because everything below still leans on it.
 
 ### The evidence base: four measured starts
 
@@ -21,77 +47,118 @@ rank; `act total` is `act/rank x TP`, which is what `MeasuredEstimate` stores.
 KV per token, measured against projected: 163,872 vs 163,840 (+0.02%), 17,304
 vs 16,384 (-5%), 47,836 vs 32,768 (**-46%**), 32,126 vs 12,288 (**-2.6x**).
 
-### Fix 1: activation is scaled two different ways
+### One model at two widths: the 27B, 2026-09-30
 
-`internal/models/measured.go:133` stores the measured figure as a **total**:
+Same engine (0.29.0.dev0), same config, only the width changed. TP=4 was taken
+twice that day, before and after, and repeated to the last digit bar 0.01 on
+the graph pool -- so run-to-run noise is not a factor in what follows.
 
-```go
-est.ActivationBaseGB = e.PeakActivationGB * float64(run.TP)
-```
+| per rank | TP=2 | TP=4 | total at TP=2 | total at TP=4 |
+|---|---|---|---|---|
+| weights (`Model loading took`) | 13.40 | 7.05 | 26.8 | 28.2 |
+| consumed (weights + non-torch) | 19.89 | 11.67 | 39.8 | 46.7 |
+| of which non-torch | 2.65 | 3.08 | 5.3 | 12.3 |
+| peak activation | 1.90 | 1.27 | 3.80 | 5.08 |
+| graph pool | 0.93 | 1.21 | 1.86 | 4.84 |
+| KV bytes per token | 47,820 | 47,836 | | |
 
-`internal/models/vram.go:310`, in `RequiredAt`, adds the projected figure
-**once**, unscaled by width:
+Everything under this heading that cites a two-width figure cites this table.
 
-```go
-ActivationGB: est.ActivationBaseGB,
-```
+### Fixed: activation is carried across widths one way
 
-Those are opposite assumptions about one field, and the doc comment on
-`VRAMEstimate.ActivationBaseGB` (`vram.go:120`) describes a third behaviour --
-"Fit divides it across the ranks" -- which nothing does.
+It was read three ways. `MeasuredEstimate` stored a total across the ranks,
+`RequiredAt` charged the projected figure once at every width, and
+`evaluateTP` carried a *measured* total flat onto other widths -- the same
+assumption as `RequiredAt`, on the other source, which the handover had not
+noticed. The field's comment described a fourth behaviour nothing implemented.
 
-The measured side looks right: the estimate is defined as the total across
-every card (see "the figure is a total, not a per-card share"), and each rank
-holds its own working set, so summing per-rank figures is the correct total.
-The projected side then understates by roughly `TP`, because `activationBaseGB`
-computes one whole-model figure and charges it once however many cards the
-model is split over.
+`activationAt` (`internal/models/vram.go`) is now the only reader.
+`ActivationBaseGB` is a total at the width it describes -- `MeasuredTP` for a
+measurement, one rank for a projection -- and at any other width it is a band:
+the total unchanged if everything shards, scaled with the width if everything
+is replicated. At the described width the ends meet, so a measurement is still
+exact where it was taken. `Fits` takes the high end, and rows projected from a
+measurement onto another width are now bands too, with `Uncertain` when they
+straddle.
 
-Do not simply multiply the projected figure by `TP` without deciding what it
-means. Activation is part replicated across ranks (the residual stream) and
-part sharded (attention and MLP intermediates), so the true total sits between
-`1x` and `TP x` the single-rank figure. `RequiredAt` already distinguishes
-these cases for its neighbours -- `CacheGB` and `GraphsGB` scale with `tp`,
-`DraftGB` is counted once with a comment saying why -- so the new line belongs
-in that idiom, with its reasoning stated.
+What this does **not** do is make the projected activation right. The band at
+TP=4 is `1x..4x` a formula that is 5.6x to 74x low, so it still does not reach
+any measured figure. It settles the units, which is what was blocking the
+table; the magnitude is the next item.
 
-**This blocks interpreting the evidence table.** Per-token activation for the
-14B works out at ~360 KB and for the 27B at ~649 KB (activation total, less the
-`seqs x vocab x 4` logits term, over the batch), and those two models have
-*identical* `hidden_size` and `intermediate_size` (5120 / 17408). But one ran
-at TP=1 and the other at TP=4, so the comparison only means something once the
-scaling is settled. Comparing per-rank instead flips the ordering. Settle this
-first, then read the table.
+### Fixed: the graph pool is a band
 
-Tests live in `internal/models/vram_test.go` and `measured_fit_test.go`.
+`graphPoolLowPerRankGB` / `graphPoolHighPerRankGB` = 0.05 / 4.0, per rank, in
+`internal/models/vram_fit.go`. A test pins that every measured figure sits
+inside it. The headline is the midpoint and `Fits` takes the high end.
 
-### Fix 2: the graph pool is a flat constant
+The low end started at 0.45 and moved the same day: the MoE, restarted with
+`cudagraph_capture_sizes: [4]`, reported 0.07. And the idea that wide runs sit
+low because the pool shards is dead -- on the 27B a rank's pool *grew* with
+the width, 0.93 at TP=2 to 1.21 at TP=4. What separates the measurements is
+more likely what was captured than how the model was split:
+`compilation_config` is not read by the estimator, and the smallest figure is
+the config that captures one size. **Reading the capture sizes is the way to
+narrow this band**, not a width term.
 
-`internal/models/vram_fit.go:49`:
+Two consequences, both visible and both intended:
 
-```go
-const graphPoolPerGPUGB = 0.9
-```
+- **Every projected figure is now a range**, so the panel shows "(low-high)"
+  beside every unmeasured model, not only those with offload.
+- **Tight fits become "uncertain".** One rank's band is 3.95 GB wide, so a
+  single-card model within that of the budget no longer gets a verdict or a
+  full-context request count until it has been started once. In the golden
+  fixtures a model that was starred at TP=1 (25.0 of 27.2 GB) now reads
+  24.2-28.1 and the star moves to TP=2. At TP=4 the high end is 16 GB against
+  0.28, 1.96 and 4.84 measured.
 
-used at `internal/models/vram.go:317` as `graphPoolPerGPUGB * float64(tp)`.
+### Settled by the two-width run: how activation splits
 
-Measured per rank: **0.49, 1.21, 2.47, 3.74** -- a 7.6x spread, and the
-constant sits near the bottom of it. It is not constant, and it is not constant
-per rank either. Both TP=4 runs are at the low end and both TP=1 runs at the
-high end, which is what sharding a model would do to the captured buffers, but
-two points a side cannot establish that.
+Neither reading alone. All-sharded predicts 5.08 GB at TP=2 and all-replicated
+2.54; the engine reported 3.80, the midpoint of the band `activationAt` draws
+between them. As a line through the two points it is 0.64 GB held by every
+rank plus 2.52 GB shared out among them -- about half replicated at TP=4. One
+model, so the band stays a band, but a test now pins that it holds the
+measurement in both directions.
 
-The measured path already avoids this: `VRAMEstimate.MeasuredGraphPerRankGB`
-carries the engine's own figure and `evaluateTP` (`vram_fit.go:233`) uses it.
-Only the projected path needs fixing.
+### Open: the projected activation's magnitude
 
-A band is the defensible option -- roughly 0.5 to 4.0 GB per rank, with `Fits`
-already taking the pessimistic end via `TotalHighGB`. Recalibrating the
-constant to a new single number would repeat the mistake corrected below.
+Still wrong, still understating, and deliberately not refitted -- see the next
+section. For the 27B the projection is 0.48 GB against 3.80 and 5.08 measured,
+so the band's `1x..TPx` does not reach either. The choice is between a band
+wide enough to hold the measurements (per rank: 0.71 to 5.4 GB, which would
+put most single-card fits into "uncertain") and the present formula with its
+known bias. Not decided.
+
+### Found by the two-width run: the projection's largest miss is neither term
+
+For the 27B the projected band is 36.4-44.8 GB at TP=2 and 36.5-53.7 at TP=4.
+The engine needed 57.1 and 68.3. **The high end is 12 to 15 GB short at both
+widths**, and neither activation nor the graph pool is the reason:
+
+- **What a rank consumes beyond its weights is not modelled at all.** 6.49 GB
+  a rank at TP=2 and 4.62 at TP=4 -- 13.0 and 18.5 GB in total -- of which
+  non-torch memory is 2.65 and 3.08 a rank and the rest is what the allocator
+  reserves over what it has allocated (17.81 GiB reserved against 13.72 at
+  TP=2). `weightsTotalGB`'s 10% surcharge is right about the *weights*, which
+  went 26.8 to 28.2; it was never meant to cover this, and nothing else does.
+- **KV per token is 46% low**, worth 3.7 GB at this context. Below.
+
+The measured path has the same gap in a smaller form. `projectWeights` splits
+*consumed* memory with the surcharge calibrated on weights, so it puts 1.06 GB
+on each rank where the two-width line puts 3.45. Projecting the TP=4
+measurement onto TP=2 gives 44.6 against 39.8 measured, which errs safe;
+projecting TP=2 onto TP=4 gives 43.4 against 46.7, which does not.
+
+This is the next thing to fix and it outranks the activation band. A per-rank
+term of roughly 3 GB non-torch plus an allocator margin would be fitted to one
+model on one host, so it wants a second model at two widths first. The MoE
+will not fit at TP=2; a small checkpoint on compute at TP=1, 2 and 4 would do,
+and would give the single-rank point the 27B cannot.
 
 ### What not to do: refitting activation from a formula
 
-`activationBaseGB` (`internal/models/vram.go`, ~line 545) models
+`activationBaseGB` (`internal/models/vram.go`) models
 `tokens x hidden x 2 bytes x 6 buffers` plus logits. It is wrong by 5.6x, 10.7x,
 23.4x and 74x across the four models, and the shape is wrong rather than the
 coefficients:
@@ -113,15 +180,36 @@ Four points across dense, hybrid, MoE and multimodal, fitted with free
 parameters, would be indistinguishable from coincidence. Prefer a band and let
 measurements narrow it.
 
-### Open question: KV is 46% low on one hybrid
+### KV on hybrids: one hypothesis refuted, a better one found
 
-The 27B projects 32,768 B/token and measured 47,836. The 4B, also hybrid, is
-within 5%, and the dense 14B is within 0.02%. Both models that miss badly are
-TP=4 hybrids on compute. `kvCachePerToken` counts only `AttentionLayers`; the
-linear-attention layers hold state in the same pool, which would explain an
-undercount, but not why the 4B escapes it. Worth one look before the recommend
-feed trusts the KV term, since it is the term everything else was judged
-against.
+The 27B projects 32,768 B/token and measures 47,836; the 4B, also hybrid, is
+within 5%. The question was why the 4B escapes.
+
+**Refuted: state replicated on every rank.** Dividing the excess by
+linear-attention layers, ranks and `hidden_size` gave the same constant for
+the 4B and the 27B to 2.4%, which predicted ~40,100 B/token for the 27B at
+TP=2. It measured 47,820 there against 47,836 at TP=4. KV per token does not
+move with the width, so the agreement was a coincidence of exactly the kind
+the section above warns about -- and it cost one start to find out.
+
+**What it mostly is: the drafter.** The two models that miss badly are the two
+running speculative decoding, not the two on compute. The 27B's DFlash drafter
+is 5 attention layers of 8 KV heads at head dim 128, which at fp8 is
+`2 x 5 x 8 x 128` = 10,240 B/token in the same pool. 32,768 + 10,240 = 43,008,
+which is 10% under the measurement where attention-only was 46% under. The
+4B and the 14B are assumed to have run without one -- their configs were not
+re-read for this -- and are 5% under and exact.
+
+So the remainder on a hybrid is 5-10%, and the log says what it is:
+`Setting attention block size to 1648 tokens to ensure that attention page
+size is >= mamba page size`, under `Mamba cache mode 'align'`. The recurrent
+layers keep state in the pool at matched page sizes. Not sized here.
+
+Next step, and it is structural rather than fitted: `kvCachePerToken` should
+add the drafter's own KV when `SpeculativeConfig` names a local draft --
+`draftWeightsGB` already resolves the directory, and the draft's `config.json`
+has the four fields. That closes most of the gap on the 27B. The MoE's MTP
+drafter has no separate checkpoint to read, so its 2.6x stays open.
 
 ## VRAM estimator: what compute measured, 2026-09-16
 
@@ -191,7 +279,7 @@ What is still owed:
   todo.md and not acted on is indistinguishable from one nobody noticed.
 
 - ~~**Watch a real startup.**~~ Done, four times over -- see the evidence table
-  under "Start here". Weights land within 3% and KV within 5% on dense and on
+  under the estimator section at the top. Weights land within 3% and KV within 5% on dense and on
   one hybrid; KV is 46% low on another hybrid and 2.6x low on the MoE, which is
   now its own open question. The full-context request count still has not been
   checked against anything.
@@ -204,8 +292,9 @@ What is still owed:
 - **The CUDA-graph pool is a flat 0.9 GiB** and activation assumes vLLM's
   2048-token default chunk when `--max-num-batched-tokens` is unset. Both were
   stand-ins for a measurement nobody had taken; the measurements exist now, and
-  both stand-ins are wrong by more than the band they imply. Superseded by
-  "Start here", Fix 2 and the note on refitting activation.
+  both stand-ins are wrong by more than the band they imply. The pool is a
+  band as of 2026-09-30; the activation stand-in remains, see "the projected
+  activation's magnitude".
 - **Vision-tower parameters are not counted.** Draft weights now are: PR #33
   added `VRAMEstimate.DraftGB`, counted once at its size on disk, and
   `RequiredAt` says why it does not scale with the width. The vision tower is
@@ -326,12 +415,17 @@ implements them.
   override unnecessary.
 - **Every feed figure is projected, never measured.** `evaluateTP`'s measured
   branch requires `est.Source == SourceMeasured`, which a model that has never
-  run cannot have. So the feed ranks on the projected path -- the one whose
-  activation and graph-pool terms are wrong by the factors tabulated under
-  "Start here", both understating. That makes fit verdicts optimistic rather
-  than merely noisy, which is the wrong direction for a feature whose whole
-  claim is "this will run here". Phase 18 step 11's help text acknowledges the
-  figures are estimates; nothing yet acknowledges the bias.
+  run cannot have. So the feed ranks on the projected path. The graph pool
+  there is a band since 2026-09-30 and `Fits` takes its high end, so that term
+  no longer flatters; activation still understates by the factors in the
+  evidence table, KV understates whenever a drafter is configured, and what a
+  rank consumes beyond its weights is not counted at all. On the 27B that put
+  even the pessimistic end 12-15 GB under what the engine needed. Verdicts
+  are therefore still optimistic rather than merely noisy, which is the wrong
+  direction for a feature whose whole claim is "this will run here". The feed
+  also has to decide what an `Uncertain` candidate is, since tight single-card
+  fits now are. Phase 18 step 11's help text acknowledges the figures are
+  estimates; nothing yet acknowledges the bias.
 
 ## Second VRAM estimator in the HuggingFace client
 
