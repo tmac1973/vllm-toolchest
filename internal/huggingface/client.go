@@ -13,18 +13,25 @@ import (
 )
 
 const baseURL = "https://huggingface.co"
-const apiURL = baseURL + "/api"
 
 type Client struct {
 	httpClient *http.Client
 	token      string
+	// base is the Hub's origin. Only ever the real one outside tests.
+	base string
 }
 
 func NewClient(token string) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		token:      token,
+		base:       baseURL,
 	}
+}
+
+// SetBaseURL points the client at a different origin, for tests.
+func (c *Client) SetBaseURL(u string) {
+	c.base = strings.TrimRight(u, "/")
 }
 
 func (c *Client) SetToken(token string) {
@@ -147,7 +154,7 @@ func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchRe
 	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
 	// compressed-tensors, and were being labelled AWQ.
 	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50&config=true",
-		apiURL, url.QueryEscape(query))
+		c.apiURL(), url.QueryEscape(query))
 	if tag != "" {
 		u += "&filter=" + url.QueryEscape(tag)
 	}
@@ -206,7 +213,11 @@ func GroupResults(results []ModelSearchResult) []ModelGroup {
 
 // ModelDetail holds detailed info about a specific model repo.
 type ModelDetail struct {
-	ID             string            `json:"id"`
+	ID string `json:"id"`
+	// Revision is the commit the file list was read at. Downloading from it
+	// rather than from main is what keeps a repo that changes mid-transfer
+	// from handing over half of one snapshot and half of the next.
+	Revision       string            `json:"revision,omitempty"`
 	Author         string            `json:"author"`
 	Tags           []string          `json:"tags"`
 	Gated          GatedField        `json:"gated"`
@@ -226,6 +237,24 @@ type ModelFile struct {
 	Size       int64  `json:"size"`
 	Category   string `json:"category"`
 	IsRequired bool   `json:"is_required"`
+	// OID is the git blob id and SHA256 the LFS object id, as the Hub's tree
+	// listing gives them. A file has one or the other: weights are LFS, small
+	// text files are plain blobs.
+	OID    string `json:"oid,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+}
+
+// Identity names the exact content of a file, or "" when the Hub did not say.
+// Two files with the same identity are byte-for-byte the same, which a name
+// and a size cannot promise: repacked shards routinely keep both.
+func (f ModelFile) Identity() string {
+	switch {
+	case f.SHA256 != "":
+		return identitySHA256 + f.SHA256
+	case f.OID != "":
+		return identityGit + f.OID
+	}
+	return ""
 }
 
 type QuantizationInfo struct {
@@ -244,39 +273,32 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 		Author string     `json:"author"`
 		Tags   []string   `json:"tags"`
 		Gated  GatedField `json:"gated"`
+		SHA    string     `json:"sha"`
 	}
-	metaURL := fmt.Sprintf("%s/models/%s", apiURL, modelID)
+	metaURL := fmt.Sprintf("%s/models/%s", c.apiURL(), modelID)
 	if err := c.getJSON(ctx, metaURL, &meta); err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
 	}
 	detail.Author = meta.Author
 	detail.Tags = meta.Tags
 	detail.Gated = meta.Gated
+	detail.Revision = meta.SHA
 
 	// Fetch file tree
-	tree, err := c.fetchTree(ctx, modelID)
+	files, err := c.listFiles(ctx, modelID, meta.SHA)
 	if err != nil {
 		return nil, fmt.Errorf("get tree: %w", err)
 	}
+	detail.Files = files
 
 	var hasGGUF, hasSafetensors bool
-	for _, entry := range tree {
-		cat, required := categorizeFile(entry.Path)
-		if cat == "skip" {
-			continue
-		}
-		if strings.HasSuffix(strings.ToLower(entry.Path), ".gguf") {
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.Filename), ".gguf") {
 			hasGGUF = true
 		}
-		if strings.HasSuffix(strings.ToLower(entry.Path), ".safetensors") {
+		if strings.HasSuffix(strings.ToLower(f.Filename), ".safetensors") {
 			hasSafetensors = true
 		}
-		detail.Files = append(detail.Files, ModelFile{
-			Filename:   entry.Path,
-			Size:       entry.Size,
-			Category:   cat,
-			IsRequired: required,
-		})
 	}
 
 	detail.IsGGUFRepo = hasGGUF && !hasSafetensors
@@ -325,17 +347,105 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 	return detail, nil
 }
 
+// GetFiles lists the files worth downloading from a repo, and the commit they
+// were listed at. An empty revision means wherever main points now; passing
+// one back in re-reads exactly the listing an earlier call saw.
+func (c *Client) GetFiles(ctx context.Context, modelID, revision string) (string, []ModelFile, error) {
+	if revision == "" {
+		var meta struct {
+			SHA string `json:"sha"`
+		}
+		metaURL := fmt.Sprintf("%s/models/%s", c.apiURL(), modelID)
+		if err := c.getJSON(ctx, metaURL, &meta); err != nil {
+			return "", nil, fmt.Errorf("get model: %w", err)
+		}
+		revision = meta.SHA
+	}
+	files, err := c.listFiles(ctx, modelID, revision)
+	if err != nil {
+		return "", nil, fmt.Errorf("get tree: %w", err)
+	}
+	return revision, DownloadableFiles(files), nil
+}
+
+// listFiles is a repo's tree at revision, less the files categorizeFile says
+// nothing here wants.
+func (c *Client) listFiles(ctx context.Context, modelID, revision string) ([]ModelFile, error) {
+	tree, err := c.fetchTree(ctx, modelID, revision)
+	if err != nil {
+		return nil, err
+	}
+	var files []ModelFile
+	for _, entry := range tree {
+		cat, required := categorizeFile(entry.Path)
+		if cat == "skip" {
+			continue
+		}
+		f := ModelFile{
+			Filename:   entry.Path,
+			Size:       entry.Size,
+			Category:   cat,
+			IsRequired: required,
+		}
+		// An LFS file's blob id is the id of its pointer, which says nothing
+		// about the weights; the LFS id is the hash of the file itself.
+		if entry.LFS != nil && entry.LFS.OID != "" {
+			f.SHA256 = entry.LFS.OID
+		} else {
+			f.OID = entry.OID
+		}
+		files = append(files, f)
+	}
+	return files, nil
+}
+
+// DownloadableFiles is the subset of a repo's files a download fetches: no
+// GGUF, which vLLM does not serve, and no .bin weights when the same weights
+// are there as safetensors.
+func DownloadableFiles(files []ModelFile) []ModelFile {
+	hasSafetensors := false
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.Filename), ".safetensors") {
+			hasSafetensors = true
+			break
+		}
+	}
+
+	var out []ModelFile
+	for _, f := range files {
+		lower := strings.ToLower(f.Filename)
+		if f.Category == "skip" {
+			continue
+		}
+		if hasSafetensors && f.Category == "weight" && strings.HasSuffix(lower, ".bin") {
+			continue
+		}
+		if strings.HasSuffix(lower, ".gguf") {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 type treeEntry struct {
 	Type string `json:"type"` // "file" or "directory"
 	Path string `json:"path"`
 	Size int64  `json:"size"`
+	OID  string `json:"oid"`
+	LFS  *struct {
+		OID string `json:"oid"`
+	} `json:"lfs"`
 }
 
-func (c *Client) fetchTree(ctx context.Context, modelID string) ([]treeEntry, error) {
+func (c *Client) fetchTree(ctx context.Context, modelID, revision string) ([]treeEntry, error) {
+	if revision == "" {
+		revision = "main"
+	}
 	var all []treeEntry
 	cursor := ""
 	for {
-		u := fmt.Sprintf("%s/models/%s/tree/main?recursive=true", apiURL, modelID)
+		u := fmt.Sprintf("%s/models/%s/tree/%s?recursive=true", c.apiURL(), modelID, url.PathEscape(revision))
 		if cursor != "" {
 			u += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -370,7 +480,7 @@ type modelConfig struct {
 }
 
 func (c *Client) fetchConfig(ctx context.Context, modelID string) (*modelConfig, error) {
-	u := fmt.Sprintf("%s/%s/resolve/main/config.json", baseURL, modelID)
+	u := fmt.Sprintf("%s/%s/resolve/main/config.json", c.base, modelID)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -422,9 +532,27 @@ func (c *Client) setAuth(req *http.Request) {
 	}
 }
 
-// DownloadURL returns the direct download URL for a file in a model repo.
-func DownloadURL(modelID, filename string) string {
-	return fmt.Sprintf("%s/%s/resolve/main/%s", baseURL, modelID, filename)
+func (c *Client) apiURL() string {
+	return c.base + "/api"
+}
+
+// DownloadURL returns the direct download URL for a file in a model repo, as
+// it stood at revision. An empty revision follows main.
+func DownloadURL(modelID, revision, filename string) string {
+	return fileURL(baseURL, modelID, revision, filename)
+}
+
+func fileURL(base, modelID, revision, filename string) string {
+	if revision == "" {
+		revision = "main"
+	}
+	// Escaped a segment at a time: the slashes are the path, but a space or a
+	// '#' in a file name is not.
+	segments := strings.Split(filename, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return fmt.Sprintf("%s/%s/resolve/%s/%s", base, modelID, url.PathEscape(revision), strings.Join(segments, "/"))
 }
 
 // isGGUFOnly returns true if the model is a GGUF-only repo.

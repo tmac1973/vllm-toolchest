@@ -494,14 +494,7 @@ func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
 	visionMeta := DetectVision(modelDir, hfCfg)
 	genDefaults := ParseGenDefaults(modelDir)
 
-	// Calculate total size
-	var totalSize int64
-	filepath.Walk(modelDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			totalSize += info.Size()
-		}
-		return nil
-	})
+	totalSize := dirSize(modelDir)
 
 	// Set default vLLM config based on quant method
 	vllmCfg := defaultVLLMConfig(quantMeta, toolMeta, hfCfg)
@@ -536,6 +529,47 @@ func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
 	m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())
 
 	return r.Register(m)
+}
+
+// RefreshFromDisk re-reads what a model's files say about it, after they have
+// changed underneath a record that already exists.
+//
+// RegisterFromDownload is the wrong tool for that: it builds a record from
+// nothing, default launch config included, and would replace one the operator
+// has tuned. This keeps everything that was decided here — the launch config,
+// its profiles, the measurement, the download date — and re-derives only what
+// is read out of the checkpoint.
+func (r *Registry) RefreshFromDisk(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
+
+	m, ok := r.models[id]
+	if !ok {
+		return fmt.Errorf("model not found: %s", id)
+	}
+	dir := m.LocalPath
+	m.HFConfig = ParseHFConfig(dir)
+	m.Quantization = DetectQuantization(dir, m.ID)
+	m.ToolUse = DetectToolUse(dir, m.ID, m.HFConfig)
+	m.Vision = DetectVision(dir, m.HFConfig)
+	m.GenDefaults = ParseGenDefaults(dir)
+	m.TotalSizeBytes = dirSize(dir)
+	m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())
+	return r.save()
+}
+
+func dirSize(dir string) int64 {
+	var total int64
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // Maintenance runs startup maintenance tasks.
