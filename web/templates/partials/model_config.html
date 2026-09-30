@@ -4,6 +4,23 @@
     <span>Configure <span class="mc-owner">&mdash; {{.DisplayName}}</span></span>
     <span class="mc-restart">Restart required</span>
   </div>
+  {{- with .StartFix}}
+  <div class="autoconfig ac-notice" id="start-fix-{{$.SafeID}}">
+    <p class="ac-msg ac-error">The last start failed.</p>
+    {{- if .Why}}<p><small><code>{{.Why}}</code></small></p>{{end}}
+    {{- if .Changes}}
+    <table class="autoconfig-table">
+      <thead><tr><th>Setting</th><th>Now</th><th>Proposed</th><th>Why</th></tr></thead>
+      <tbody>
+      {{- range .Changes}}
+        <tr><td>{{.Label}}</td><td>{{.Current}}</td><td><strong>{{.Proposed}}</strong></td><td><small>{{.Reason}}</small></td></tr>
+      {{- end}}
+      </tbody>
+    </table>
+    <button type="button" hx-post="/api/models/autoconfig/fix?id={{$.ID}}" hx-target="#config-{{$.SafeID}}" hx-swap="innerHTML">Apply this fix</button>
+    {{- end}}
+  </div>
+  {{- end}}
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     {{- with .VRAM}}
     {{- if .Unknown}}

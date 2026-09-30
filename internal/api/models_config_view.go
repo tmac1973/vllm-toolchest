@@ -38,6 +38,9 @@ type modelConfigView struct {
 	VRAM     vramBanner
 	VRAMRows []vramTPRow
 
+	// StartFix is the fix for this model's last start when it failed.
+	StartFix *startFix
+
 	// Profiles. Banner is what the last profile action had to say, and
 	// ReadOnly is why nothing on the panel can be saved, when that is so.
 	Banner         panelBanner
@@ -244,6 +247,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 	}
 
 	v.EffectiveCommand = s.effectiveServeCommand(m, modelLen)
+	v.StartFix = s.startFixFor(m)
 	return v
 }
 
