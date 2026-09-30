@@ -52,6 +52,9 @@ type Server struct {
 
 	// flagsState is which serve flags the installed vLLM accepts.
 	flagsState serveFlagsState
+
+	// lease marks the engine as borrowed for another model.
+	lease engineLease
 }
 
 func NewServer(cfg *config.Config) *Server {

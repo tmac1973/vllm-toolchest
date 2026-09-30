@@ -87,6 +87,9 @@ func (s *Server) buildTuningViews() []modelTuningView {
 
 // POST /api/tuning/start  — body {model_id: "..."}
 func (s *Server) handleStartTuning(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	var body struct {
 		ModelID string `json:"model_id"`
 	}

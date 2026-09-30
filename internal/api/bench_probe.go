@@ -61,6 +61,9 @@ type probeStartRequest struct {
 // when main vLLM is running (probe needs the GPU to itself) or when
 // another probe is already active.
 func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	var req probeStartRequest
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "json") {

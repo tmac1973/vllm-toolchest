@@ -220,6 +220,9 @@ type startRunRequest struct {
 //   - the preset must exist
 //   - no other run may be active
 func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	var req startRunRequest
 	if r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" || isHTMX(r) {
 		if err := r.ParseForm(); err != nil {
