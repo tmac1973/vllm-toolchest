@@ -66,6 +66,33 @@ const (
 	graphPoolHighPerRankGB = 4.0
 )
 
+// rankOverheadLowGB and rankOverheadHighGB bound what one rank of a split
+// holds beyond its weights before it serves anything: the memory the runtime
+// takes outside the allocator, and what the allocator reserves over what it
+// has handed out. The engine reports the two together with the weights as
+// "consumed memory", and the projection had no term for either.
+//
+// Consumed less weights, per rank, on the one host that has run a split:
+//
+//	27B hybrid     TP=4   4.62   of it non-torch 3.08
+//	MoE hybrid     TP=4   5.32   of it non-torch 2.63
+//	MoE hybrid     TP=4   5.50   an earlier engine build
+//	27B hybrid     TP=2   6.49   of it non-torch 2.65
+//
+// Without it the 27B's projection was 12 to 15 GB under what the engine
+// needed, at its pessimistic end. It is a band across what was seen and no
+// wider, because two models on one host cannot say what it depends on -- the
+// allocator's share looks to grow with the weights a rank holds, and that is
+// one model's worth of evidence.
+//
+// Charged from two ranks up, as the replication surcharge is. The one
+// single-rank start on record consumed barely more than its weights, on a
+// different host and image; whether a single rank here would is not known.
+const (
+	rankOverheadLowGB  = 4.5
+	rankOverheadHighGB = 6.5
+)
+
 // TPOption is what this model costs at one tensor-parallel width, and whether
 // that many cards can supply it.
 //
@@ -278,7 +305,8 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 	r := RequiredAt(est, c, tp)
 	o.WeightsGB = (r.WeightsGB + r.WeightsHighGB) / 2
 	o.KVGB = r.KVGB
-	o.OverheadGB = (r.GraphsGB+r.GraphsHighGB)/2 + r.CacheGB + (r.ActivationGB+r.ActivationHighGB)/2
+	o.OverheadGB = (r.GraphsGB+r.GraphsHighGB)/2 + r.CacheGB +
+		(r.ActivationGB+r.ActivationHighGB)/2 + (r.RankOverheadGB+r.RankOverheadHighGB)/2
 	o.RequiredGB = (r.TotalGB + r.TotalHighGB) / 2
 	o.RequiredHigh = r.TotalHighGB
 

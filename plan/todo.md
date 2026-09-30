@@ -18,7 +18,12 @@ Decisions taken:
 
 - **Estimator first, but bounded.** Two more fixes to the projection -- the
   drafter's KV, and a band for what a rank consumes beyond its weights -- and
-  then it stops. No further calibration runs are planned for their own sake.
+  then it stops. Both are done as of 2026-09-30; see below. No further
+  calibration runs are planned for their own sake.
+- **Next is the autoconfigure phase document.** It has to say what it does
+  when no width is a firm fit, which is now the usual case for a large model
+  that has never run: the projection's band is wide enough that TP=4 on
+  compute reads "uncertain" for both checkpoints that serve there.
 - **Measurement may correct a config, by proposal.** After a start,
   autoconfigure offers a corrected profile built from measured figures and
   the operator applies it. This reverses "no automatic re-configuration after
@@ -130,31 +135,43 @@ wide enough to hold the measurements (per rank: 0.71 to 5.4 GB, which would
 put most single-card fits into "uncertain") and the present formula with its
 known bias. Not decided.
 
-### Found by the two-width run: the projection's largest miss is neither term
+### Fixed: what a rank consumes beyond its weights
 
-For the 27B the projected band is 36.4-44.8 GB at TP=2 and 36.5-53.7 at TP=4.
-The engine needed 57.1 and 68.3. **The high end is 12 to 15 GB short at both
-widths**, and neither activation nor the graph pool is the reason:
+The two-width run found the projection's largest miss, and it was neither term
+the handover named. For the 27B the band was 36.4-44.8 GB at TP=2 and
+36.5-53.7 at TP=4 against 57.1 and 68.3 needed: the high end 12 to 15 GB short.
 
-- **What a rank consumes beyond its weights is not modelled at all.** 6.49 GB
-  a rank at TP=2 and 4.62 at TP=4 -- 13.0 and 18.5 GB in total -- of which
-  non-torch memory is 2.65 and 3.08 a rank and the rest is what the allocator
-  reserves over what it has allocated (17.81 GiB reserved against 13.72 at
-  TP=2). `weightsTotalGB`'s 10% surcharge is right about the *weights*, which
-  went 26.8 to 28.2; it was never meant to cover this, and nothing else does.
-- **KV per token is 46% low**, worth 3.7 GB at this context. Below.
+What a rank consumes beyond its weights was not modelled at all -- non-torch
+memory (2.6 to 3.1 GB a rank) and what the allocator reserves over what it has
+allocated. Measured per rank: 4.62 and 6.49 on the 27B, 5.32 and 5.50 on the
+MoE. `rankOverheadLowGB` / `rankOverheadHighGB` = 4.5 / 6.5 in
+`internal/models/vram_fit.go`, charged from two ranks up.
 
-The measured path has the same gap in a smaller form. `projectWeights` splits
-*consumed* memory with the surcharge calibrated on weights, so it puts 1.06 GB
-on each rank where the two-width line puts 3.45. Projecting the TP=4
-measurement onto TP=2 gives 44.6 against 39.8 measured, which errs safe;
-projecting TP=2 onto TP=4 gives 43.4 against 46.7, which does not.
+With that and the drafter's KV the 27B projects 47.9-60.3 and 57.0-82.2, which
+hold both measurements, and the MoE's headline is 110.0 against 113.9 measured
+where it used to be 83.3. Two tests pin these.
 
-This is the next thing to fix and it outranks the activation band. A per-rank
-term of roughly 3 GB non-torch plus an allocator margin would be fitted to one
-model on one host, so it wants a second model at two widths first. The MoE
-will not fit at TP=2; a small checkpoint on compute at TP=1, 2 and 4 would do,
-and would give the single-rank point the 27B cannot.
+What it costs, and what is still weak:
+
+- **No large model gets a firm verdict at TP=4 before it has run.** Every band
+  at its pessimistic end at once adds 42 GB at four ranks (16 of graph pool, 26
+  of overhead), and both checkpoints that serve on compute now read
+  "uncertain" there. Three tests that asserted a firm fit now assert only that
+  the model is not refused. The rule that `Fits` means every worst case at
+  once was written when offload was the only band; with four it is strict.
+  Whether to keep it is a question for the autoconfigure phase, which has to
+  pick a width from these rows.
+- **A single rank is charged nothing**, on the strength of one start on
+  another host that consumed barely more than its weights. Unmeasured on
+  compute. If it is wrong, single-card verdicts are optimistic by a few GB.
+- **The band is two models on one host and one engine build family.** It is
+  exactly as wide as what was seen.
+- **`projectWeights` still carries the old assumption** on the measured path:
+  it splits *consumed* memory with the surcharge calibrated on weights, 1.06 GB
+  a rank where the two-width line says 3.45. Projecting TP=4 onto TP=2 gives
+  44.6 against 39.8 measured, which errs safe; TP=2 onto TP=4 gives 43.4
+  against 46.7, which does not. Not fixed: it only affects the rows beside a
+  measurement, never the measured row.
 
 ### What not to do: refitting activation from a formula
 
@@ -205,11 +222,12 @@ So the remainder on a hybrid is 5-10%, and the log says what it is:
 size is >= mamba page size`, under `Mamba cache mode 'align'`. The recurrent
 layers keep state in the pool at matched page sizes. Not sized here.
 
-Next step, and it is structural rather than fitted: `kvCachePerToken` should
-add the drafter's own KV when `SpeculativeConfig` names a local draft --
-`draftWeightsGB` already resolves the directory, and the draft's `config.json`
-has the four fields. That closes most of the gap on the 27B. The MoE's MTP
-drafter has no separate checkpoint to read, so its 2.6x stays open.
+**Done 2026-09-30:** `draftKVPerToken` (`internal/models/draft.go`) adds the
+drafter's own KV when `SpeculativeConfig` names a draft on this disk, read
+from the draft's `config.json`. The MoE's MTP drafter has no separate
+checkpoint to read, so its 2.6x stays open, as does the 5-10% of recurrent
+state on any hybrid. A draft named by Hub repo id is not on disk and adds
+nothing.
 
 ## VRAM estimator: what compute measured, 2026-09-16
 
@@ -418,14 +436,14 @@ implements them.
   run cannot have. So the feed ranks on the projected path. The graph pool
   there is a band since 2026-09-30 and `Fits` takes its high end, so that term
   no longer flatters; activation still understates by the factors in the
-  evidence table, KV understates whenever a drafter is configured, and what a
-  rank consumes beyond its weights is not counted at all. On the 27B that put
-  even the pessimistic end 12-15 GB under what the engine needed. Verdicts
-  are therefore still optimistic rather than merely noisy, which is the wrong
-  direction for a feature whose whole claim is "this will run here". The feed
-  also has to decide what an `Uncertain` candidate is, since tight single-card
-  fits now are. Phase 18 step 11's help text acknowledges the figures are
-  estimates; nothing yet acknowledges the bias.
+  evidence table and KV still understates on an MTP drafter, but the
+  per-rank overhead is counted since the same day, and on the two models
+  measured the band now holds what the engine needed. The bias has largely
+  gone and the price is width: the feed has to decide what an `Uncertain`
+  candidate is, because tight single-card fits and nearly every large model
+  at TP=4 now are. A Hub candidate also has no draft on disk, so the drafter's
+  KV is never in a feed figure. Phase 18 step 11's help text acknowledges
+  the figures are estimates; it should also say they are ranges.
 
 ## Second VRAM estimator in the HuggingFace client
 
