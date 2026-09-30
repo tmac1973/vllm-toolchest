@@ -513,8 +513,8 @@ type vramLabel struct {
 	Unknown bool
 	Why     string
 	TotalGB float64
-	// Ranged marks an estimate widened by an offload whose size the
-	// configuration does not state.
+	// Ranged marks an estimate that is a band, which every projection is;
+	// only a measured figure is a single number.
 	Ranged bool
 	LowGB  float64
 	HighGB float64

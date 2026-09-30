@@ -4,7 +4,7 @@ import "testing"
 
 // At the width a real start ran at, the stored totals are the answer. Passing
 // them back through RequiredAt would corrupt them twice over: it replaces the
-// measured graph pool (0.49/rank) with its own 0.9/rank constant, and applies
+// measured graph pool (0.49/rank) with its own band for one, and applies
 // the 1.10 replication surcharge to a consumed figure that already carries the
 // allocator's overhead. Both are corrections to a projection, and a
 // measurement has nothing left to correct.
@@ -71,5 +71,30 @@ func TestOtherWidthsStayProjections(t *testing.T) {
 	}
 	if len(fit.Options) < 2 {
 		t.Fatal("only one width was offered; this case needs several to mean anything")
+	}
+}
+
+// Off the width it was taken at, a measurement cannot say how its working set
+// moves: all of it sharded keeps the total, all of it replicated scales it. So
+// those rows are bands, judged at the pessimistic end like any projection, and
+// the measured row stays the single figure it is.
+func TestOtherWidthsCarryTheActivationBand(t *testing.T) {
+	m := measuredModel()
+	est, _ := MeasuredEstimate(m, EngineIdentity{})
+	fit := Fit(est, m.VLLMConfig, GPUInventory{Count: 8, PerCardGB: 31.86, Known: true})
+
+	for _, o := range fit.Options {
+		low, high := activationAt(est, o.TP)
+		spread := o.RequiredHigh - o.RequiredGB
+		if want := (high - low) / 2; spread < want-0.01 || spread > want+0.01 {
+			t.Errorf("TP=%d: worst case is %.2f GB above the headline, want %.2f -- half the activation band",
+				o.TP, spread, want)
+		}
+		if o.Measured != (spread == 0) {
+			t.Errorf("TP=%d: measured=%v but the row spans %.2f GB", o.TP, o.Measured, spread*2)
+		}
+		if sum := o.WeightsGB + o.KVGB + o.OverheadGB; sum < o.RequiredGB-0.05 || sum > o.RequiredGB+0.05 {
+			t.Errorf("TP=%d: weights+kv+overhead = %.2f, total = %.2f", o.TP, sum, o.RequiredGB)
+		}
 	}
 }

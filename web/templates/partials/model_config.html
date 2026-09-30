@@ -10,7 +10,7 @@
     <strong>VRAM Estimate:</strong> not available &mdash; {{.Why}}
     {{- else}}
     <strong>VRAM {{if .Measured}}Measured{{else}}Estimate{{end}}:</strong>
-    <strong>{{printf "%.1f" .RequiredGB}} GB</strong>{{if .Ranged}} <small>({{printf "%.1f" .RequiredLowGB}}&ndash;{{printf "%.1f" .RequiredHighGB}})</small>{{end}}
+    <strong>{{printf "%.1f" .RequiredGB}} GB</strong>{{if .Ranged}} <small title="The range the estimate lies in. Whether it fits is judged at the high end.">({{printf "%.1f" .RequiredLowGB}}&ndash;{{printf "%.1f" .RequiredHighGB}})</small>{{end}}
     total to load as configured{{if gt .ConfiguredTP 1}} across {{.ConfiguredTP}} GPUs{{end}}
     {{- if .HasInventory}}, of {{printf "%.1f" .AvailableGB}} GB available{{end}}
     {{- if .Measured}} <small style="color:#2d8a4e;" title="Reported by the engine on a real start, not derived from the model's shape">&#x2713; from a real start{{if .MeasuredWhen}}, {{.MeasuredWhen}}{{end}}</small>

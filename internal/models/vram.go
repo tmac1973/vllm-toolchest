@@ -118,9 +118,12 @@ type VRAMEstimate struct {
 	DeviceCacheGB float64 `json:"device_cache_gb,omitempty"`
 
 	// ActivationBaseGB is the working memory the model needs beyond its
-	// weights, for the whole model at the configured batch size. Fit divides
-	// it across the ranks. It lives here rather than in Fit because it depends
-	// only on the shape and the configuration, neither of which is hardware.
+	// weights at the configured batch size, totalled across the ranks of the
+	// width it describes: MeasuredTP for a measurement, and a single rank for
+	// a projection, whose formula has no width in it. Nothing should read it
+	// at another width directly -- activationAt carries it there. It lives
+	// here rather than in Fit because it depends only on the shape and the
+	// configuration, neither of which is hardware.
 	ActivationBaseGB float64 `json:"activation_base_gb"`
 
 	Offload Offload `json:"offload,omitzero"`
@@ -274,16 +277,23 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 
 // Requirement is what one configuration costs in GPU memory, summed across the
 // cards it is split over.
+//
+// Three of its terms are bands, each with its optimistic end in the plain
+// field and its pessimistic end in the High one: the weights, because offload
+// is estimated; the graph pool, because it has been measured across a
+// sevenfold spread; and the activation, because how it splits is not known.
 type Requirement struct {
 	TP int
 
-	WeightsGB     float64
-	WeightsHighGB float64
-	KVGB          float64
-	GraphsGB      float64
-	CacheGB       float64
-	ActivationGB  float64
-	DraftGB       float64
+	WeightsGB        float64
+	WeightsHighGB    float64
+	KVGB             float64
+	GraphsGB         float64
+	GraphsHighGB     float64
+	CacheGB          float64
+	ActivationGB     float64
+	ActivationHighGB float64
+	DraftGB          float64
 
 	TotalGB     float64
 	TotalHighGB float64
@@ -306,21 +316,54 @@ func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
 		KVGB:          est.KVAtContextGB,
 		// Every rank captures its own graph ladder and stages its own expert
 		// cache, so both scale with the width.
-		CacheGB:      est.DeviceCacheGB * float64(tp),
-		ActivationGB: est.ActivationBaseGB,
+		CacheGB: est.DeviceCacheGB * float64(tp),
 		// Counted once, at its size on disk. How a drafter is split across
 		// ranks has not been measured here, and at a couple of gigabytes the
 		// replication surcharge would be inside the error of everything else.
 		DraftGB: est.DraftGB,
 	}
+	// Neither counted once nor scaled with the width, because part of it is
+	// replicated and part sharded: a band between the two.
+	r.ActivationGB, r.ActivationHighGB = activationAt(est, tp)
 	if !c.EnforceEager {
-		r.GraphsGB = graphPoolPerGPUGB * float64(tp)
+		r.GraphsGB = graphPoolLowPerRankGB * float64(tp)
+		r.GraphsHighGB = graphPoolHighPerRankGB * float64(tp)
 	}
 
-	fixed := r.KVGB + r.GraphsGB + r.CacheGB + r.ActivationGB + r.DraftGB
-	r.TotalGB = r.WeightsGB + fixed
-	r.TotalHighGB = r.WeightsHighGB + fixed
+	fixed := r.KVGB + r.CacheGB + r.DraftGB
+	r.TotalGB = r.WeightsGB + r.GraphsGB + r.ActivationGB + fixed
+	r.TotalHighGB = r.WeightsHighGB + r.GraphsHighGB + r.ActivationHighGB + fixed
 	return r
+}
+
+// activationAt carries the working set onto a given width, as the band the
+// total across its ranks lies in.
+//
+// Activation is part replicated and part sharded. Every rank holds the
+// residual stream whole, while the attention and MLP intermediates are split
+// between them. Were all of it sharded, the total would be the same at any
+// width; were all of it replicated, every rank would hold what each holds now
+// and the total would grow with the width. The truth is between the two, and
+// no model has been measured at two widths to say where.
+//
+// At the width the figure describes the ends meet, which is what keeps a
+// measurement exact at the width it was taken. One function serves both
+// sources because they used to disagree: a measurement was stored as a total
+// across its ranks, and a projection was charged once at every width.
+func activationAt(est VRAMEstimate, tp int) (low, high float64) {
+	if tp < 1 {
+		tp = 1
+	}
+	// A projection describes the model unsplit: its formula is a batch's
+	// worth of buffers, which is what one rank holds when it is the only one.
+	described := 1
+	if est.Source == SourceMeasured && est.MeasuredTP > 1 {
+		described = est.MeasuredTP
+	}
+
+	sharded := est.ActivationBaseGB
+	replicated := sharded * float64(tp) / float64(described)
+	return min(sharded, replicated), max(sharded, replicated)
 }
 
 // addTotals fills in the headline figure for the width the model is set to.
@@ -338,7 +381,7 @@ func addTotals(est *VRAMEstimate, cfg HFConfig, c VLLMConfig) {
 
 	r := RequiredAt(*est, c, c.TensorParallelSize)
 	est.WeightsTotalGB = (r.WeightsGB + r.WeightsHighGB) / 2
-	est.GraphPoolGB = r.GraphsGB
+	est.GraphPoolGB = (r.GraphsGB + r.GraphsHighGB) / 2
 	est.TotalRequiredLowGB = r.TotalGB
 	est.TotalRequiredHighGB = r.TotalHighGB
 	est.TotalRequiredGB = (r.TotalGB + r.TotalHighGB) / 2
