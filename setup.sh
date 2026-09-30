@@ -1907,9 +1907,30 @@ container_down() {
     if has_quadlet; then
         log "Stopping vllm-toolchest via systemd (Quadlet)..."
         systemctl_cmd stop "${PODMAN_SERVICE_NAME}.service"
+        remove_unmanaged_container
     else
         $(compose_cmd) down
     fi
+}
+
+# remove_unmanaged_container stops and removes a vllm-toolchest container that
+# systemd did not start.
+#
+# With auto-start enabled the container is supposed to belong to the Quadlet
+# unit, and stopping the unit is how it is stopped. But a container started by
+# compose has the same name and is not the unit's: stopping the unit then does
+# nothing, reports success, and leaves it running. Every rebuild that followed
+# built a new image and started nothing, because compose found a container of
+# that name already up -- the UI went on serving the old build while setup.sh
+# printed "vllm-toolchest is running", which was true.
+#
+# A unit-owned container is gone by the time this runs: Quadlet containers are
+# removed when their unit stops. So anything still here is the other kind.
+remove_unmanaged_container() {
+    container_exists vllm-toolchest || return 0
+    log "Removing a vllm-toolchest container that systemd was not managing..."
+    $CONTAINER_CMD stop vllm-toolchest >/dev/null 2>&1 || true
+    $CONTAINER_CMD rm -f vllm-toolchest >/dev/null 2>&1 || true
 }
 
 container_install() {
@@ -1970,6 +1991,9 @@ container_rebuild() {
 # rebuild with "refresh".
 container_quick_rebuild() {
     ensure_base_image "${1:-keep}"
+    # Asked before anything is stopped or rewritten, as rebuild does.
+    local quadlet_active=false
+    has_quadlet && quadlet_active=true
     container_down
     write_env_file
     # For the same reason install and rebuild do it. The unit names the image
@@ -1979,7 +2003,19 @@ container_quick_rebuild() {
     # install. That is the divergence TestQuadletMatchesCompose exists to
     # catch, arriving through the one door it does not watch.
     refresh_quadlet
-    BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
+
+    # With auto-start on, the container goes back to systemd, as it does after
+    # install and rebuild. This used to bring it up through compose instead,
+    # which left a container the unit did not own: not restarted on failure,
+    # not the one `up`, `down` and `logs` act on, and -- see
+    # remove_unmanaged_container -- not replaced by the next quick rebuild.
+    if [[ "$quadlet_active" == true ]]; then
+        BUILDKIT_PROGRESS=plain $(compose_cmd) build --progress=plain
+        log "Starting via systemd (Quadlet)..."
+        systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
+    else
+        BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
+    fi
 }
 
 container_logs() {
