@@ -49,6 +49,9 @@ type Server struct {
 	// render in the "no card inventory" state and the goldens would record
 	// nothing about fit at all.
 	gpuInvOverride *models.GPUInventory
+
+	// flagsState is which serve flags the installed vLLM accepts.
+	flagsState serveFlagsState
 }
 
 func NewServer(cfg *config.Config) *Server {
