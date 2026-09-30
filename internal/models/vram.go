@@ -66,7 +66,8 @@ type VRAMEstimate struct {
 	// DeviceWeightsGB when the figure is certain.
 	DeviceWeightsHighGB float64 `json:"device_weights_high_gb,omitempty"`
 
-	// KVCachePerTokenB is for the whole model, across every attention layer.
+	// KVCachePerTokenB is for the whole model, across every attention layer,
+	// and for the draft model beside it when there is one.
 	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
 
 	// Source says where these figures came from, and it is the most important
@@ -185,7 +186,7 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 
 	cfg := m.HFConfig
 	est.Offload = DetectOffload(envPairs, m.VLLMConfig.ExtraFlags)
-	est.KVCachePerTokenB = kvCachePerToken(cfg, m.VLLMConfig)
+	est.KVCachePerTokenB = kvCachePerToken(cfg, m.VLLMConfig) + draftKVPerToken(m.VLLMConfig)
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 	est.DraftGB = draftWeightsGB(m.VLLMConfig)
 
@@ -278,10 +279,11 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 // Requirement is what one configuration costs in GPU memory, summed across the
 // cards it is split over.
 //
-// Three of its terms are bands, each with its optimistic end in the plain
+// Four of its terms are bands, each with its optimistic end in the plain
 // field and its pessimistic end in the High one: the weights, because offload
-// is estimated; the graph pool, because it has been measured across a
-// sevenfold spread; and the activation, because how it splits is not known.
+// is estimated; the graph pool and what a rank consumes beyond its weights,
+// because both have been measured across a spread; and the activation,
+// because how it splits is not known.
 type Requirement struct {
 	TP int
 
@@ -293,7 +295,11 @@ type Requirement struct {
 	CacheGB          float64
 	ActivationGB     float64
 	ActivationHighGB float64
-	DraftGB          float64
+	// RankOverheadGB is what the ranks of a split hold beyond their weights
+	// before anything is served. See rankOverheadLowGB.
+	RankOverheadGB     float64
+	RankOverheadHighGB float64
+	DraftGB            float64
 
 	TotalGB     float64
 	TotalHighGB float64
@@ -330,9 +336,15 @@ func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
 		r.GraphsHighGB = graphPoolHighPerRankGB * float64(tp)
 	}
 
+	// A cost of splitting, as the replication surcharge is.
+	if tp >= 2 {
+		r.RankOverheadGB = rankOverheadLowGB * float64(tp)
+		r.RankOverheadHighGB = rankOverheadHighGB * float64(tp)
+	}
+
 	fixed := r.KVGB + r.CacheGB + r.DraftGB
-	r.TotalGB = r.WeightsGB + r.GraphsGB + r.ActivationGB + fixed
-	r.TotalHighGB = r.WeightsHighGB + r.GraphsHighGB + r.ActivationHighGB + fixed
+	r.TotalGB = r.WeightsGB + r.GraphsGB + r.ActivationGB + r.RankOverheadGB + fixed
+	r.TotalHighGB = r.WeightsHighGB + r.GraphsHighGB + r.ActivationHighGB + r.RankOverheadHighGB + fixed
 	return r
 }
 

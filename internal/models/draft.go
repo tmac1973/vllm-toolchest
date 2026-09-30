@@ -160,3 +160,19 @@ func draftWeightsGB(c VLLMConfig) float64 {
 	}
 	return BytesToGB(total)
 }
+
+// draftKVPerToken is what the draft a speculative config names adds to the KV
+// cache, per token of context. Zero when there is none, when it is not on
+// this disk, or when it drafts with the target's own head as MTP does.
+//
+// A drafter with its own attention layers keeps its own keys and values, in
+// the same pool and at the same dtype as the target's. On the 27B that is a
+// third as much again: 32,768 bytes a token for the target, 10,240 for a
+// five-layer DFlash drafter, and the engine allocating 47,836.
+func draftKVPerToken(c VLLMConfig) int64 {
+	ref, ok := ParseSpeculative(c.SpeculativeConfig)
+	if !ok || ref.LocalDraft() == "" {
+		return 0
+	}
+	return kvCachePerToken(ParseHFConfig(ref.LocalDraft()), c)
+}

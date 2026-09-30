@@ -224,8 +224,12 @@ func TestFitDoesNotRejectAModelThatRuns(t *testing.T) {
 	if fit.Configured == nil {
 		t.Fatal("TP=4 was configured and the host has four cards, but no option matched")
 	}
-	if !fit.Configured.Fits {
-		t.Errorf("TP=4 reported as not fitting: required %.1f (worst %.1f) of %.1f available",
+	// Not rejected, which is what the regression was. Whether it is a firm fit
+	// is another matter: with every band at its pessimistic end at once this
+	// configuration needs more than the host has, so the projection says
+	// "uncertain" and leaves the verdict to a real start.
+	if !fit.Configured.Fits && !fit.Configured.Uncertain {
+		t.Errorf("TP=4 rejected: required %.1f (worst %.1f) of %.1f available",
 			fit.Configured.RequiredGB, fit.Configured.RequiredHigh,
 			fit.Configured.AvailableGB)
 	}
@@ -356,9 +360,12 @@ func TestOffloadBandDecidesTheVerdict(t *testing.T) {
 // reported 19.07 GiB per rank and the residual method put the table at 43.6
 // against 47.68 measured.
 //
-// Before this, every row read "depends on offload" — a 65–108 GB band on the
-// one model where the sizing demonstrably works.
-func TestMeasuredCheckpointGetsAVerdict(t *testing.T) {
+// A real start of this configuration needed 113.9 GB in all. The projection
+// once said 83.3 and called it a firm fit, which was right about the verdict
+// for the wrong reason: it had no term for what a rank consumes beyond its
+// weights. Counting that, the headline lands within a few percent and the
+// pessimistic end passes what the host has -- so it no longer promises.
+func TestMeasuredCheckpointIsInsideItsBand(t *testing.T) {
 	est := VRAMEstimate{
 		ParamCountBillion:  124.0,
 		ActiveParamBillion: 5.57,
@@ -385,9 +392,17 @@ func TestMeasuredCheckpointGetsAVerdict(t *testing.T) {
 	if o == nil {
 		t.Fatal("no TP=4 option on a four-card host")
 	}
-	if o.Uncertain || !o.Fits {
-		t.Errorf("TP=4 should be a firm fit; got uncertain=%v fits=%v required %.1f (worst %.1f) of %.1f",
-			o.Uncertain, o.Fits, o.RequiredGB, o.RequiredHigh, o.AvailableGB)
+	if !o.Fits && !o.Uncertain {
+		t.Errorf("TP=4 refused for a model that runs at it: required %.1f (worst %.1f) of %.1f",
+			o.RequiredGB, o.RequiredHigh, o.AvailableGB)
+	}
+	const measuredRequired = 113.9
+	if est.TotalRequiredLowGB > measuredRequired || est.TotalRequiredHighGB < measuredRequired {
+		t.Errorf("projected %.1f-%.1f GB does not hold the %.1f a real start needed",
+			est.TotalRequiredLowGB, est.TotalRequiredHighGB, measuredRequired)
+	}
+	if diff := est.TotalRequiredGB - measuredRequired; diff > measuredRequired*0.1 || diff < -measuredRequired*0.1 {
+		t.Errorf("headline %.1f GB is more than a tenth off the measured %.1f", est.TotalRequiredGB, measuredRequired)
 	}
 
 	// The engine reported 19.07 GiB per rank, so 76.28 across the four cards.
@@ -470,8 +485,10 @@ func TestExpertOffloadCeilingIsNotTheAmount(t *testing.T) {
 	if lo < 20 {
 		t.Errorf("weights floor %.1f GB is below anything a 124B checkpoint can occupy", lo)
 	}
-	if !o.Fits {
-		t.Errorf("TP=4 should fit: required %.1f (worst %.1f) of %.1f available",
+	// It runs at TP=4, so it must not be refused. It is not promised either:
+	// four ranks of on-card cache and every band at its worst pass the host.
+	if !o.Fits && !o.Uncertain {
+		t.Errorf("TP=4 refused for a model that runs at it: required %.1f (worst %.1f) of %.1f available",
 			o.RequiredGB, o.RequiredHigh, o.AvailableGB)
 	}
 	// The on-card expert cache is charged to every rank, so it grows with the
@@ -557,9 +574,10 @@ func TestActivationIsCarriedAcrossWidthsOneWay(t *testing.T) {
 		t.Errorf("RequiredAt at TP=4: activation %.2f-%.2f GB, want 0.50-2.00",
 			r.ActivationGB, r.ActivationHighGB)
 	}
-	if !near(r.TotalHighGB-r.TotalGB, 1.5) {
-		t.Errorf("the totals differ by %.2f GB, want the 1.50 the activation band spans",
-			r.TotalHighGB-r.TotalGB)
+	// With no graphs captured, what separates the totals is this band and the
+	// per-rank overhead's.
+	if want := 1.5 + (r.RankOverheadHighGB - r.RankOverheadGB); !near(r.TotalHighGB-r.TotalGB, want) {
+		t.Errorf("the totals differ by %.2f GB, want %.2f", r.TotalHighGB-r.TotalGB, want)
 	}
 }
 
@@ -614,6 +632,78 @@ func TestGraphPoolBandHoldsEveryMeasurement(t *testing.T) {
 					o.RequiredGB, o.RequiredHigh, o.AvailableGB)
 			}
 		})
+	}
+}
+
+// What a rank of a split consumes beyond its weights -- non-torch memory and
+// the allocator's reserve -- had no term at all. It is a band across what the
+// engine has reported, charged from two ranks up.
+func TestRankOverheadBandHoldsEveryMeasurement(t *testing.T) {
+	// Consumed less weights, per rank: the 27B at TP=4 and TP=2, the MoE at
+	// TP=4 on two engine builds.
+	for _, perRank := range []float64{11.67 - 7.05, 19.89 - 13.40, 24.20 - 18.88, 24.57 - 19.07} {
+		if perRank < rankOverheadLowGB || perRank > rankOverheadHighGB {
+			t.Errorf("a start measured %.2f GiB per rank, outside the band %.2f-%.2f",
+				perRank, rankOverheadLowGB, rankOverheadHighGB)
+		}
+	}
+
+	est := VRAMEstimate{CheckpointGB: 20, DeviceWeightsGB: 20, DeviceWeightsHighGB: 20}
+	if one := RequiredAt(est, VLLMConfig{}, 1); one.RankOverheadGB != 0 || one.RankOverheadHighGB != 0 {
+		t.Errorf("a single rank is charged %.2f-%.2f GB for being split", one.RankOverheadGB, one.RankOverheadHighGB)
+	}
+	four := RequiredAt(est, VLLMConfig{}, 4)
+	if four.RankOverheadGB != rankOverheadLowGB*4 || four.RankOverheadHighGB != rankOverheadHighGB*4 {
+		t.Errorf("four ranks are charged %.2f-%.2f GB, want %.2f-%.2f",
+			four.RankOverheadGB, four.RankOverheadHighGB, rankOverheadLowGB*4, rankOverheadHighGB*4)
+	}
+}
+
+// The model measured at two widths, end to end: the 27B hybrid with its DFlash
+// drafter, as configured on compute. The engine needed 57.1 GB at TP=2 and
+// 68.3 at TP=4 -- consumed, activation and graphs on every rank, plus the KV
+// cache at the configured context. Before the drafter's cache and the
+// per-rank overhead were counted the projection's pessimistic end was 44.8
+// and 53.7.
+func TestProjectionHoldsTheModelMeasuredAtTwoWidths(t *testing.T) {
+	draft := writeModelDir(t, `{
+  "architectures": ["DFlash2DraftModel"], "model_type": "qwen3",
+  "num_hidden_layers": 5, "hidden_size": 5120, "intermediate_size": 17408,
+  "num_attention_heads": 32, "num_key_value_heads": 8, "head_dim": 128,
+  "vocab_size": 248320
+}`, 2_118_893_271)
+
+	for _, tc := range []struct {
+		tp       int
+		measured float64
+	}{
+		{2, 57.1},
+		{4, 68.3},
+	} {
+		m := &Model{
+			HFConfig: HFConfig{
+				NumHiddenLayers: 64, HiddenSize: 5120, IntermediateSize: 17408,
+				NumAttentionHeads: 24, NumKeyValueHeads: 4, HeadDim: 256,
+				VocabSize: 248320, AttentionLayers: 16, MaxPositionEmbeddings: 262144,
+			},
+			TotalSizeBytes: 25_247_995_844,
+			VLLMConfig: VLLMConfig{
+				TensorParallelSize: tc.tp, GPUMemoryUtilization: 0.92,
+				MaxModelLen: 262144, MaxNumBatchedTokens: 8192, MaxNumSeqs: 8,
+				KVCacheDtype:      "fp8",
+				SpeculativeConfig: `{"method": "dflash", "model": "` + draft + `", "num_speculative_tokens": 7}`,
+			},
+		}
+		est := EstimateVRAM(m, nil)
+
+		// The target's sixteen attention layers and the drafter's five.
+		if want := int64(2*16*4*256 + 2*5*8*128); est.KVCachePerTokenB != want {
+			t.Errorf("TP=%d: KV/token = %d, want %d with the drafter's own cache", tc.tp, est.KVCachePerTokenB, want)
+		}
+		if est.TotalRequiredLowGB > tc.measured || est.TotalRequiredHighGB < tc.measured {
+			t.Errorf("TP=%d: projected %.1f-%.1f GB does not hold the %.1f the engine needed",
+				tc.tp, est.TotalRequiredLowGB, est.TotalRequiredHighGB, tc.measured)
+		}
 	}
 }
 
