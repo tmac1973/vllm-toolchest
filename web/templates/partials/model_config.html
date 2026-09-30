@@ -4,6 +4,14 @@
     <span>Configure <span class="mc-owner">&mdash; {{.DisplayName}}</span></span>
     <span class="mc-restart">Restart required</span>
   </div>
+  {{- with .Refinement}}
+  <div class="autoconfig ac-notice">
+    <p class="ac-msg ac-ok">Measured on a real start, {{.MeasuredWhen}}. Context can be {{.ProposedContext}} tokens (now {{.CurrentContext}}).</p>
+    <button type="button" class="outline" hx-get="/api/models/autoconfig/refine?id={{$.ID}}"
+            hx-target="#refine-{{$.SafeID}}" hx-swap="innerHTML">Review refined settings</button>
+    <div id="refine-{{$.SafeID}}"></div>
+  </div>
+  {{- end}}
   {{- with .StartFix}}
   <div class="autoconfig ac-notice" id="start-fix-{{$.SafeID}}">
     <p class="ac-msg ac-error">The last start failed.</p>

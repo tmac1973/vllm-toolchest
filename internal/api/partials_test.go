@@ -618,6 +618,21 @@ func TestGoldenPartials(t *testing.T) {
 				goldenPlan(), nil),
 		},
 		{
+			name:    "autoconfig_refine",
+			partial: "autoconfig_refine",
+			data: autoconfigRefineView{ModelID: "org/m", SafeID: "org--m",
+				Refinement: &refinement{MeasuredWhen: "30 Sep 15:12", CurrentContext: "131,072", ProposedContext: "262,144",
+					FullContextRequests: 3, More: true},
+				Hardware: hardwareTable("org--m", models.VLLMConfig{TensorParallelSize: 4, MaxModelLen: 131072, KVCacheDtype: "fp8", GPUMemoryUtilization: 0.92, MaxNumSeqs: 8},
+					models.FitPlan{Known: true, All: models.WidthPlan{TP: 4, ContextTokens: 262144, Measured: true,
+						Config: models.VLLMConfig{TensorParallelSize: 4, MaxModelLen: 262144, KVCacheDtype: "fp8", GPUMemoryUtilization: 0.92, MaxNumSeqs: 8}}}, nil)},
+		},
+		{
+			name:    "autoconfig_refine_nothing",
+			partial: "autoconfig_refine",
+			data:    autoconfigRefineView{ModelID: "org/m", SafeID: "org--m"},
+		},
+		{
 			name:    "autoconfig_message",
 			partial: "autoconfig_message",
 			data: autoconfigMessageView{ModelID: "org/m", SafeID: "org--m", Banner: panelBanner{

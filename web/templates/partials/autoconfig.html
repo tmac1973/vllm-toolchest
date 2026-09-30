@@ -179,3 +179,17 @@
           onclick="document.getElementById('autoconfig-{{.SafeID}}').innerHTML='';">Close</button>
 </article>
 {{- end}}
+
+{{define "autoconfig_refine" -}}
+{{- if .Refinement}}
+<p><small>The first setting was an estimate made before this model had run. These figures come from its start on {{.Refinement.MeasuredWhen}}.</small></p>
+{{template "autoconfig_hardware_table" .Hardware}}
+<p><small>Room for {{.Refinement.FullContextRequests}} full-context {{if eq .Refinement.FullContextRequests 1}}request{{else}}requests{{end}} at once.</small></p>
+<div role="group" class="ac-buttons">
+  <button type="button" hx-post="/api/models/autoconfig/refine?id={{.ModelID}}" hx-target="#config-{{.SafeID}}" hx-swap="innerHTML">Apply</button>
+  <button type="button" class="secondary outline" onclick="this.closest('[id^=refine-]').innerHTML='';">Close</button>
+</div>
+{{- else}}
+<p><small>Nothing to refine: the configured context already matches the measurement.</small></p>
+{{- end}}
+{{- end}}

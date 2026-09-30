@@ -1,0 +1,47 @@
+
+<p><small>The first setting was an estimate made before this model had run. These figures come from its start on 30 Sep 15:12.</small></p>
+<table class="autoconfig-table">
+  <thead><tr><th>Setting</th><th>Now</th><th>Proposed</th><th>Why</th><th>The card</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>GPUs (tensor parallel)</td>
+      <td>4</td>
+      <td data-all="4" data-narrow="4"><strong>4</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>Context length</td>
+      <td>131,072</td>
+      <td data-all="262,144" data-narrow="262,144"><strong>262,144</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>KV cache dtype</td>
+      <td>fp8</td>
+      <td data-all="fp8" data-narrow="fp8"><strong>fp8</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>GPU memory utilization</td>
+      <td>0.92</td>
+      <td data-all="0.92" data-narrow="0.92"><strong>0.92</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>Max concurrent sequences</td>
+      <td>8</td>
+      <td data-all="8" data-narrow="8"><strong>8</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+  </tbody>
+</table>
+<p><small>Room for 3 full-context requests at once.</small></p>
+<div role="group" class="ac-buttons">
+  <button type="button" hx-post="/api/models/autoconfig/refine?id=org/m" hx-target="#config-org--m" hx-swap="innerHTML">Apply</button>
+  <button type="button" class="secondary outline" onclick="this.closest('[id^=refine-]').innerHTML='';">Close</button>
+</div>
