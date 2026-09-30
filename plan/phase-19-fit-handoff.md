@@ -1,44 +1,57 @@
 # Phase 19 — Carry the fit into the downloaded model
 
-**Depends on:** phase 17 (the fit output), phase 18 (the Download button on a
-card) · **Enables:** nothing further. This closes the feature.
+**Depends on:** phase 17 (the candidate pool), phase 18 (the Download button
+on a card), `plan/autoconfigure` phase 02 (`models.PlanFit` and
+`(*Server).planInput`) · **Enables:** nothing further. This closes the
+feature.
 
 ## Goal
 
 When a model is downloaded from the feed, seed its `models.json` entry with
-the tensor-parallel width and context length that ranked it, and record that
-those values were seeded rather than chosen. Ranking already computes them —
-`Fit` returns `TPOption`s with `Fits`, `SpareGB` and `AvailableGB`, and phase
-17 stores the recommended width and the affordable context — and today that
-work would be discarded at the exact moment it is most useful. The user would
-otherwise go to the Models page and set by hand a number this tool already
-knows.
+hardware settings for this machine, and record that they were seeded rather
+than chosen. The user would otherwise go to the Models page and set by hand
+numbers this tool can work out.
 
-**What seeding is not.** An earlier draft of this plan assumed the seeded
-values would be superseded by measurement on the first real start. They are
-not, and the code is clear about it: `recordMeasurement`
-(`internal/api/service.go:275`) *reads* `m.VLLMConfig.TensorParallelSize` to
-record what a run was configured with, and `MeasuredEstimate`
-(`internal/models/measured.go:88`) uses the stored `RunMeasurement` to produce
-a better **VRAM estimate**. Nothing anywhere writes `VLLMConfig` from a
-measurement, and nothing should: the configuration is the user's, and silently
-rewriting it would make the Models page lie about what will be launched.
+The seed is the five hardware fields of `models.PlanFit(...).All.Config` --
+`TensorParallelSize`, `MaxModelLen`, `KVCacheDtype`, `GPUMemoryUtilization`,
+`MaxNumSeqs` -- copied onto the new model's default config, with a pinned
+`KVCacheMemory` cleared, exactly as autoconfigure writes them. Seeding and
+autoconfigure's hardware half follow one set of rules because one function
+computes both. Their inputs differ -- seeding reads no card and always asks
+for the maximum context -- so their results agree only when the inputs do: an
+autoconfigure run with Maximum on a card that contributes no rows gives the
+same values.
 
-So the seeded values are ordinary configuration that persists until a person
-changes it. `ConfigSource` exists to say where they came from, so the Models
-page can show it and the user can tell a value the tool picked from one they
-picked themselves. That is a provenance marker, not a precedence rule.
+*Amended 2026-09-30.* This phase first took the width and context from the
+ranking and rounded the context to a power of two. It now calls the planner,
+so that there is one set of hardware rules in the project rather than two.
+
+**What seeding is, and what comes after.** Seeding is the hardware half of
+autoconfigure with no card read and no review, applied once to a model that
+has never been configured. `ConfigSource` remains a provenance marker, not a
+precedence rule: the seeded values are ordinary configuration that persists
+until a person changes it. Seeding creates no profile, so refinement from a
+measured start (autoconfigure's phase 13) does not apply to a seeded model
+until the operator runs Autoconfigure on it; after that, a correction is
+proposed and applied by the operator, never silently.
 
 ## Files touched
 
 - `internal/models/registry.go` — add `ConfigSource string` to the model
   entry. The schema version is deliberately **not** bumped; see step 1.
-- `internal/recommend/seed.go` — new. `SeedConfig`.
+- `internal/recommend/seed.go` — new. `SeedConfig`, which copies the five
+  hardware fields from a `models.VLLMConfig` it is given onto the new model's
+  config, clears a pinned pool and sets `ConfigSource`. It computes nothing
+  itself.
 - `internal/recommend/seed_test.go` — new.
 - `internal/recommend/engine.go` — implement `SeedFor`, declared in phase 17
-  step 2, against the current pool.
-- `internal/api/hf_download.go` — apply the seed when a download completes and
-  a new model is registered.
+  step 2, as a lookup of whether a repository id is a candidate in the current
+  pool.
+- `internal/api/hf_download.go` — at download completion, for a model newly
+  registered from the feed, call `s.planInput(m, m.VLLMConfig,
+  models.ContextMax, "")` -- a method on the server, which `internal/recommend`
+  cannot call -- then `models.PlanFit`, and pass `plan.All.Config` to
+  `SeedConfig`.
 - `web/templates/partials/model_config.html` — show the provenance marker
   beside a seeded config.
 - `internal/api/recommend_seed_test.go` — new. End-to-end through
@@ -71,26 +84,17 @@ repository id, which is the only key this phase needs.
    configuration; measurement produces an estimate, and that lives in
    `Model.Measured` where it already does.
 
-2. Write `SeedConfig(c Candidate, p Profile) (models.VLLMConfig, bool)` in
-   `internal/recommend`. The `Profile` is passed rather than reached for,
-   because the KV dtype depends on the hardware and a `Candidate` carries only
-   what the Hub and the fit produced. `SeedFor` supplies the pool's own
-   profile, so the seed is always derived from the hardware the candidate was
-   ranked against. It returns `false` for anything that is not Verified —
-   never seed from a fit that was not computed. Otherwise it sets exactly
-   three fields:
+2. Write `SeedConfig(m *models.Model, planned models.VLLMConfig)` in
+   `internal/recommend`. It sets exactly the five hardware fields from
+   `planned`, sets `KVCacheMemory` to 0, and sets `ConfigSource = "seeded"`.
+   It does not work out a width, a context or a dtype: that is
+   `models.PlanFit`'s, called by the completion path in step 6 against the
+   downloaded model's own `config.json`, now on disk.
 
-   - `TensorParallelSize` = the recommended width phase 17 chose.
-   - `MaxModelLen` = the `affordableTokens` phase 17 already stored on the
-     candidate, rounded **down** to the nearest power of two. Recomputing it
-     here would be a second copy of the arithmetic; read the stored field.
-   - `KVCacheDtype` = `"fp8"` only when `p.Accelerated` contains `fp8`,
-     otherwise left empty.
-
-3. Every other field of the returned `VLLMConfig` stays at its zero value so
-   the image default stands. This matters: `variants/radiance.conf` is
-   explicit that knobs default to unset so values track upstream rather than
-   being pinned here, and seeding a field would pin it.
+3. Every other field of the model's config stays as registration defaulted
+   it. This matters: `variants/radiance.conf` is explicit that knobs default
+   to unset so values track upstream rather than being pinned here, and
+   seeding a field would pin it.
 
 4. Key the seed by repository id against the engine's current pool, via
    `SeedFor(modelID)`. There is no seed token and nothing rides on the
@@ -100,7 +104,8 @@ repository id, which is the only key this phase needs.
 
 5. If the pool has been refreshed or has changed profile by completion time
    and the candidate is gone, register the model with no seed, leave
-   `ConfigSource` empty, and log at `Info`. A missing seed is a lesser
+   `ConfigSource` empty, and log at `Info`. The same when `FitPlan.Known` is
+   false: the model keeps its default config. A missing seed is a lesser
    outcome, not an error.
 
 6. Apply the seed in the completion path where the downloader already
@@ -111,7 +116,8 @@ repository id, which is the only key this phase needs.
 7. Show the provenance marker on the Models page beside a seeded config: a
    short muted note saying these values were suggested when the model was
    downloaded and can be changed freely. Do not imply anything will overwrite
-   them, because nothing will.
+   them: the only thing that may change them is an autoconfigure proposal the
+   operator applies.
 
 ## Build gate
 
@@ -124,18 +130,14 @@ go test ./...
 
 ## Test plan
 
-- **Unit, seed derivation.** A verified candidate with recommended width 2 and
-  `affordableTokens` 140000 produces `TensorParallelSize: 2` and
-  `MaxModelLen: 131072`.
-- **Unit, power-of-two rounding.** 140000 → 131072; 131072 → 131072 (already a
-  power of two, not halved); 4000 → 2048.
-- **Unit, kv dtype.** `fp8` is set when the profile lists it as accelerated and
-  left empty when it does not.
-- **Unit, unverified.** `SeedConfig` on an unverified candidate returns `false`
-  and a zero `VLLMConfig`.
-- **Unit, nothing else pinned.** Assert every other field of the returned
-  `VLLMConfig` is its zero value. This is the test that stops the seed quietly
-  growing into an optimizer, which the overview lists as a non-goal.
+- **Unit, seed equals the planner.** The seed equals `PlanFit` called
+  directly with the same model, `ContextMax`, no card KV dtype and the default
+  config, in all five fields, and `KVCacheMemory` is 0.
+- **Unit, nothing else pinned.** Assert every other field of the model's
+  config is what registration defaulted. This is the test that stops the seed
+  quietly growing into an optimizer; configuring the rest is autoconfigure's.
+- **Unit, unknown fit.** When `PlanFit` returns `Known: false` the model keeps
+  its default config and an empty `ConfigSource`.
 - **Unit, re-download.** Registering a model already present leaves its config
   and its `ConfigSource` untouched.
 - **Unit, seed expired.** A completion whose candidate is no longer in the pool
@@ -145,12 +147,13 @@ go test ./...
   build without the field (simulating a revert) and is not refused, and
   entries without `config_source` read as empty under this build.
 - **Integration.** Download from the feed against a stub Hub and assert the
-  resulting entry has the three expected fields and `ConfigSource: "seeded"`.
+  resulting entry has the five planned fields and `ConfigSource: "seeded"`.
 - **Manual, the overview's criterion.** Download a model from the feed, note
   the seeded tensor-parallel width, start it, and confirm two things: the
   width the engine reports running at matches the width the feed stated, and
   `VLLMConfig` is unchanged by the run while the VRAM estimate shown against
-  the model switches to the measured source. The first half is the check that
+  the model switches to the measured source. Nothing is proposed for it until
+  it has been autoconfigured, since it has no Autoconfig profile. The first half is the check that
   the fit arithmetic was right; the second is the check that this phase
   changed nothing it should not.
 

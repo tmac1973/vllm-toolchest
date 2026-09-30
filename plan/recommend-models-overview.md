@@ -46,11 +46,11 @@ already requests `config=true` for every result and then discards all but the
   not happen.
 - Exact weight sizes from the Hub's `safetensors` metadata rather than a
   formula, replacing the MoE-blind estimate for candidate models.
-- Fit output survives the download: the tensor-parallel width and context
-  length computed during ranking, plus a KV cache dtype taken from the same
-  hardware profile the ranking was judged against, become the new model's
-  starting `VLLMConfig`, recorded as having been seeded rather than chosen, so
-  the Models page can say where they came from.
+- Fit output survives the download: the new model's starting `VLLMConfig`
+  takes the hardware fields `models.PlanFit` returns for it on this machine,
+  with `ContextMax` and the all-cards width -- the planner autoconfigure uses
+  (`plan/autoconfigure/`) -- recorded as having been seeded rather than chosen,
+  so the Models page can say where they came from.
 - The existing search keeps its place on the page and its behaviour. The
   size figure in the panel that expands under a search result is corrected by
   phase 15, because it is wrong today and the correct one is a prerequisite
@@ -58,9 +58,11 @@ already requests `config=true` for every result and then discards all but the
 
 ## Non-goals
 
-- **No launch-config optimizer.** Seeding `tensor_parallel_size`,
-  `max_model_len` and `kv_cache_dtype` at download time is the whole of the
-  handoff. Tuning a running model remains phases 13/14's territory.
+- **The feed is not a launch-config optimizer.** Seeding the hardware fields at
+  download time is the whole of the *feed's* handoff. Configuring a model
+  properly -- parsers, sampling, flags and environment from its card, and the
+  hardware for this machine -- is autoconfigure's job, defined in
+  `plan/autoconfigure/overview.md`.
 - **No use-case classification.** No Chat / Code / Tool-use chips. Those
   require inferring a model's purpose from names and tags, which is guesswork,
   and a misclassification is invisible to the user. The chat template that
@@ -72,10 +74,13 @@ already requests `config=true` for every result and then discards all but the
   scraping, and no judgement of a model's output.
 - **No config profile** is created on download. Phase 11's profile mechanism
   stays uncoupled from this feature.
-- **No automatic re-configuration after a run.** The seeded values are
-  ordinary configuration and stay as written until a person changes them.
-  Measurement corrects the VRAM *estimate* shown against a model; it does not
-  and will not rewrite `VLLMConfig`.
+- **No re-configuration without an apply.** The seeded values are ordinary
+  configuration and stay as written until the operator changes them.
+  Measurement corrects the VRAM *estimate* shown against a model, and may
+  produce a *proposal*, which autoconfigure's refinement shows on a model that
+  has been autoconfigured and the operator applies. A model that was only
+  seeded has no Autoconfig profile, so it is offered refinement once it has
+  been through Autoconfigure. Nothing rewrites `VLLMConfig` unasked.
 - **No GGUF.** Unchanged from today: `isGGUFOnly` keeps filtering it out.
 - **No background polling or notifications.** The Hub is queried when a page
   load finds no pool or finds one built against different hardware, and
@@ -116,9 +121,10 @@ in the case driving the design, four AMD R9700s (gfx1201, 32 GB each) on the
    them back.
 7. They press **Download** on a card. The download follows the existing path.
    When it completes, the new `models.json` entry carries the tensor-parallel
-   width and context length that ranked it, recorded as seeded rather than
-   chosen by a person. They remain ordinary configuration: nothing later
-   rewrites them.
+   width and context length the planner chose for it, recorded as seeded
+   rather than chosen by a person. They remain ordinary configuration, and
+   stay as written until the operator changes them or applies an
+   autoconfigure proposal.
 8. Below all of this, the HuggingFace search box works exactly as it does
    today.
 
@@ -213,9 +219,10 @@ on list data, then fetch `config.json` for the finalists only.
 - **Intent chips** → Computable axes only: Best quality, Fastest, Longest
   context, Newest. No use-case chips, because Code and Tool-use would require
   guessing.
-- **Download handoff** → Seed the new model's `VLLMConfig` with the
-  tensor-parallel width and context length computed during ranking, plus a KV
-  cache dtype read from the hardware profile, recorded as seeded so the Models
-  page can say where they came from. Nothing later rewrites them: measurement
-  refines the VRAM estimate, not the configuration. No config profile is
-  created.
+- **Download handoff** → Seed the new model's `VLLMConfig` from
+  `models.PlanFit`, the planner autoconfigure uses, recorded as seeded so the
+  Models page can say where they came from. No config profile is created.
+  *Amended 2026-09-30:* this originally said nothing would ever rewrite the
+  seeded values and that measurement refines only the estimate. Autoconfigure
+  reversed that: a measurement may lead to a proposal, applied by the
+  operator.

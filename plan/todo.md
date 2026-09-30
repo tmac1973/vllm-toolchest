@@ -20,16 +20,15 @@ Decisions taken:
   drafter's KV, and a band for what a rank consumes beyond its weights -- and
   then it stops. Both are done as of 2026-09-30; see below. No further
   calibration runs are planned for their own sake.
-- **Next is the autoconfigure phase document.** It has to say what it does
-  when no width is a firm fit, which is now the usual case for a large model
-  that has never run: the projection's band is wide enough that TP=4 on
-  compute reads "uncertain" for both checkpoints that serve there.
+- **The autoconfigure plan is `plan/autoconfigure/`.** It answers the "no
+  firm fit" question by planning on the estimate's expected figure, labelling
+  the result a first guess, and refining it from the first real start.
 - **Measurement may correct a config, by proposal.** After a start,
   autoconfigure offers a corrected profile built from measured figures and
   the operator applies it. This reverses "no automatic re-configuration after
   a run" in `recommend-models-overview.md` and the "what seeding is not"
-  section of phase 19, which both still say otherwise and need amending when
-  the autoconfigure phase is written. Nothing rewrites `VLLMConfig` unasked.
+  section of phase 19; both were amended by autoconfigure's phase 03. Nothing
+  rewrites `VLLMConfig` unasked.
 
 ## Estimator: two defects fixed 2026-09-30, and what they leave open
 
