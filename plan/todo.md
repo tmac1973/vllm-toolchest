@@ -20,6 +20,10 @@ Decisions taken:
   drafter's KV, and a band for what a rank consumes beyond its weights -- and
   then it stops. Both are done as of 2026-09-30; see below. No further
   calibration runs are planned for their own sake.
+- **Autoconfigure is built, bar its hardware acceptance.** Phases 01-13 of
+  `plan/autoconfigure/` are on the `autoconfigure` branch. What remains --
+  deploying, loading the helper on real images, and the reference models'
+  first starts -- is listed in `plan/autoconfigure/acceptance.md`.
 - **The autoconfigure plan is `plan/autoconfigure/`.** It answers the "no
   firm fit" question by planning on the estimate's expected figure, labelling
   the result a first guess, and refining it from the first real start.
@@ -29,6 +33,20 @@ Decisions taken:
   a run" in `recommend-models-overview.md` and the "what seeding is not"
   section of phase 19; both were amended by autoconfigure's phase 03. Nothing
   rewrites `VLLMConfig` unasked.
+
+## GPU inventory counts an integrated GPU as a card
+
+Found 2026-09-30 while checking autoconfigure on the workstation. The monitor
+lists the Ryzen 9800X3D's integrated GPU (2 GB) beside the RX 9070 XT
+(16 GB), and `gpuInventoryFrom` (`internal/api/gpu_inventory.go`) takes the
+smallest card, so every fit on that machine is judged against 2 GB and every
+width reads "does not fit". It affects the Configure panel's fit table as
+much as autoconfigure, and blocks autoconfigure's single-card acceptance.
+
+The fix is to leave integrated GPUs out whenever a discrete one is present --
+not always, because Strix Halo has nothing else. llama-toolchest recognises an
+APU by its gfx architecture (`builder.IsIGPUArch`); this project's monitor does
+not record the architecture yet, so it needs that first.
 
 ## Estimator: two defects fixed 2026-09-30, and what they leave open
 

@@ -48,7 +48,9 @@ things that turned out to be wrong.
   model from its card and this machine: a helper model reads the card, a
   planner fits the hardware, a review shows every setting before it is
   applied, and a measured start refines it. Its own phase numbering, 01-14.
-  Being built on the `autoconfigure` branch.
+  Phases 01-13 built on the `autoconfigure` branch, 2026-09-30; phase 14's
+  hardware runs are outstanding -- see
+  [`autoconfigure/acceptance.md`](autoconfigure/acceptance.md).
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive
