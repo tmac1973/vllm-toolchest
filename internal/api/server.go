@@ -16,6 +16,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/internal/llmcall"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
@@ -57,6 +58,12 @@ type Server struct {
 	lease engineLease
 	// wantHelper is set while Settings is downloading the helper model.
 	wantHelper helperWanted
+
+	// autoconf is the autoconfigure run, llm the client it asks the helper
+	// with, and cards the model cards it has fetched recently.
+	autoconf autoconfigState
+	llm      *llmcall.Client
+	cards    cachedCards
 }
 
 func NewServer(cfg *config.Config) *Server {
