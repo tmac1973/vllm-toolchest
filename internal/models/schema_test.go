@@ -174,3 +174,23 @@ func TestSaveLeavesNoTempFile(t *testing.T) {
 		t.Errorf("models.json.tmp left behind: %v", err)
 	}
 }
+
+// A version-3 file written before profiles carried provenance loads with the
+// new fields empty, and stays version 3.
+func TestProfilesWithoutProvenanceLoad(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFile(t, dir, fmt.Sprintf(`{"schema_version": %d,
+		"models": {"org/model": {"id": "org/model"}},
+		"config_profiles": [{"model_id": "org/model", "name": "old", "config": {"max_model_len": 4096}}]}`, schemaVersion))
+	reg := NewRegistry(dir, filepath.Join(dir, "models"))
+	if reason := reg.ReadOnly(); reason != "" {
+		t.Fatalf("read-only: %s", reason)
+	}
+	p, ok := reg.Profile("org/model", "old")
+	if !ok || p.Config.MaxModelLen != 4096 {
+		t.Fatalf("old profile not loaded: %+v", p)
+	}
+	if p.Source != "" || p.Notes != nil || p.Autoconfig != nil {
+		t.Errorf("an old profile gained provenance from nowhere: %+v", p)
+	}
+}
