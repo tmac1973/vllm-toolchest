@@ -145,13 +145,36 @@ func TestPrebuiltVariantsArePinned(t *testing.T) {
 	}
 }
 
+// A tag that moves has to be declared as one. Left undeclared, it is pulled
+// once and never again: the build is satisfied by the local copy, so the
+// variant quietly stays on whatever the tag meant the day it was installed,
+// while the manifest goes on reading as though it tracked upstream.
+func TestMovingTagsAreDeclared(t *testing.T) {
+	for _, d := range variants.All() {
+		if d.BaseImage == "" {
+			continue
+		}
+		t.Run(d.ID, func(t *testing.T) {
+			name := d.BaseImage[strings.LastIndex(d.BaseImage, "/")+1:]
+			_, tag, tagged := strings.Cut(name, ":")
+			moving := !tagged || tag == "latest" || tag == "dev" || tag == "nightly" || tag == "main"
+			if moving && !d.TracksBase() {
+				t.Errorf("base image %q is a tag that moves; say VARIANT_BASE_PULL='always' "+
+					"and VARIANT_VLLM_PIN='%s', or name a release", d.BaseImage, variants.PinFromImage)
+			}
+		})
+	}
+}
+
 // The vLLM pin doubles as the git ref the tuner benchmark script is fetched
 // from, unless the manifest names one separately. A version like
 // "0.23.1.dev1+g9ddef7117" has no tag behind it, so a pin in that shape would
 // 404 the fetch -- which is how this was found, halfway through a real build.
 func TestPinIsAFetchableRefOrTunerRefIsSet(t *testing.T) {
 	for _, d := range variants.All() {
-		if d.BaseImage == "" || d.VLLMPin == "" || d.VLLMPin == "main" {
+		// A pin read out of the image is derived by the same rule this test
+		// enforces by hand; see TestVersionsBecomePinAndTunerRef.
+		if d.BaseImage == "" || d.VLLMPin == "" || d.VLLMPin == "main" || d.VLLMPin == variants.PinFromImage {
 			continue
 		}
 		t.Run(d.ID, func(t *testing.T) {
