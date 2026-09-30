@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // presetChoice matches what the benchmark form template reads off a preset.
@@ -30,26 +31,42 @@ func TestGoldenPartials(t *testing.T) {
 		{
 			name:    "service_status_running",
 			partial: "service_status",
-			data: struct {
-				State   string
-				ModelID string
-				PID     int
-				Uptime  string
-				Error   string
-				Settled bool
-			}{"running", "unsloth/Qwen3.8-27B-FP8", 4242, "13h59m45s", "", true},
+			data: serviceStatusView{Status: process.Status{
+				State: process.StateRunning, ModelID: "unsloth/Qwen3.8-27B-FP8", PID: 4242, Uptime: "13h59m45s",
+			}, Settled: true},
 		},
 		{
 			name:    "service_status_failed",
 			partial: "service_status",
-			data: struct {
-				State   string
-				ModelID string
-				PID     int
-				Uptime  string
-				Error   string
-				Settled bool
-			}{"error", "unsloth/Qwen3.8-27B-FP8", 0, "", "engine core initialization failed", true},
+			data: serviceStatusView{Status: process.Status{
+				State: process.StateError, ModelID: "unsloth/Qwen3.8-27B-FP8", Error: "engine core initialization failed",
+			}, Settled: true},
+		},
+		{
+			// Past the startup timeout with the process alive. Not an error,
+			// and it must not look like one: this is what a first start of a
+			// large model shows for several minutes.
+			name:    "service_status_overdue",
+			partial: "service_status",
+			data: serviceStatusView{Status: process.Status{
+				State: process.StateStarting, ModelID: "unsloth/Qwen3.8-27B-FP8", PID: 4242, Uptime: "7m12s",
+				Overdue: true,
+				Notice: "Still starting after 5m0s, which is longer than the startup timeout. " +
+					"Nothing has failed: the process is alive and being watched, and the log shows what it is doing. " +
+					"A model's first start is often much slower than later ones. " +
+					"This changes to Running when the engine answers.",
+			}},
+		},
+		{
+			// The engine gave up and its process did not exit.
+			name:    "service_status_start_failed",
+			partial: "service_status",
+			data: serviceStatusView{Status: process.Status{
+				State: process.StateStarting, ModelID: "unsloth/Qwen3.8-27B-FP8", PID: 4242, Uptime: "2m3s",
+				StartFailed: true,
+				Notice: "The engine reported that it failed to start, but its process has not exited. " +
+					"The log says why. Stop clears it.",
+			}},
 		},
 		{
 			name:    "hf_results",

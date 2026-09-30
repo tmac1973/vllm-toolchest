@@ -131,6 +131,7 @@
     <p>The dashboard and the engine controls are one page. It carries:</p>
     <dl>
         <dt>Server card</dt><dd>Start, Stop and Restart, the current state, and the model picker. The picker sets the same active model the radio buttons on the Models page do — they are one setting seen from two places.</dd>
+        <dt>Still starting&hellip;</dt><dd>A start that has outlasted the startup timeout (<code>startup_timeout_s</code>, 30 minutes unless configured) while its process is still alive. It is not an error and nothing has been given up on: the engine is watched for as long as it runs, and the status changes to Running when it answers. A model&rsquo;s first start is the slow one, because kernels are compiled and tuned then and cached afterwards. <em>Failed to start</em> is the different case where the engine has said it could not start but its process has not exited; the log says why, and Stop clears it.</dd>
         <dt>GPU</dt><dd>Per-GPU utilization, VRAM, temperature and power, read from the kernel driver rather than a vendor library. On a multi-GPU box each card is listed by its own index.</dd>
         <dt>Models, API Endpoint</dt><dd>How many models are registered, and the base URL to point an OpenAI-compatible client at.</dd>
         <dt>Live Performance</dt><dd>Tokens per second and time-to-first-token for requests as they are served, so you can see the engine working without running a benchmark.</dd>

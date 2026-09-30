@@ -21,15 +21,18 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "service_status", struct {
-		process.Status
-		// Settled reports that the process has stopped moving between
-		// states, which is when the leftover start/stop message is cleared.
-		Settled bool
-	}{
+	s.renderPartial(w, "service_status", serviceStatusView{
 		Status:  status,
 		Settled: status.State != process.StateStarting && status.State != process.StateStopping,
 	})
+}
+
+// serviceStatusView is the status card's data.
+type serviceStatusView struct {
+	process.Status
+	// Settled reports that the process has stopped moving between
+	// states, which is when the leftover start/stop message is cleared.
+	Settled bool
 }
 
 func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
