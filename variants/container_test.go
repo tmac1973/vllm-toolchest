@@ -2,6 +2,7 @@ package variants
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 type lifecycleBed struct {
 	t   *testing.T
 	dir string
+	// allowFailure is for the cases where setup.sh is expected to exit.
+	allowFailure bool
 }
 
 const fakeLifecycle = `#!/usr/bin/env bash
@@ -24,7 +27,18 @@ case "$1 $2" in
   "rm "*)              rm -f "$BED/container" ;;
   "compose up")        touch "$BED/container" ;;
   "compose down")      rm -f "$BED/container" ;;
-  "compose build")     : ;;
+  "compose build")
+    [ -z "$FAIL_BUILD" ] || { echo "build failed" >&2; exit 1; }
+    # As strict as podman-compose, whose build takes a short list of flags
+    # and exits on any other: "--progress=plain" reached it from here once,
+    # after the old container had already been removed.
+    shift 2
+    for a in "$@"; do
+      case "$a" in
+        --no-cache|--pull|--pull-always) ;;
+        *) echo "podman-compose: error: unrecognized arguments: $a" >&2; exit 2 ;;
+      esac
+    done ;;
 esac
 `
 
@@ -59,6 +73,12 @@ write_env_file() { :; }
 refresh_quadlet() { :; }
 `
 	b.t.Setenv("BED", b.dir)
+	if b.allowFailure {
+		cmd := exec.Command("bash", "-c", ". ./setup.sh\n"+prelude+snippet)
+		cmd.Dir = ".."
+		_ = cmd.Run()
+		return
+	}
 	sourceSetupSh(b.t, prelude+snippet)
 }
 
@@ -178,6 +198,46 @@ func TestTwoQuickRebuildsInARowBothReplaceTheContainer(t *testing.T) {
 	}
 }
 
+// A quick rebuild whose build fails must leave the service running. It used
+// to stop the container first, so a rejected build flag took the UI down and
+// left nothing to bring back but the image that had been there all along.
+func TestAFailedQuickBuildLeavesTheContainerRunning(t *testing.T) {
+	for name, quadlet := range map[string]bool{"with auto-start": true, "without": false} {
+		t.Run(name, func(t *testing.T) {
+			b := newLifecycleBed(t)
+			b.allowFailure = true
+			b.startContainer()
+			t.Setenv("FAIL_BUILD", "1")
+
+			b.run(quadlet, quadlet, "container_quick_rebuild\n")
+
+			if !b.containerExists() {
+				t.Errorf("the container was taken down for a build that failed; calls: %v", b.calls())
+			}
+			if calls := b.calls(); has(calls, "systemctl stop") || has(calls, "compose down") {
+				t.Errorf("the service was stopped before the build had succeeded; calls: %v", calls)
+			}
+		})
+	}
+}
+
+// A full rebuild takes the same path to the same end, and builds with flags
+// podman-compose accepts.
+func TestRebuildBuildsAndStartsTheUnit(t *testing.T) {
+	b := newLifecycleBed(t)
+	b.startContainer()
+
+	b.run(true, false, "container_rebuild\n")
+
+	calls := b.calls()
+	if !has(calls, "compose build --no-cache") {
+		t.Errorf("the image was not rebuilt without cache; calls: %v", calls)
+	}
+	if last := calls[len(calls)-1]; last != "systemctl start vllm-toolchest.service" {
+		t.Errorf("last call = %q, want the unit being started; calls: %v", last, calls)
+	}
+}
+
 // Without auto-start there is no unit, and compose both stops and starts.
 func TestQuickRebuildWithoutAutoStartUsesCompose(t *testing.T) {
 	b := newLifecycleBed(t)
@@ -186,8 +246,8 @@ func TestQuickRebuildWithoutAutoStartUsesCompose(t *testing.T) {
 	b.run(false, false, "container_quick_rebuild\n")
 
 	calls := b.calls()
-	if !has(calls, "compose down") || !has(calls, "compose up -d --build") {
-		t.Errorf("calls = %v, want compose down then up", calls)
+	if !has(calls, "compose build") || !has(calls, "compose down") || !has(calls, "compose up -d") {
+		t.Errorf("calls = %v, want compose build, down, then up", calls)
 	}
 	if has(calls, "systemctl") {
 		t.Errorf("systemd was used with auto-start off; calls: %v", calls)

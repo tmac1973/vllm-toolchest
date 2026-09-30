@@ -1973,7 +1973,10 @@ container_rebuild() {
     $CONTAINER_CMD rm vllm-toolchest 2>/dev/null || true
     write_env_file
     refresh_quadlet
-    BUILDKIT_PROGRESS=plain $(compose_cmd) build --no-cache --progress=plain
+    # No --progress here. podman-compose's build takes no such flag and exits
+    # on it; BUILDKIT_PROGRESS is how Docker is asked for the same thing, and
+    # podman ignores it.
+    BUILDKIT_PROGRESS=plain $(compose_cmd) build --no-cache
 
     if [[ "$quadlet_active" == true ]]; then
         log "Starting via systemd (Quadlet)..."
@@ -1994,8 +1997,15 @@ container_quick_rebuild() {
     # Asked before anything is stopped or rewritten, as rebuild does.
     local quadlet_active=false
     has_quadlet && quadlet_active=true
-    container_down
     write_env_file
+
+    # Built before the running container is touched. A cached build does not
+    # need it out of the way, and a build that fails must leave the service
+    # as it found it: the other order took the UI down for a rejected flag,
+    # with nothing to bring back up but the image that was already there.
+    BUILDKIT_PROGRESS=plain $(compose_cmd) build
+
+    container_down
     # For the same reason install and rebuild do it. The unit names the image
     # and the settings write_env_file just rewrote, and this is the path used
     # most often -- so leaving it out meant the auto-start unit went on
@@ -2010,11 +2020,10 @@ container_quick_rebuild() {
     # not the one `up`, `down` and `logs` act on, and -- see
     # remove_unmanaged_container -- not replaced by the next quick rebuild.
     if [[ "$quadlet_active" == true ]]; then
-        BUILDKIT_PROGRESS=plain $(compose_cmd) build --progress=plain
         log "Starting via systemd (Quadlet)..."
         systemctl_cmd start "${PODMAN_SERVICE_NAME}.service"
     else
-        BUILDKIT_PROGRESS=plain $(compose_cmd) up -d --build
+        $(compose_cmd) up -d
     fi
 }
 
