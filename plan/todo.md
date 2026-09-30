@@ -1,5 +1,128 @@
 # Remaining Work
 
+## Start here: two estimator defects, 2026-09-30
+
+Written as a handover. Everything needed to begin is in this section; the
+sections below are the evidence behind it.
+
+### The evidence base: four measured starts
+
+Every figure below came from `RunMeasurement`, captured automatically on a
+successful start. `act/rank` and `graphs/rank` are what the engine reported per
+rank; `act total` is `act/rank x TP`, which is what `MeasuredEstimate` stores.
+
+| model | host | shape | TP | batch | act/rank | act total | projected act | graphs/rank |
+|---|---|---|---|---|---|---|---|---|
+| `Qwen/Qwen3-14B-AWQ` | local | dense, 40/40 attn, h5120 i17408 | 1 | 2048 | 0.71 | 0.71 | 0.126 | 2.47 |
+| `cyankiwi/Qwen3.5-4B-AWQ-4bit` | local | hybrid + vision, 8/32 attn, h2560 i9216 | 1 | 2048 | 5.4 | 5.40 | 0.073 | 3.74 |
+| `tcclaviger/ThinkingCap-3.8-27B-PARO5` | compute | hybrid, 16/64 attn, h5120 i17408 | 4 | 8192 | 1.27 | 5.08 | 0.476 | 1.21 |
+| `tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ` | compute | MoE hybrid, 12/48 attn, h2560 moe640 | 4 | 8192 | 1.46 | 5.84 | 0.249 | 0.49 |
+
+KV per token, measured against projected: 163,872 vs 163,840 (+0.02%), 17,304
+vs 16,384 (-5%), 47,836 vs 32,768 (**-46%**), 32,126 vs 12,288 (**-2.6x**).
+
+### Fix 1: activation is scaled two different ways
+
+`internal/models/measured.go:133` stores the measured figure as a **total**:
+
+```go
+est.ActivationBaseGB = e.PeakActivationGB * float64(run.TP)
+```
+
+`internal/models/vram.go:310`, in `RequiredAt`, adds the projected figure
+**once**, unscaled by width:
+
+```go
+ActivationGB: est.ActivationBaseGB,
+```
+
+Those are opposite assumptions about one field, and the doc comment on
+`VRAMEstimate.ActivationBaseGB` (`vram.go:120`) describes a third behaviour --
+"Fit divides it across the ranks" -- which nothing does.
+
+The measured side looks right: the estimate is defined as the total across
+every card (see "the figure is a total, not a per-card share"), and each rank
+holds its own working set, so summing per-rank figures is the correct total.
+The projected side then understates by roughly `TP`, because `activationBaseGB`
+computes one whole-model figure and charges it once however many cards the
+model is split over.
+
+Do not simply multiply the projected figure by `TP` without deciding what it
+means. Activation is part replicated across ranks (the residual stream) and
+part sharded (attention and MLP intermediates), so the true total sits between
+`1x` and `TP x` the single-rank figure. `RequiredAt` already distinguishes
+these cases for its neighbours -- `CacheGB` and `GraphsGB` scale with `tp`,
+`DraftGB` is counted once with a comment saying why -- so the new line belongs
+in that idiom, with its reasoning stated.
+
+**This blocks interpreting the evidence table.** Per-token activation for the
+14B works out at ~360 KB and for the 27B at ~649 KB (activation total, less the
+`seqs x vocab x 4` logits term, over the batch), and those two models have
+*identical* `hidden_size` and `intermediate_size` (5120 / 17408). But one ran
+at TP=1 and the other at TP=4, so the comparison only means something once the
+scaling is settled. Comparing per-rank instead flips the ordering. Settle this
+first, then read the table.
+
+Tests live in `internal/models/vram_test.go` and `measured_fit_test.go`.
+
+### Fix 2: the graph pool is a flat constant
+
+`internal/models/vram_fit.go:49`:
+
+```go
+const graphPoolPerGPUGB = 0.9
+```
+
+used at `internal/models/vram.go:317` as `graphPoolPerGPUGB * float64(tp)`.
+
+Measured per rank: **0.49, 1.21, 2.47, 3.74** -- a 7.6x spread, and the
+constant sits near the bottom of it. It is not constant, and it is not constant
+per rank either. Both TP=4 runs are at the low end and both TP=1 runs at the
+high end, which is what sharding a model would do to the captured buffers, but
+two points a side cannot establish that.
+
+The measured path already avoids this: `VRAMEstimate.MeasuredGraphPerRankGB`
+carries the engine's own figure and `evaluateTP` (`vram_fit.go:233`) uses it.
+Only the projected path needs fixing.
+
+A band is the defensible option -- roughly 0.5 to 4.0 GB per rank, with `Fits`
+already taking the pessimistic end via `TotalHighGB`. Recalibrating the
+constant to a new single number would repeat the mistake corrected below.
+
+### What not to do: refitting activation from a formula
+
+`activationBaseGB` (`internal/models/vram.go`, ~line 545) models
+`tokens x hidden x 2 bytes x 6 buffers` plus logits. It is wrong by 5.6x, 10.7x,
+23.4x and 74x across the four models, and the shape is wrong rather than the
+coefficients:
+
+- The 14B and 27B share `hidden_size` **and** `intermediate_size` exactly, and
+  differ 1.8x in per-token activation. No function of those two fields can fit
+  both.
+- Adding an `intermediate_size` term was tried on paper and rejected: closing
+  the 14B's gap alone needs ~8.8 intermediate-width buffers stacked on the
+  existing 6 hidden-width ones, which is a fudge factor wearing a structural
+  costume.
+- The engine's "peak activation" includes the encoder cache, Mamba conv and
+  state workspaces, and Triton scratch. The 4B's 74x outlier is the only
+  multimodal model in the set, and `VisionMeta` (`registry.go`) records only
+  `IsVisionModel bool` -- no vision dimensions are parsed, so a vision term
+  cannot be written today even if the base shape were right.
+
+Four points across dense, hybrid, MoE and multimodal, fitted with free
+parameters, would be indistinguishable from coincidence. Prefer a band and let
+measurements narrow it.
+
+### Open question: KV is 46% low on one hybrid
+
+The 27B projects 32,768 B/token and measured 47,836. The 4B, also hybrid, is
+within 5%, and the dense 14B is within 0.02%. Both models that miss badly are
+TP=4 hybrids on compute. `kvCachePerToken` counts only `AttentionLayers`; the
+linear-attention layers hold state in the same pool, which would explain an
+undercount, but not why the 4B escapes it. Worth one look before the recommend
+feed trusts the KV term, since it is the term everything else was judged
+against.
+
 ## VRAM estimator: what compute measured, 2026-09-16
 
 Checked against the running instance after the rework landed. Three fixes came
@@ -67,23 +190,28 @@ What is still owed:
   The lesson worth keeping is about the note, not the code: a risk recorded in
   todo.md and not acted on is indistinguishable from one nobody noticed.
 
-- **Watch a real startup.** Compare the panel against the engine's own
-  `Available KV cache memory` and `model loading took` lines. The weights
-  figure has been checked against 19.07 GiB per rank; the KV figure and the
-  full-context request count have not been checked against anything.
+- ~~**Watch a real startup.**~~ Done, four times over -- see the evidence table
+  under "Start here". Weights land within 3% and KV within 5% on dense and on
+  one hybrid; KV is 46% low on another hybrid and 2.6x low on the MoE, which is
+  now its own open question. The full-context request count still has not been
+  checked against anything.
 - **The KV figure counts one sequence at `max_model_len`.** That is the
   minimum to serve the configured context at all. The panel reports separately
   how many full-length requests the leftover buys, which is the number to tune
   `max_num_seqs` against. Whether the headline should instead assume full
   concurrency is a judgement that can be revisited once the startup figures
   have been compared.
-- **The CUDA-graph pool is a flat 0.9 GiB** (measured 0.49 and 1.32 on two
-  checkpoints) and activation assumes vLLM's 2048-token default chunk when
-  `--max-num-batched-tokens` is unset. Both are stand-ins for a measurement
-  nobody has taken.
-- **Speculative/MTP draft weights and vision-tower parameters are not counted.**
-  Both checkpoints on compute run MTP with 3 draft tokens; whatever that costs
-  is currently absorbed into the residual and attributed to the PLE table.
+- **The CUDA-graph pool is a flat 0.9 GiB** and activation assumes vLLM's
+  2048-token default chunk when `--max-num-batched-tokens` is unset. Both were
+  stand-ins for a measurement nobody had taken; the measurements exist now, and
+  both stand-ins are wrong by more than the band they imply. Superseded by
+  "Start here", Fix 2 and the note on refitting activation.
+- **Vision-tower parameters are not counted.** Draft weights now are: PR #33
+  added `VRAMEstimate.DraftGB`, counted once at its size on disk, and
+  `RequiredAt` says why it does not scale with the width. The vision tower is
+  still absorbed into the residual and attributed to the PLE table, and
+  `VisionMeta` records only `IsVisionModel bool` -- no dimensions -- so
+  counting it means parsing `vision_config` first.
 - **The expert share is fitted to one measurement.** 18.72 GiB moved against a
   46 GiB ceiling, which is 30% of that checkpoint's idle expert weight. That
   30% is now the centre of the estimate with a ±50% band around it, because one
@@ -167,6 +295,43 @@ What is pinned by tests: the MoE parameter count against four checkpoints
 12.9B active, and the Qwen3-Next structural figure reproducing its 45.9 GiB of
 safetensors to within 0.1 GiB), and the compute checkpoint's TP=4 verdict with
 the per-rank band containing the engine's measured 19.07 GiB.
+
+## Recommend feed (phases 15-19): defects found before building
+
+Read while reviewing `plan/phase-15..19`, 2026-09-22. None of the five phases
+has any code yet; these are in the documents and will be inherited by whoever
+implements them.
+
+- **Phase 17 step 12 does not typecheck.** It says call
+  `models.ParseHFConfig`, then `models.EstimateVRAM`, then `models.Fit`. But
+  `EstimateVRAM(m *Model, envPairs []string)` takes a `*Model`, not an
+  `HFConfig`, and `Fit(est, c VLLMConfig, inv)` takes a `VLLMConfig`. The plan
+  never says what synthetic `Model` and `VLLMConfig` a Hub candidate is wrapped
+  in, and that is not a detail: `MaxModelLen` and `KVCacheDtype` drive
+  `KVAtContextGB` and therefore `SpareGB`, which every objective, the headroom
+  figure and the phase-19 seed all read.
+- **Affordable context is circular unless `MaxModelLen` is 0.** `Spare =
+  Available - (W + O + perToken x ctx)`, so `affordableTokens` falls 1:1 with
+  whatever context the synthetic config names. Ranking with `MaxModelLen = 0`
+  makes `affordableTokens` mean "what this host can hold", which is the honest
+  figure phase 17 says it wants -- at the cost that `Fits` then means "will
+  load", not "will serve the configured context". The feed has to say which.
+  Whatever is chosen, phase 19 *seeds* `KVCacheDtype`, so ranking and seeding
+  must read the same source or the seed contradicts the ranking behind it.
+- **Step 12 sets `CheckpointGB` too late.** It overrides the field after
+  `EstimateVRAM` returns, but `EstimateVRAM` returns early with `Unknown =
+  true` when `TotalSizeBytes` is 0 and there is no structural fallback, and
+  `Fit` short-circuits on `est.Unknown`. The Hub's weight bytes belong in the
+  synthetic `Model.TotalSizeBytes` *before* the call, which also makes the
+  override unnecessary.
+- **Every feed figure is projected, never measured.** `evaluateTP`'s measured
+  branch requires `est.Source == SourceMeasured`, which a model that has never
+  run cannot have. So the feed ranks on the projected path -- the one whose
+  activation and graph-pool terms are wrong by the factors tabulated under
+  "Start here", both understating. That makes fit verdicts optimistic rather
+  than merely noisy, which is the wrong direction for a feature whose whole
+  claim is "this will run here". Phase 18 step 11's help text acknowledges the
+  figures are estimates; nothing yet acknowledges the bias.
 
 ## Second VRAM estimator in the HuggingFace client
 
