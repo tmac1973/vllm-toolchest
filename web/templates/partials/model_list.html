@@ -62,7 +62,11 @@
         <div class="model-card-vram"{{if not .Draft}} title="Total VRAM to load this model as configured, across all GPUs"{{end}}>{{if .Draft}}&mdash;{{else}}{{template "vram_label" .VRAM}}{{end}}</div>
         <div class="model-card-size">{{.SizeLabel}}</div>
         <div class="model-card-actions">
-            <div role="group">
+            {{/* A grid two buttons wide, not a Pico group. A group is one row
+                 however many buttons are in it, and four of them were already
+                 wider than the column: the row ran left over the size. This
+                 wraps, so another button is another cell and not a wider row. */}}
+            <div class="model-card-buttons">
                 {{- if not .Draft}}
                 <button type="button" class="outline"
                         hx-get="/api/models/config-panel?id={{.ID}}"

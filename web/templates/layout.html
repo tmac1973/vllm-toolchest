@@ -554,7 +554,7 @@
         .model-card-header,
         .model-card-row {
             display: grid;
-            grid-template-columns: 2.5rem minmax(0, 1fr) 11rem 8.5rem 5.5rem 13rem;
+            grid-template-columns: 2.5rem minmax(0, 1fr) 11rem 8.5rem 5.5rem 14rem;
             gap: 0.75rem;
             align-items: center;
         }
@@ -599,15 +599,40 @@
             font-size: 0.8rem;
         }
         .model-card-quant .nowrap { white-space: nowrap; }
-        .model-card-actions { justify-self: end; }
-        .model-card-actions button {
+        /* The card's buttons: two to a row, as many rows as there are
+           buttons. The column is a fixed width, so the buttons have to fit it
+           rather than the other way round -- laid out in one row they were
+           wider than it as soon as there were four, and being right-aligned
+           they overflowed leftwards, across the size column.
+
+           minmax(0, 1fr) rather than 1fr so a long label cannot widen its
+           track past half the column; an odd button out takes the left cell
+           of its own row. The column is 14rem, which is what two labels the
+           length of "Autoconfigure" need; anything longer is cut with an
+           ellipsis rather than allowed to overflow again. */
+        .model-card-actions { min-width: 0; }
+        .model-card-buttons {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.3rem;
+        }
+        .model-card-buttons button {
+            margin: 0;
+            font-size: 0.8rem;
+            padding: 0.25rem 0.4rem;
+            width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .model-card-actions dialog button {
             margin: 0;
             font-size: 0.8rem;
             padding: 0.25rem 0.6rem;
             width: auto;
             white-space: nowrap;
         }
-        .model-card-actions [role="group"] { margin: 0; }
+        .model-card-actions dialog [role="group"] { margin: 0; }
         /* The configure panel inside the card. When populated, the owning
            card's border turns accent so a stack of open configs never blurs
            together, and the form is recessed onto an inset surface. */
