@@ -108,6 +108,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
             <span>
                 <strong>{{.ModelID}}</strong>
+                {{- if .Update}} <small>(update)</small>{{end}}
                 {{- if not .Active}} <small>({{.OnDiskLabel}} on disk, {{.PartFiles}} partial file{{if ne .PartFiles 1}}s{{end}})</small>{{end}}
             </span>
             {{/* Deliberately not role="group": Pico gives groups width:100% and
@@ -139,7 +140,8 @@
         </div>
         {{- if .Active}}
         <progress value="{{.Percent}}" max="100" style="margin:0.25rem 0;"></progress>
-        <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files</small>
+        <small>{{.DownloadedLabel}} / {{.TotalLabel}} ({{.SpeedLabel}}) &mdash; {{.Percent}}% &mdash; {{.CompletedFiles}}/{{.TotalFiles}} files
+            {{- if .VerifyingFiles}} &mdash; verifying {{.VerifyingFiles}} file{{if ne .VerifyingFiles 1}}s{{end}} on disk{{end}}</small>
         {{- end}}
     </div>
     {{- end}}

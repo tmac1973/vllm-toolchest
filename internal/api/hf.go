@@ -300,59 +300,17 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detail, err := s.hfClient.GetModel(r.Context(), modelID)
+	// A model that is already registered goes the same way: what is fetched
+	// is whatever differs from the repo, which for a paused update is the
+	// rest of it and for a fresh download is everything.
+	downloadID, err := s.startTransfer(r.Context(), modelID, "", false)
 	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
 			s.renderPartial(w, "notice", fmt.Sprintf("Error: %s", err))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	// Filter to downloadable files
-	var filesToDownload []huggingface.ModelFile
-	hasSafetensors := false
-	for _, f := range detail.Files {
-		if strings.HasSuffix(strings.ToLower(f.Filename), ".safetensors") {
-			hasSafetensors = true
-			break
-		}
-	}
-
-	for _, f := range detail.Files {
-		if f.Category == "skip" {
-			continue
-		}
-		if hasSafetensors && f.Category == "weight" &&
-			strings.HasSuffix(strings.ToLower(f.Filename), ".bin") {
-			continue
-		}
-		if strings.HasSuffix(strings.ToLower(f.Filename), ".gguf") {
-			continue
-		}
-		filesToDownload = append(filesToDownload, f)
-	}
-
-	if len(filesToDownload) == 0 {
-		if isHTMX(r) {
-			respondHTML(w)
-			s.renderPartial(w, "notice", "No downloadable weight files found.")
-			return
-		}
-		http.Error(w, "no downloadable files", http.StatusBadRequest)
-		return
-	}
-
-	downloadID, err := s.downloader.Start(modelID, filesToDownload)
-	if err != nil {
-		if isHTMX(r) {
-			respondHTML(w)
-			s.renderPartial(w, "notice", fmt.Sprintf("Error: %s", err))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), transferStatus(err))
 		return
 	}
 
@@ -381,6 +339,10 @@ type downloadView struct {
 	SpeedLabel      string
 	CompletedFiles  int
 	TotalFiles      int
+	// VerifyingFiles is how many files are being hashed on disk rather than
+	// fetched, and Update marks a transfer into a model already registered.
+	VerifyingFiles int
+	Update         bool
 }
 
 func newDownloadView(d huggingface.DownloadProgress) downloadView {
@@ -399,6 +361,8 @@ func newDownloadView(d huggingface.DownloadProgress) downloadView {
 		SpeedLabel:      huggingface.FormatBytes(d.SpeedBPS) + "/s",
 		CompletedFiles:  d.CompletedFiles,
 		TotalFiles:      d.TotalFiles,
+		VerifyingFiles:  d.VerifyingFiles,
+		Update:          d.Update,
 	}
 }
 
@@ -487,13 +451,14 @@ func (s *Server) handleHFDiscardIncomplete(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "missing model_id", http.StatusBadRequest)
 		return
 	}
-	// Only ever for a model that is not in the registry: a registered model's
-	// directory holds its weights, and this must not be a way to delete those.
+	// A registered model's directory holds its weights, and this must not be
+	// a way to delete those: for one of them the partial files are an
+	// interrupted update, and only they go.
+	discard := s.downloader.Discard
 	if _, registered := s.registry.Get(modelID); registered {
-		http.Error(w, "model is registered — remove it from the Models page instead", http.StatusConflict)
-		return
+		discard = s.downloader.DiscardParts
 	}
-	if err := s.downloader.Discard(modelID); err != nil {
+	if err := discard(modelID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -502,13 +467,20 @@ func (s *Server) handleHFDiscardIncomplete(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleHFDownloadCancel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// Read before cancelling: whether this was an update decides what
+	// cancelling it is allowed to touch.
+	progress := s.downloader.GetProgress(id)
 	if err := s.downloader.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	// Remove any partial registry entry (model ID uses / not --)
-	modelID := strings.ReplaceAll(id, "--", "/")
-	s.registry.Delete(modelID, false) // files already cleaned up by downloader
+	// Remove any partial registry entry (model ID uses / not --). Not for an
+	// update: there the entry is a complete model with a tuned config, and
+	// pausing a fetch of two changed files must not unregister it.
+	if progress == nil || !progress.Update {
+		modelID := strings.ReplaceAll(id, "--", "/")
+		s.registry.Delete(modelID, false) // files already cleaned up by downloader
+	}
 
 	if isHTMX(r) {
 		respondHTML(w)

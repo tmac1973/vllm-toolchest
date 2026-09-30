@@ -64,9 +64,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 
 	reg := models.NewRegistry(cfg.DataDir, cfg.ModelsPath())
 	dl := huggingface.NewDownloader(cfg.DataDir, cfg.ModelsPath(), cfg.HFToken)
-	dl.SetOnComplete(func(downloadID, modelID, modelDir string) {
-		reg.RegisterFromDownload(modelID, modelDir)
-	})
+	dl.SetOnComplete(recordTransfer(reg))
 
 	s := &Server{
 		cfg:        cfg,
@@ -184,6 +182,21 @@ func (s *Server) initTemplates() {
 	s.pages = pages
 }
 
+// recordTransfer is what the registry does when a transfer finishes.
+func recordTransfer(reg *models.Registry) huggingface.CompletionFunc {
+	return func(downloadID, modelID, modelDir string) {
+		// A model that is already here has a launch config somebody tuned;
+		// registering it afresh would replace that with defaults.
+		if _, registered := reg.Get(modelID); registered {
+			if err := reg.RefreshFromDisk(modelID); err != nil {
+				slog.Error("model was updated but its record was not refreshed", "id", modelID, "error", err)
+			}
+			return
+		}
+		reg.RegisterFromDownload(modelID, modelDir)
+	}
+}
+
 // hfModelURL returns the HuggingFace page for an owner/name model ID, or ""
 // for anything that is not one.
 func hfModelURL(modelID string) string {
@@ -234,6 +247,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/config-panel", s.handleModelConfigPanel)
 			r.Put("/activate", s.handleActivateModel)
 			r.Put("/config", s.handleUpdateModelConfig)
+			r.Get("/update-check", s.handleModelUpdateCheck)
+			r.Post("/update", s.handleModelUpdate)
 			// Profiles are all POST, delete included: htmx sends included
 			// parameters in the body for a DELETE, and ParseForm only reads
 			// a body for POST, PUT and PATCH — the name would arrive nowhere.

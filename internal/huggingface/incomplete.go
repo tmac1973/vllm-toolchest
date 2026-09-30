@@ -23,7 +23,7 @@ type Incomplete struct {
 // A directory with no .part files is a finished download and is not reported,
 // whether or not the registry knows about it; that is the model scan's job.
 func (d *Downloader) ListIncomplete() []Incomplete {
-	root := filepath.Join(d.dataDir, "models")
+	root := d.modelsDir
 
 	// owner/name is two levels below root, matching modelDir().
 	byModel := map[string]*Incomplete{}

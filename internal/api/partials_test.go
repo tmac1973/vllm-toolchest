@@ -208,6 +208,76 @@ func TestGoldenPartials(t *testing.T) {
 			}},
 		},
 		{
+			// An update of a registered model, still hashing what it has:
+			// the byte counts are disk reads, and the row has to say so.
+			name:    "downloads_panel_update",
+			partial: "downloads_panel",
+			data: struct{ Rows []downloadRow }{[]downloadRow{{
+				downloadView: downloadView{
+					ID: "abc123", ModelID: "unsloth/Qwen3.8-27B-FP8", Status: "downloading",
+					Percent: 12, DownloadedLabel: "3.4 GB", TotalLabel: "28.8 GB",
+					SpeedLabel: "0 B/s", CompletedFiles: 1, TotalFiles: 7,
+					VerifyingFiles: 3, Update: true,
+				},
+				Active: true,
+			}}},
+		},
+		{
+			// The case the panel exists for: a maintainer republished part of
+			// a repo, and the rest of a copy made before files were tracked
+			// can only be told apart by hashing.
+			name:    "model_update",
+			partial: "model_update",
+			data: modelUpdateView{
+				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
+				DisplayName:   "Qwen3.8-27B-FP8",
+				Revision:      "90a83912b33232dd5f739720e90ac704ac21f07a",
+				RevisionShort: "90a83912",
+				CommitsURL:    "https://huggingface.co/unsloth/Qwen3.8-27B-FP8/commits/main",
+				Rows: []modelUpdateRow{
+					{Filename: "config.json", SizeLabel: "9.8 KB", State: "changed"},
+					{Filename: "model-00001.safetensors", SizeLabel: "3.0 GB", State: "changed", Note: "1.2 GB already fetched"},
+					{Filename: "extras/projector.safetensors", SizeLabel: "1.4 GB", State: "new"},
+					{Filename: "model-00002.safetensors", SizeLabel: "5.1 GB", State: "to verify",
+						Note: "same size as upstream; fetched only if its contents differ"},
+				},
+				CurrentCount: 3,
+				FetchCount:   3, FetchLabel: "3.2 GB",
+				VerifyCount: 1, VerifyLabel: "5.1 GB",
+				Stale: []string{"model-mtp-old.safetensors"},
+			},
+		},
+		{
+			name:    "model_update_current",
+			partial: "model_update",
+			data: modelUpdateView{
+				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
+				DisplayName:   "Qwen3.8-27B-FP8",
+				Revision:      "90a83912b33232dd5f739720e90ac704ac21f07a",
+				RevisionShort: "90a83912", SyncedShort: "90a83912",
+				CommitsURL:   "https://huggingface.co/unsloth/Qwen3.8-27B-FP8/commits/main",
+				CurrentCount: 7,
+			},
+		},
+		{
+			// Work to do and a reason it cannot start: the reason takes the
+			// button's place rather than sitting beside one that will fail.
+			name:    "model_update_blocked",
+			partial: "model_update",
+			data: modelUpdateView{
+				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
+				DisplayName:   "Qwen3.8-27B-FP8",
+				Revision:      "90a83912b33232dd5f739720e90ac704ac21f07a",
+				RevisionShort: "90a83912", SyncedShort: "390783e4",
+				Rows: []modelUpdateRow{
+					{Filename: "model-00001.safetensors", SizeLabel: "3.0 GB", State: "changed"},
+				},
+				CurrentCount: 6,
+				FetchCount:   1, FetchLabel: "3.0 GB",
+				Blocked: "This model is being served. Stop the server before updating its files.",
+			},
+		},
+		{
 			// Nothing in flight and nothing half-finished: the panel renders
 			// nothing at all rather than an empty card.
 			name:    "downloads_panel_empty",
