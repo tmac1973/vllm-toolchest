@@ -268,6 +268,8 @@ func (s *Server) buildRouter() chi.Router {
 		})
 		r.Route("/service", func(r chi.Router) {
 			r.Get("/status", s.handleServiceStatus)
+			// What a client probes to configure itself; see capabilities.go.
+			r.Get("/loaded-models", s.handleLoadedModels)
 			r.Post("/start", s.handleServiceStart)
 			r.Post("/stop", s.handleServiceStop)
 			r.Post("/restart", s.handleServiceRestart)

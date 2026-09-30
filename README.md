@@ -228,6 +228,74 @@ you).
 If you ever do want it -- and you should want a measurement first, not a
 notification -- scope it to this container rather than granting it globally.
 
+## Client auto-discovery
+
+A client can ask the server what it is serving and how to drive it, instead of
+being configured by hand. The contract is the same one
+[llama-toolchest](https://github.com/tmac1973/llama-toolchest) exposes, so a
+client written against either works with both. Haruspex probes it this way:
+
+1. `GET /api/service/status` — answers 200 when this is a toolchest.
+2. `GET /api/service/loaded-models` — everything else, in one request.
+
+```jsonc
+{
+  "schema_version": 1,
+  "server": "vllm-toolchest",
+  "running": true,
+  "models": [{
+    "id": "owner/repo",              // what to send as "model"
+    "status": "loaded",              // or "loading" while the engine starts
+    "public_name": "owner/repo",
+    "registry_id": "owner/repo",
+    "capabilities": {
+      "schema_version": 1,
+      "context_size": 131072,        // served --max-model-len: compact on this
+      "context_length": 262144,      // trained maximum, for information
+      "parallel": 8,                 // --max-num-seqs
+      "context_per_request": 131072, // same as context_size; see below
+      "vision": true,
+      "tools": true,                 // tool calls are parsed on this serve
+      "embedding": false,
+      "reasoning": {
+        "supported": true,
+        "default_enabled": true,
+        "toggle": "chat_template_kwargs",  // | "reasoning_effort" | "none"
+        "kwarg": "enable_thinking",
+        "effort_levels": ["low", "medium", "xhigh"],  // null when not enumerated
+        "default_effort": "xhigh"
+      },
+      "sampling": {
+        "source": "override-generation-config",  // | "generation_config.json" | null
+        "source_url": null,
+        "default": { "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                     "min_p": null, "presence_penalty": null, "repeat_penalty": null },
+        "presets": []
+      },
+      "max_output_tokens": 65536     // null when the engine imposes none
+    }
+  }]
+}
+```
+
+Things worth knowing as a client:
+
+- **One model or none.** vLLM serves one model per process, so the list is what
+  `/v1` will actually answer for, not the registry.
+- **What is reported is what is running.** Values come from the flags the engine
+  was started with, so a config edited since the last start does not show up
+  until the next one.
+- **`context_per_request` is not divided by `parallel`.** llama.cpp gives each
+  slot a fixed share of the context; vLLM draws every request from one KV pool,
+  so each may use the whole window and one that does not fit yet waits.
+- **`effort_levels` is never guessed.** It is read from the chat template, and
+  is `null` when the template takes no effort level or does not say which.
+- **Every key is always present**, with `null` or `false` for "known to be
+  absent", so a missing key can only mean an older server.
+- `sampling.default` is what the engine applies when a request names no
+  sampling of its own: the launch's `--override-generation-config` where it sets
+  a value, the checkpoint's `generation_config.json` where it does not.
+
 ## Development
 
 ```bash
