@@ -681,7 +681,12 @@ func BuildArgs(cfg VLLMStartConfig) []string {
 	if cfg.TrustRemoteCode {
 		args = append(args, "--trust-remote-code")
 	}
-	if cfg.MaxNumSeqs > 0 && cfg.MaxNumSeqs != 16 {
+	// Always passed. This used to be left out at 16 on the grounds that 16
+	// was vLLM's default, which it is not: left unset, the OpenAI server picks
+	// 256 on a card under 70 GB and 1024 above that. So the one value the
+	// tool itself defaults a new model to was the one value it never applied,
+	// and a model saved at 16 ran sixteen times wider than its panel said.
+	if cfg.MaxNumSeqs > 0 {
 		args = append(args, "--max-num-seqs", strconv.Itoa(cfg.MaxNumSeqs))
 	}
 	if cfg.Quantization != "" {
