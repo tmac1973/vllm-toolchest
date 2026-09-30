@@ -34,19 +34,20 @@ Decisions taken:
   section of phase 19; both were amended by autoconfigure's phase 03. Nothing
   rewrites `VLLMConfig` unasked.
 
-## GPU inventory counts an integrated GPU as a card
+## GPU inventory counted an integrated GPU as a card -- fixed 2026-09-30
 
-Found 2026-09-30 while checking autoconfigure on the workstation. The monitor
-lists the Ryzen 9800X3D's integrated GPU (2 GB) beside the RX 9070 XT
-(16 GB), and `gpuInventoryFrom` (`internal/api/gpu_inventory.go`) takes the
-smallest card, so every fit on that machine is judged against 2 GB and every
-width reads "does not fit". It affects the Configure panel's fit table as
-much as autoconfigure, and blocks autoconfigure's single-card acceptance.
+Found while checking autoconfigure on the workstation: the Ryzen 9800X3D's
+iGPU (2 GB) was counted beside the RX 9070 XT, and as the smallest card it set
+every fit on the machine. The monitor now records each AMD GPU's gfx
+architecture from KFD and marks integrated ones (the list llama-toolchest
+keeps), and `gpuInventoryFrom` leaves them out when a discrete card is
+present; an APU-only host such as a Strix Halo keeps its own.
 
-The fix is to leave integrated GPUs out whenever a discrete one is present --
-not always, because Strix Halo has nothing else. llama-toolchest recognises an
-APU by its gfx architecture (`builder.IsIGPUArch`); this project's monitor does
-not record the architecture yet, so it needs that first.
+Still open: the engine itself sees the iGPU. With every device passed into
+the container, HIP enumerates it as a GPU, and a tensor-parallel split counts
+ranks from device 0. It has not caused a problem on this machine, whose
+discrete card enumerates first, but `setup.sh`'s device selection
+(`GPU_DEVICES`) is the way to hide it where it does.
 
 ## Estimator: two defects fixed 2026-09-30, and what they leave open
 

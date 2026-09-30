@@ -72,8 +72,9 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 		return nil, fmt.Errorf("rocm-smi: no PCI Bus column")
 	}
 
-	// KFD-ordered device dirs: position N is the GPU vLLM addresses as N.
-	dirs := listAMDGPUDirs()
+	// KFD-ordered devices: position N is the GPU vLLM addresses as N.
+	devs := listAMDGPUs()
+	dirs := deviceDirs(devs)
 	byBDF := kfdIndexByBDF(dirs)
 	seen := make(map[int]bool)
 
@@ -129,6 +130,7 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 		// this row was matched to.
 		gpu.VRAMUsedMB, gpu.VRAMTotalMB = readVRAMFromDir(dirs[idx])
 		gpu.Name = readGPUNameSysfs(idx)
+		gpu.Arch, gpu.IsIGPU = devs[idx].arch, IsIntegratedArch(devs[idx].arch)
 		gpu.ROCmVersion = r.rocmVersion
 		gpu.DriverVersion = r.driverVersion
 
@@ -144,8 +146,9 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 func (r *rocmBackend) collectSysfs() ([]GPUInfo, error) {
 	var gpus []GPUInfo
 
-	for idx, deviceDir := range listAMDGPUDirs() {
-		gpu := GPUInfo{Index: idx}
+	for idx, dev := range listAMDGPUs() {
+		deviceDir := dev.dir
+		gpu := GPUInfo{Index: idx, Arch: dev.arch, IsIGPU: IsIntegratedArch(dev.arch)}
 
 		if data, err := os.ReadFile(filepath.Join(deviceDir, "gpu_busy_percent")); err == nil {
 			gpu.UtilPercent, _ = strconv.Atoi(strings.TrimSpace(string(data)))
@@ -205,42 +208,58 @@ func (r *rocmBackend) collectSysfs() ([]GPUInfo, error) {
 	return gpus, nil
 }
 
-// listAMDGPUDirs returns the sysfs device directories of AMD GPUs in KFD
-// topology order — the order rocminfo and vLLM's HIP runtime enumerate in, and
-// therefore the order the tensor-parallel ranks map onto.
+// amdDevice is one AMD GPU: its sysfs device directory, and its gfx
+// architecture when KFD reports one ("" otherwise).
+type amdDevice struct {
+	dir  string
+	arch string
+}
+
+func deviceDirs(devs []amdDevice) []string {
+	dirs := make([]string, len(devs))
+	for i, d := range devs {
+		dirs[i] = d.dir
+	}
+	return dirs
+}
+
+// listAMDGPUs returns the AMD GPUs in KFD topology order — the order rocminfo
+// and vLLM's HIP runtime enumerate in, and therefore the order the
+// tensor-parallel ranks map onto.
 //
 // rocm-smi does not share that order: its rows are sorted by PCI bus address,
 // which is why collectROCmSMI matches rows by that address rather than by
 // position. DRM card numbers do not share it either — they follow driver probe
 // order, so a display device ahead of the accelerators shifts every index.
 //
-// The card glob remains as a fallback for kernels without KFD topology.
-func listAMDGPUDirs() []string {
-	if dirs := listAMDGPUDirsKFD(); len(dirs) > 0 {
-		return dirs
+// The card glob remains as a fallback for kernels without KFD topology; it
+// knows no architectures.
+func listAMDGPUs() []amdDevice {
+	if devs := listAMDGPUsKFD(); len(devs) > 0 {
+		return devs
 	}
 	cards, _ := filepath.Glob("/sys/class/drm/card[0-9]*/device/vendor")
-	var dirs []string
+	var devs []amdDevice
 	for _, vendorFile := range cards {
 		vendor, _ := os.ReadFile(vendorFile)
 		if strings.TrimSpace(string(vendor)) != "0x1002" {
 			continue
 		}
-		dirs = append(dirs, filepath.Dir(vendorFile))
+		devs = append(devs, amdDevice{dir: filepath.Dir(vendorFile)})
 	}
-	return dirs
+	return devs
 }
 
-// listAMDGPUDirsKFD enumerates GPU nodes from /sys/class/kfd, mapping each
+// listAMDGPUsKFD enumerates GPU nodes from /sys/class/kfd, mapping each
 // node's drm_render_minor to its device directory. CPU agents carry
 // gfx_target_version 0 and are skipped.
-func listAMDGPUDirsKFD() []string {
+func listAMDGPUsKFD() []amdDevice {
 	nodes, _ := filepath.Glob("/sys/class/kfd/kfd/topology/nodes/*/properties")
 	// Glob order is lexical ("10" before "2"); sort by numeric node id.
 	sort.Slice(nodes, func(i, j int) bool {
 		return kfdNodeID(nodes[i]) < kfdNodeID(nodes[j])
 	})
-	var dirs []string
+	var devs []amdDevice
 	for _, propsPath := range nodes {
 		data, err := os.ReadFile(propsPath)
 		if err != nil {
@@ -265,11 +284,34 @@ func listAMDGPUDirsKFD() []string {
 		dir := fmt.Sprintf("/sys/class/drm/renderD%d/device", minor)
 		if vendor, err := os.ReadFile(filepath.Join(dir, "vendor")); err == nil &&
 			strings.TrimSpace(string(vendor)) == "0x1002" {
-			dirs = append(dirs, dir)
+			devs = append(devs, amdDevice{dir: dir, arch: gfxArch(gfx)})
 		}
 	}
-	return dirs
+	return devs
 }
+
+// gfxArch turns KFD's gfx_target_version into the gfx name: 120001 is
+// gfx1201, 100306 is gfx1036, 90012 is gfx90c -- the stepping is written in
+// hex, as the compiler names it.
+func gfxArch(v int) string {
+	if v <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("gfx%d%d%x", v/10000, (v/100)%100, v%100)
+}
+
+// integratedArchs are the gfx targets of integrated GPUs, the list
+// llama-toolchest keeps for the same reason.
+var integratedArchs = map[string]bool{
+	"gfx902": true, "gfx909": true, "gfx90c": true, // Raven, Renoir, Cezanne
+	"gfx1013": true, "gfx1033": true, // Van Gogh
+	"gfx1035": true, "gfx1036": true, "gfx1037": true, // Rembrandt, Raphael, Mendocino
+	"gfx1103": true,                                                    // Phoenix, Hawk Point
+	"gfx1150": true, "gfx1151": true, "gfx1152": true, "gfx1153": true, // Strix, Strix Halo, Krackan
+}
+
+// IsIntegratedArch reports whether a gfx target belongs to an integrated GPU.
+func IsIntegratedArch(arch string) bool { return integratedArchs[arch] }
 
 // kfdNodeID extracts the numeric node id from a topology properties path.
 func kfdNodeID(propsPath string) int {

@@ -25,6 +25,11 @@ type GPUInfo struct {
 	ClockMHz      int     `json:"clock_mhz,omitempty"`
 	DriverVersion string  `json:"driver_version,omitempty"`
 	ROCmVersion   string  `json:"rocm_version,omitempty"`
+	// Arch is the gfx target when the driver reports one, and IsIGPU marks
+	// an integrated GPU: a carve-out of system memory beside the processor,
+	// which no model is meant to run on when a discrete card is present.
+	Arch   string `json:"arch,omitempty"`
+	IsIGPU bool   `json:"is_igpu,omitempty"`
 }
 
 type CPUInfo struct {

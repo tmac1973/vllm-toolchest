@@ -189,3 +189,16 @@ Agent 1
 		t.Errorf("got %q, want none", names)
 	}
 }
+
+func TestGfxArch(t *testing.T) {
+	for v, want := range map[int]string{
+		120001: "gfx1201", 100306: "gfx1036", 90012: "gfx90c", 110501: "gfx1151", 110000: "gfx1100", 0: "",
+	} {
+		if got := gfxArch(v); got != want {
+			t.Errorf("gfxArch(%d) = %q, want %q", v, got, want)
+		}
+	}
+	if !IsIntegratedArch("gfx1036") || !IsIntegratedArch("gfx1151") || IsIntegratedArch("gfx1201") || IsIntegratedArch("") {
+		t.Error("integrated architectures")
+	}
+}

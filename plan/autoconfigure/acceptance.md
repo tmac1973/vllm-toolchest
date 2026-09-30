@@ -38,16 +38,17 @@ not something to do unasked, so it is left for a session where it is agreed.
 
 ### Found while checking
 
-- **The workstation's integrated GPU is counted as a card.** The monitor lists
-  the Ryzen 9800X3D's iGPU (2 GB) beside the RX 9070 XT (16 GB), and the
-  inventory takes the smallest card, so every fit on this machine is judged
-  against 2 GB: the review said the 27B "does not fit on this machine at any
-  width", which is right for a 16 GB card but for the wrong reason, and a
-  model that does fit on the 9070 XT would be refused too. This predates
-  autoconfigure -- the Configure panel's fit table has the same problem -- and
-  it blocks step 5 (the single-card host) until it is fixed. llama-toolchest
-  recognises an APU by its gfx architecture; this project's monitor does not
-  record one. See `plan/todo.md`.
+- **The workstation's integrated GPU was counted as a card.** The monitor
+  listed the Ryzen 9800X3D's iGPU (2 GB) beside the RX 9070 XT (16 GB), and
+  the inventory took the smallest card, so every fit on the machine was judged
+  against 2 GB. This predated autoconfigure -- the Configure panel's fit table
+  had it too. **Fixed the same day:** the monitor now records each AMD GPU's
+  gfx architecture from KFD and marks integrated ones, and the inventory
+  leaves them out whenever a discrete card is present (a Strix Halo, with
+  nothing else, keeps its own). Checked on the workstation: the iGPU is
+  reported as gfx1036 and integrated, and autoconfiguring
+  `Qwen/Qwen3-4B-Instruct-2507` there plans one card at 58,368 tokens with
+  fp8, where before it could plan nothing.
 - **The workstation's card is an RX 9070 XT (gfx1201, 16 GB)**, not the RX
   7900 XTX the earlier estimator notes describe. The helper fits it.
 - **The MoE card's first command carries `--hf-overrides` with rope scaling**
@@ -61,7 +62,7 @@ not something to do unasked, so it is left for a session where it is agreed.
 |---|---|---|
 | 27B and MoE start on the first attempt after Save and apply | **not yet run** | needs compute |
 | After refinement: same parsers, draft, offload flags, env; at least the context and sequence cap | **met for the 27B's card half in a test; not yet run on hardware** | `TestTheTwentySevenBCardReproducesTheHandBuiltConfig`; the MoE needs compute |
-| The same on a single-card host | **blocked** | the iGPU in the inventory; see above |
+| The same on a single-card host | **not yet run** | the iGPU that blocked it is fixed; needs the workstation deployed |
 | Every row names its source and quotes the card | met | `TestTheTwentySevenBCardReproducesTheHandBuiltConfig` asserts it for every row; the review renders it |
 | No helper, or a card with nothing usable: a proposal from the machine and the command, with a note | met in tests | `TestRunWithoutAHelper`, `TestRunWithAnAnswerThatAddsNothing`, `TestAutoconfigureWithoutAHelper` |
 | A run while a model serves ends with it serving again, including on helper failure or timeout | met in tests | `TestBorrow*`, `TestAutoconfigureInterruptsAndRestores`; not yet on hardware |
@@ -82,7 +83,6 @@ of the same check.
 
 1. Deploy the branch to compute and the workstation.
 2. Save each reference model's current config as a `Hand-tuned` profile.
-3. Fix or work around the iGPU in the workstation's inventory.
-4. Download the helper on each; run Autoconfigure with nothing serving and
+3. Download the helper on each; run Autoconfigure with nothing serving and
    record the helper's start time and whether the form came back first time.
-5. Phase 14 steps 4-9 as written.
+4. Phase 14 steps 4-9 as written.

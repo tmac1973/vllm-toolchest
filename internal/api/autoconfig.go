@@ -263,8 +263,11 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 
 	if res.Plan.Known {
 		all := res.Plan.All
-		v.Widths = append(v.Widths, widthOption{Value: "all", Checked: true,
-			Label: fmt.Sprintf("All %d %s — %s", all.TP, cardsWord(all.TP), requestsLabel(all.FullContextRequests))})
+		label := fmt.Sprintf("All %d cards — %s", all.TP, requestsLabel(all.FullContextRequests))
+		if all.TP == 1 {
+			label = "One card — " + requestsLabel(all.FullContextRequests)
+		}
+		v.Widths = append(v.Widths, widthOption{Value: "all", Checked: true, Label: label})
 		if n := res.Plan.Narrow; n != nil {
 			v.Widths = append(v.Widths, widthOption{Value: "narrow",
 				Label: fmt.Sprintf("%d %s — %s, leaves %d free", n.TP, cardsWord(n.TP), requestsLabel(n.FullContextRequests), all.TP-n.TP)})
