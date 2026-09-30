@@ -91,6 +91,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 	s.tuner.SetConfigsDir(env.BlockFP8ConfigsDir)
 
 	reg.Maintenance()
+	go s.watchEngineTimings()
 	s.initTemplates()
 	s.router = s.buildRouter()
 	return s
@@ -523,8 +524,12 @@ type dashboardGPU struct {
 type dashboardTiming struct {
 	ModelID   string
 	AvgGenTPS float64
-	Count     int
-	LastSeen  string
+	// AvgPromptTPS is zero when no prompt has needed computing yet -- every
+	// one so far was served from the prefix cache -- which the panel shows
+	// as a dash rather than as a speed of nothing.
+	AvgPromptTPS float64
+	Count        int
+	LastSeen     string
 }
 
 // timingsView is what the Live Performance panel renders.

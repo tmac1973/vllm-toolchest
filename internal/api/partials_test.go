@@ -526,7 +526,10 @@ func TestGoldenPartials(t *testing.T) {
 			data: timingsView{
 				MinSamples: 10,
 				Rows: []dashboardTiming{
-					{ModelID: "unsloth/Qwen3.8-27B-FP8", AvgGenTPS: 102.2, Count: 47, LastSeen: "Sep 8 10:58"},
+					{ModelID: "unsloth/Qwen3.8-27B-FP8", AvgGenTPS: 102.2, AvgPromptTPS: 3412.6, Count: 47, LastSeen: "Sep 8 10:58"},
+					// Every prompt so far came out of the prefix cache: a
+					// dash, not a prefill speed of zero.
+					{ModelID: "TheBloke/Mixtral-8x7B-AWQ", AvgGenTPS: 61.4, Count: 12, LastSeen: "Sep 8 10:41"},
 				},
 			},
 		},
