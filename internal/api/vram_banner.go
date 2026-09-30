@@ -49,6 +49,9 @@ type vramBanner struct {
 	KVAtContextGB  float64
 	OverheadGB     float64
 	ContextTokens  int
+	// DraftGB is a separate draft model loaded beside this one. Zero on a
+	// measured figure, where it is already inside the weights.
+	DraftGB float64
 
 	// HostResidentGB is the part offload keeps in system RAM. Shown whenever
 	// any offload is active, because it is the difference between the size on
@@ -104,6 +107,7 @@ func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
 		WeightsTotalGB: est.WeightsTotalGB,
 		KVAtContextGB:  est.KVAtContextGB,
 		ContextTokens:  est.ContextTokens,
+		DraftGB:        est.DraftGB,
 
 		HostResidentGB:    est.HostResidentGB,
 		HostResidentMinGB: est.HostResidentMinGB,
@@ -114,7 +118,7 @@ func newVRAMBanner(est models.VRAMEstimate, fit models.VRAMFit) vramBanner {
 
 		ConfiguredTP: fit.ConfiguredTP,
 	}
-	b.OverheadGB = est.TotalRequiredGB - b.WeightsTotalGB - b.KVAtContextGB
+	b.OverheadGB = est.TotalRequiredGB - b.WeightsTotalGB - b.KVAtContextGB - b.DraftGB
 	if b.OverheadGB < 0 {
 		b.OverheadGB = 0
 	}

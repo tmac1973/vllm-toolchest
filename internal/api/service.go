@@ -119,7 +119,12 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	args := process.BuildArgs(startCfg)
 	env := s.launchEnv(m)
 
-	if err := s.process.Restart(m.ID, modelPath, args, env); err != nil {
+	// Before the running engine is stopped for it, not after.
+	err := s.launchBlocker(m)
+	if err == nil {
+		err = s.process.Restart(m.ID, modelPath, args, env)
+	}
+	if err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
 			s.renderPartial(w, "error_message", err.Error())
@@ -200,6 +205,9 @@ func (s *Server) handleServiceHealth(w http.ResponseWriter, r *http.Request) {
 // button and the auto-start path so the two cannot drift into launching the
 // same model two different ways.
 func (s *Server) startModel(m *models.Model) error {
+	if err := s.launchBlocker(m); err != nil {
+		return err
+	}
 	err := s.process.Start(
 		m.ID,
 		process.ResolveModelPath(m.LocalPath),

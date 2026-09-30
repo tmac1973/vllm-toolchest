@@ -31,6 +31,7 @@
             {{/* vLLM serves one model per process, so this is a choice among
                  models rather than a set of them: picking one says what Start
                  will launch, and nothing is loaded until it does. */}}
+            {{- if not .Draft}}
             <input type="radio" name="active-model" style="margin:0;"
                    {{if .Active}}checked{{end}}
                    {{if .Orphaned}}disabled{{end}}
@@ -40,6 +41,7 @@
                    hx-target="#model-list"
                    hx-swap="innerHTML"
                    {{end}}>
+            {{- end}}
         </div>
         <div class="model-card-name">
             {{- if .NeedsRestart}}<span title="Restart the server to serve this model instead" style="cursor:help;color:var(--pico-primary);margin-right:0.2rem;">&#x21bb;</span>{{end}}
@@ -47,14 +49,21 @@
             {{- with .URL}}<a href="{{.}}" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a>{{end}}
             {{- if .Serving}} <mark style="padding:0 0.3rem;font-size:0.75rem;">serving</mark>{{end}}
             {{- if .ToolParser}} <mark style="padding:0 0.3rem;font-size:0.75rem;" title="Tool calling via the {{.ToolParser}} parser">tools</mark>{{end}}
+            {{- /* A drafter for speculative decoding: on disk like a model,
+                   and not one that can be served. No radio, no Configure. */}}
+            {{- if .Draft}} <mark style="padding:0 0.3rem;font-size:0.75rem;" title="A draft model for speculative decoding{{with .DraftMethod}} ({{.}}){{end}}. It proposes tokens for another model to verify and cannot be served on its own; choose it from the Draft model picker in that model's Configure panel.">draft</mark>{{end}}
             {{- if .Orphaned}} <del>missing</del>{{end}}
             <br><small style="opacity:0.6;">{{.ID}}</small>
+            {{- if .Draft}}
+            <br><small>{{if .UsedBy}}Drafts for {{range $i, $n := .UsedBy}}{{if $i}}, {{end}}<strong>{{$n}}</strong>{{end}}{{else}}Not used by any model yet{{end}}</small>
+            {{- end}}
         </div>
         <div class="model-card-quant"><kbd>{{.Quant.Method}}{{with .Quant.Width}} <span class="nowrap">{{.}}</span>{{end}}</kbd></div>
-        <div class="model-card-vram" title="Total VRAM to load this model as configured, across all GPUs">{{template "vram_label" .VRAM}}</div>
+        <div class="model-card-vram"{{if not .Draft}} title="Total VRAM to load this model as configured, across all GPUs"{{end}}>{{if .Draft}}&mdash;{{else}}{{template "vram_label" .VRAM}}{{end}}</div>
         <div class="model-card-size">{{.SizeLabel}}</div>
         <div class="model-card-actions">
             <div role="group">
+                {{- if not .Draft}}
                 <button type="button" class="outline"
                         hx-get="/api/models/config-panel?id={{.ID}}"
                         hx-target="#config-{{.SafeID}}"
@@ -62,6 +71,7 @@
                         hx-on::before-request="let t=document.getElementById('config-{{.SafeID}}'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
                     Configure
                 </button>
+                {{- end}}
                 {{- if and .URL (not .Orphaned)}}
                 {{/* Asks the Hub what has changed since this was downloaded.
                      Nothing is fetched until the panel it opens is confirmed. */}}
@@ -98,6 +108,9 @@
                     <header>Remove Model</header>
                     <p>Remove <strong>{{.DisplayName}}</strong> ({{.Quant.Label}}) from the registry?</p>
                     <p><small>Its files take {{.SizeLabel}} on disk.</small></p>
+                    {{- if .UsedBy}}
+                    <p><mark>{{range $i, $n := .UsedBy}}{{if $i}}, {{end}}{{$n}}{{end}} {{if eq (len .UsedBy) 1}}uses{{else}}use{{end}} this draft and will not start once its files are deleted.</mark></p>
+                    {{- end}}
                     <footer>
                         <div role="group">
                             <button type="button" class="secondary"

@@ -47,8 +47,18 @@ func (s *Server) transferBlocker(modelID string, plan huggingface.Plan) string {
 		// The engine has the checkpoint open. Nothing is swapped in until the
 		// whole update has arrived, but that last step would still change the
 		// files under a running server.
-		if st := s.process.GetStatus(); (st.State == process.StateRunning || st.State == process.StateStarting) && st.ModelID == modelID {
-			return "This model is being served. Stop the server before updating its files."
+		if st := s.process.GetStatus(); st.State == process.StateRunning || st.State == process.StateStarting {
+			if st.ModelID == modelID {
+				return "This model is being served. Stop the server before updating its files."
+			}
+			// A draft is open in the engine of whichever model is using it.
+			if m.IsDraft() {
+				for _, user := range s.draftUsers(m) {
+					if user.ID == st.ModelID {
+						return fmt.Sprintf("This draft is in use by %s, which is being served. Stop the server before updating its files.", displayNameOf(user))
+					}
+				}
+			}
 		}
 	}
 	// -1 means free space is unknown, which gates nothing; see newHFModelDetail.

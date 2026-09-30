@@ -398,7 +398,7 @@ type modelChoice struct {
 
 func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
 	var choices []modelChoice
-	for _, m := range s.registry.List() {
+	for _, m := range s.servable() {
 		if m.Orphaned {
 			continue
 		}
@@ -575,7 +575,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ToolUseEnabled bool
 	}{
 		GPUs:           gpus,
-		ModelCount:     len(s.registry.List()),
+		ModelCount:     len(s.servable()),
 		APIURL:         strings.TrimRight(s.cfg.ExternalURL, "/") + "/v1",
 		ServedModel:    served,
 		ToolUseEnabled: s.cfg.ToolUseEnabled,

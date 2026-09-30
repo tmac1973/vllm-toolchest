@@ -92,6 +92,15 @@ func (e *jobEnv) EnsureModelLoaded(ctx context.Context, modelID string, cfg benc
 		return nil
 	}
 
+	// A job's cell carries its own speculative config, which may differ from
+	// the model's saved one, so that is the one checked.
+	if m.IsDraft() {
+		return e.s.launchBlocker(m)
+	}
+	if err := missingDraft(startCfg.SpeculativeConfig); err != nil {
+		return err
+	}
+
 	// Restart handles the stop-if-running case for us.
 	if err := e.s.process.Restart(modelID, modelPath, args, env); err != nil {
 		return fmt.Errorf("restart vLLM: %w", err)

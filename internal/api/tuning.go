@@ -50,7 +50,7 @@ func (s *Server) handleTuningPage(w http.ResponseWriter, r *http.Request) {
 // buildTuningViews snapshots the registry through the lens of tuning status.
 // Heavy lift is shape derivation, which is pure-Go and cheap.
 func (s *Server) buildTuningViews() []modelTuningView {
-	all := s.registry.List()
+	all := s.servable()
 	out := make([]modelTuningView, 0, len(all))
 	for _, m := range all {
 		// Eligibility is the kernel's own requirement, not an approximation

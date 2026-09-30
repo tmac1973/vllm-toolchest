@@ -19,6 +19,7 @@
     <small>
       {{printf "%.1f" .WeightsTotalGB}} GB weights
       {{- if .KVAtContextGB}} + {{printf "%.1f" .KVAtContextGB}} GB KV cache{{if .ContextTokens}} at {{.ContextTokens}} tokens{{end}}{{end}}
+      {{- if .DraftGB}} + {{printf "%.1f" .DraftGB}} GB draft model{{end}}
       {{- if .OverheadGB}} + {{printf "%.1f" .OverheadGB}} GB overhead{{end}}
       {{- if .CheckpointGB}}; checkpoint is {{printf "%.1f" .CheckpointGB}} GB{{end}}
       {{- if .OffloadActive}}, of which {{if .HostBanded}}{{printf "%.1f" .HostResidentMinGB}}&ndash;{{end}}{{printf "%.1f" .HostResidentGB}} GB stays in host RAM{{if .OffloadLabel}} ({{.OffloadLabel}}){{end}}{{end}}
@@ -201,6 +202,17 @@
         </select></label>
         <label title="Pin the KV cache pool size in bytes. 0 lets vLLM size it, which under-reports free VRAM on ROCm. Clear this before measuring anything memory-related — while set, the pool stops responding to other memory changes.">KV cache memory (bytes) <input type="number" name="kv_cache_memory" value="{{.KVCacheMemory}}" min="0" step="1048576" placeholder="0 = auto"></label>
       </div>
+      {{- with .DraftOptions}}
+      {{/* Fills in the JSON field below rather than being a setting of its
+           own: the field is what is saved, so a config written by hand and
+           one chosen here cannot disagree. Not a named form field, so it is
+           never posted. */}}
+      <label title="A downloaded draft model to speculate with. Choosing one writes the speculative config below; the first entry clears it.">Draft model
+        <select onchange="var f=this.form.elements['speculative_config']; f.value=this.value; f.dispatchEvent(new Event('change',{bubbles:true}));">
+          <option value="">(none)</option>
+          {{- range .}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}{{if .Disabled}} disabled{{end}}>{{.Label}}</option>{{end -}}
+        </select></label>
+      {{- end}}
       <label title="Raw JSON for --speculative-config. Lossless: the target model verifies every drafted token.">Speculative config (JSON) <input type="text" name="speculative_config" value="{{.SpeculativeConfig}}" placeholder='{"method":"mtp","num_speculative_tokens":8}'></label>
       <label title="Raw JSON for --compilation-config. Most useful for trimming the CUDA-graph capture ladder to sizes this serve can actually reach.">Compilation config (JSON) <input type="text" name="compilation_config" value="{{.CompilationConfig}}" placeholder='{"cudagraph_capture_sizes":[1,2,4,8,16,32]}'></label>
       <div class="grid">

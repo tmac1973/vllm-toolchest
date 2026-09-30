@@ -85,12 +85,15 @@ type modelConfigView struct {
 	ParserGroups       []optGroup
 
 	// Advanced
-	TrustRemoteCode        bool
-	BackendOptions         []selectOption
-	ReasoningParser        string
-	MambaOptions           []selectOption
-	KVCacheMemory          int64
-	SpeculativeConfig      string
+	TrustRemoteCode   bool
+	BackendOptions    []selectOption
+	ReasoningParser   string
+	MambaOptions      []selectOption
+	KVCacheMemory     int64
+	SpeculativeConfig string
+	// DraftOptions is the downloaded draft models, for a picker that fills
+	// in SpeculativeConfig. Empty when none are downloaded.
+	DraftOptions           []draftOption
 	CompilationConfig      string
 	DisableAsyncScheduling bool
 	LanguageModelOnly      bool
@@ -148,6 +151,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 		ReasoningParser:        c.ReasoningParser,
 		KVCacheMemory:          c.KVCacheMemory,
 		SpeculativeConfig:      c.SpeculativeConfig,
+		DraftOptions:           s.draftOptions(m),
 		CompilationConfig:      c.CompilationConfig,
 		DisableAsyncScheduling: c.DisableAsyncScheduling,
 		LanguageModelOnly:      c.LanguageModelOnly,

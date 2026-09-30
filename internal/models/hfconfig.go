@@ -19,7 +19,8 @@ import (
 //
 // 1: MoE shape -- NumExperts, NumExpertsPerTok, MoEIntermediate,
 // SharedExpertInter, DenseLayers.
-const hfMetaVersion = 1
+// 2: Draft -- whether the checkpoint is a speculative-decoding drafter.
+const hfMetaVersion = 2
 
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {
@@ -143,6 +144,8 @@ func ParseHFConfig(modelDir string) HFConfig {
 	if cfg.TorchDtype == "" {
 		jsonFieldFrom(raw, &cfg.TorchDtype, "torch_dtype")
 	}
+
+	cfg.Draft = parseDraft(raw, cfg.Architectures)
 
 	// Stamped only on the success path: a config.json we could not read or
 	// parse stays stale and gets retried, rather than being recorded as

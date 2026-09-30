@@ -436,7 +436,7 @@ func (s *Server) handleJobForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var models []jobFormChoice
-	for _, m := range s.registry.List() {
+	for _, m := range s.servable() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}
