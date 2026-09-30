@@ -122,6 +122,23 @@
     </table>
     {{- end}}
 
+    {{- if .Suggestions}}
+    <h6>Draft models the card recommends</h6>
+    {{- range .Suggestions}}
+    <div class="autoconfig-suggestion">
+      <div>
+        <code>{{.Repo}}</code>{{with .SizeLabel}} &middot; {{.}}{{end}} &middot; {{.Method}}<br>
+        <small>{{if .Installed}}Installed, but it cannot be used: {{end}}{{.Why}}</small>
+      </div>
+      {{- if not .Installed}}
+      <button type="button" class="outline"
+              hx-post="/api/models/autoconfig/draft?id={{$.ModelID}}&amp;repo={{.Repo}}"
+              hx-target="this" hx-swap="outerHTML">Download</button>
+      {{- end}}
+    </div>
+    {{- end}}
+    {{- end}}
+
     {{- if or .FieldNotes .GeneralNotes}}
     <h6>Notes</h6>
     <ul class="ac-notes">

@@ -593,6 +593,20 @@ func TestGoldenPartials(t *testing.T) {
 			data:    goldenReview(true),
 		},
 		{
+			name:    "autoconfig_review_with_drafts",
+			partial: "autoconfig_review",
+			data: func() autoconfigReviewView {
+				v := goldenReview(true)
+				v.Suggestions = []autoconfig.DraftSuggestion{
+					{Repo: "org/drafter", SizeLabel: "2.0 GB", Method: "dflash",
+						Why: "The card recommends it for speculative decoding. Download it, then run Autoconfigure again to pair it."},
+					{Repo: "org/old-drafter", Method: "dflash", Installed: true,
+						Why: "it was made for a 48-layer model and this one has 64"},
+				}
+				return v
+			}(),
+		},
+		{
 			name:    "autoconfig_review_unknown_plan",
 			partial: "autoconfig_review",
 			data:    goldenReview(false),

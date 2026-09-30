@@ -715,6 +715,11 @@
         .autoconfig-warning td { background: color-mix(in srgb, var(--graphite-warn, var(--pico-primary)) 12%, transparent); }
         .autoconfig .ac-notes { font-size: 0.8rem; }
         .autoconfig .ac-buttons { margin-top: 0.75rem; width: auto; }
+        .autoconfig-suggestion {
+            display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+            border: 1px solid var(--pico-muted-border-color); border-radius: 6px;
+            padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.8rem;
+        }
         .model-profiles .mp-from { color: var(--pico-muted-color); }
 
         /* Available Models card (on the Server page) — cap the list height so

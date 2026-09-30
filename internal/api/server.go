@@ -277,6 +277,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/autoconfig/status", s.handleAutoconfigStatus)
 			r.Post("/autoconfig/save", s.handleAutoconfigSave)
 			r.Post("/autoconfig/discard", s.handleAutoconfigDiscard)
+			r.Post("/autoconfig/draft", s.handleAutoconfigDraft)
 		})
 		r.Route("/hf", func(r chi.Router) {
 			r.Get("/search", s.handleHFSearch)

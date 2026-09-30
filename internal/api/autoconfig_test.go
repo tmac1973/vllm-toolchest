@@ -148,3 +148,16 @@ func TestTheDialogAndTheReview(t *testing.T) {
 		t.Errorf("after discarding, the start panel with a reading to reuse:\n%s", rec.Body.String())
 	}
 }
+
+func TestDraftDownloadOnlyForASuggestion(t *testing.T) {
+	s := finishedRun(t)
+	s.router = s.buildRouter()
+	rec := post(s, "/api/models/autoconfig/draft?id=org/model&repo=evil/anything", url.Values{})
+	if !strings.Contains(rec.Body.String(), "not one this result suggests") {
+		t.Errorf("an arbitrary repository: %s", rec.Body.String())
+	}
+	rec = post(s, "/api/models/autoconfig/draft?id=org/other&repo=org/drafter", url.Values{})
+	if !strings.Contains(rec.Body.String(), "not one this result suggests") {
+		t.Errorf("a model with no held result: %s", rec.Body.String())
+	}
+}

@@ -220,6 +220,7 @@ type autoconfigReviewView struct {
 	FieldNotes                 []fieldNotes
 	GeneralNotes               []string
 	Summary                    []string
+	Suggestions                []autoconfig.DraftSuggestion
 }
 
 type fieldNotes struct {
@@ -277,6 +278,7 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 		})
 	}
 
+	v.Suggestions = res.Suggestions
 	byField := map[string][]string{}
 	var order []string
 	for _, n := range res.Notes {
@@ -492,4 +494,30 @@ func (s *Server) handleAutoconfigSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAutoconfigDiscard(w http.ResponseWriter, r *http.Request) {
 	s.clearAutoconfigRun(r.URL.Query().Get("id"))
 	respondHTML(w)
+}
+
+// handleAutoconfigDraft downloads a draft the review suggests. The repository
+// must be one the held result suggests: a transfer is never started for an
+// arbitrary repository named in a query string.
+func (s *Server) handleAutoconfigDraft(w http.ResponseWriter, r *http.Request) {
+	id, repo := r.URL.Query().Get("id"), r.URL.Query().Get("repo")
+	respondHTML(w)
+	run, ok := s.autoconfigSnapshot()
+	suggested := false
+	if ok && run.modelID == id && run.result != nil {
+		for _, sg := range run.result.Suggestions {
+			suggested = suggested || (sg.Repo == repo && !sg.Installed)
+		}
+	}
+	if !suggested {
+		s.renderPartial(w, "error_message", "That draft is not one this result suggests.")
+		return
+	}
+	downloadID, err := s.startTransfer(r.Context(), repo, "", false)
+	if err != nil {
+		s.renderPartial(w, "error_message", "The download did not start: "+err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "downloadsChanged")
+	s.renderPartial(w, "download_started", downloadID)
 }

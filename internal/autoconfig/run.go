@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -40,6 +41,11 @@ type Deps struct {
 	NoHelperWhy string
 	CardChars   int
 
+	// Hub looks up a draft the card names; Installed returns the registry
+	// model with a repository's ID, or nil.
+	Hub       Hub
+	Installed func(repo string) *models.Model
+
 	Progress func(string)
 }
 
@@ -66,6 +72,8 @@ type Result struct {
 	AdviceFrom string
 	WantDraft  string
 	DraftRepo  string
+	// Suggestions are drafts the card names that are not in use.
+	Suggestions []DraftSuggestion
 
 	plan func(base models.VLLMConfig, cardKVDtype string) models.FitPlan
 }
@@ -137,6 +145,13 @@ func Run(ctx context.Context, d Deps, class models.ContextClass) (*Result, error
 		if len(checked.Rows) == len(without.Rows) && len(checked.Notes) == len(without.Notes) {
 			runNote("The helper found nothing in the card's text beyond its command.")
 		}
+	}
+
+	if res.WantDraft != "" && d.Hub != nil {
+		progress("Looking for the draft model the card recommends")
+		sugg, err := FindDraftSuggestions(ctx, d.Hub, d.Model, res.WantDraft, res.DraftRepo, d.Installed)
+		res.Suggestions = sugg
+		res.Notes = finishDraftNote(res.Notes, res.DraftRepo, sugg, err)
 	}
 
 	progress("Checking what fits on this machine")
@@ -269,4 +284,28 @@ func (r *Result) Profile(width string, ticked map[string]bool, meta models.Profi
 			Advice:      r.Advice,
 		},
 	}, plan, nil
+}
+
+// finishDraftNote ends the "draft is not installed" note with what can be
+// done about it.
+func finishDraftNote(notes []models.ProfileNote, repo string, sugg []DraftSuggestion, err error) []models.ProfileNote {
+	var tail string
+	switch {
+	case err != nil:
+		tail = " The draft the card names, " + repo + ", could not be checked (" + err.Error() + ")."
+	case len(sugg) > 0 && !sugg[0].Installed:
+		tail = " It can be downloaded below."
+	case len(sugg) > 0:
+		tail = " An installed copy, " + repo + ", cannot be used: " + sugg[0].Why + "."
+	case repo != "":
+		tail = " The card names " + repo + ", but the Hub has no such repository."
+	default:
+		tail = " The card does not name a repository for it."
+	}
+	for i, n := range notes {
+		if n.Field == "speculative_config" && strings.Contains(n.Reason, "not installed") {
+			notes[i].Reason += tail
+		}
+	}
+	return notes
 }

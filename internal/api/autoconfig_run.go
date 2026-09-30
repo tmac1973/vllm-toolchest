@@ -147,6 +147,13 @@ func (s *Server) autoconfigDeps(m *models.Model, run *autoconfigRun, class model
 	}
 	if s.hfClient != nil {
 		d.Fetcher = s.cardCache()
+		d.Hub = s.hfClient
+	}
+	d.Installed = func(repo string) *models.Model {
+		if x, ok := s.registry.Get(repo); ok && !x.Orphaned {
+			return x
+		}
+		return nil
 	}
 	if desc, known := s.vllmEnv.Descriptor(); known && len(desc.AttentionBackends) > 0 {
 		for _, b := range desc.AttentionBackends {
