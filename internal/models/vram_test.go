@@ -325,7 +325,7 @@ func TestOffloadBandDecidesTheVerdict(t *testing.T) {
 		ActivationBaseGB:    0.1,
 		Offload:             Offload{PLE: true},
 	}
-	// At TP=1 that is a load of 61.0 GB optimistic, 101.0 GB pessimistic.
+	// At TP=1 that is a load of 60.2 GB optimistic, 104.1 GB pessimistic.
 	cfg := VLLMConfig{TensorParallelSize: 1, GPUMemoryUtilization: 1, MaxModelLen: 1024}
 
 	for _, tc := range []struct {
@@ -491,6 +491,129 @@ func TestExpertOffloadCeilingIsNotTheAmount(t *testing.T) {
 			t.Errorf("TP=1: %.1f GB required against %.1f available is a refusal, not a maybe",
 				opt.RequiredGB, opt.AvailableGB)
 		}
+	}
+}
+
+// The defect: a measurement stored its working set as a total across the
+// ranks, a projection was charged once whatever the width, and the field's own
+// comment described a third behaviour that nothing implemented. One function
+// now reads the field, for both sources.
+func TestActivationIsCarriedAcrossWidthsOneWay(t *testing.T) {
+	near := func(got, want float64) bool { return got > want-1e-9 && got < want+1e-9 }
+
+	// A projection describes the model unsplit, so at one rank it is a single
+	// figure, and wider it lies between all-sharded and all-replicated.
+	projected := VRAMEstimate{ActivationBaseGB: 0.5}
+	for _, tc := range []struct {
+		tp        int
+		low, high float64
+	}{
+		{1, 0.5, 0.5},
+		{2, 0.5, 1.0},
+		{4, 0.5, 2.0},
+	} {
+		if low, high := activationAt(projected, tc.tp); !near(low, tc.low) || !near(high, tc.high) {
+			t.Errorf("projected, TP=%d: %.2f-%.2f GB, want %.2f-%.2f", tc.tp, low, high, tc.low, tc.high)
+		}
+	}
+
+	// A measurement describes the width it was taken at: 1.46 GiB on each of
+	// four ranks. There it is exact. Narrower, the replicated reading is the
+	// smaller one; wider, the larger.
+	measured := VRAMEstimate{Source: SourceMeasured, MeasuredTP: 4, ActivationBaseGB: 1.46 * 4}
+	for _, tc := range []struct {
+		tp        int
+		low, high float64
+	}{
+		{1, 1.46, 5.84},
+		{2, 2.92, 5.84},
+		{4, 5.84, 5.84},
+		{8, 5.84, 11.68},
+	} {
+		if low, high := activationAt(measured, tc.tp); !near(low, tc.low) || !near(high, tc.high) {
+			t.Errorf("measured at TP=4, read at TP=%d: %.2f-%.2f GB, want %.2f-%.2f",
+				tc.tp, low, high, tc.low, tc.high)
+		}
+	}
+
+	// The one model measured at two widths. The 27B held 1.27 GiB a rank at
+	// TP=4 and 1.90 at TP=2: 5.08 in total against 3.80. Neither reading is
+	// right alone -- all-sharded says 5.08 at two ranks, all-replicated 2.54 --
+	// and the band between them holds what the engine reported.
+	at4 := VRAMEstimate{Source: SourceMeasured, MeasuredTP: 4, ActivationBaseGB: 1.27 * 4}
+	if low, high := activationAt(at4, 2); low > 1.90*2 || high < 1.90*2 {
+		t.Errorf("27B measured at TP=4, read at TP=2: %.2f-%.2f GB does not hold the 3.80 measured there",
+			low, high)
+	}
+	at2 := VRAMEstimate{Source: SourceMeasured, MeasuredTP: 2, ActivationBaseGB: 1.90 * 2}
+	if low, high := activationAt(at2, 4); low > 1.27*4 || high < 1.27*4 {
+		t.Errorf("27B measured at TP=2, read at TP=4: %.2f-%.2f GB does not hold the 5.08 measured there",
+			low, high)
+	}
+
+	// And the requirement carries the band rather than the bare field.
+	r := RequiredAt(projected, VLLMConfig{EnforceEager: true}, 4)
+	if !near(r.ActivationGB, 0.5) || !near(r.ActivationHighGB, 2.0) {
+		t.Errorf("RequiredAt at TP=4: activation %.2f-%.2f GB, want 0.50-2.00",
+			r.ActivationGB, r.ActivationHighGB)
+	}
+	if !near(r.TotalHighGB-r.TotalGB, 1.5) {
+		t.Errorf("the totals differ by %.2f GB, want the 1.50 the activation band spans",
+			r.TotalHighGB-r.TotalGB)
+	}
+}
+
+// The graph pool was a flat 0.9 GiB per rank. Starts have reported anything
+// from 0.07 to 3.74, so it is a band, and the band has to hold every one of
+// them or it is the same mistake with a second number.
+func TestGraphPoolBandHoldsEveryMeasurement(t *testing.T) {
+	for _, perRank := range []float64{0.07, 0.49, 0.93, 1.21, 2.47, 3.74} {
+		if perRank < graphPoolLowPerRankGB || perRank > graphPoolHighPerRankGB {
+			t.Errorf("a start measured %.2f GiB per rank, outside the band %.2f-%.2f",
+				perRank, graphPoolLowPerRankGB, graphPoolHighPerRankGB)
+		}
+	}
+
+	est := VRAMEstimate{CheckpointGB: 20, DeviceWeightsGB: 20, DeviceWeightsHighGB: 20}
+
+	// Every rank captures its own ladder, at both ends of the band.
+	one, four := RequiredAt(est, VLLMConfig{}, 1), RequiredAt(est, VLLMConfig{}, 4)
+	if one.GraphsHighGB <= one.GraphsGB {
+		t.Fatalf("graph pool at TP=1 is %.2f-%.2f GB, not a band", one.GraphsGB, one.GraphsHighGB)
+	}
+	if four.GraphsGB != one.GraphsGB*4 || four.GraphsHighGB != one.GraphsHighGB*4 {
+		t.Errorf("graph pool at TP=4 is %.2f-%.2f GB, want four times TP=1's %.2f-%.2f",
+			four.GraphsGB, four.GraphsHighGB, one.GraphsGB, one.GraphsHighGB)
+	}
+
+	// Eager mode captures nothing.
+	if eager := RequiredAt(est, VLLMConfig{EnforceEager: true}, 4); eager.GraphsGB != 0 || eager.GraphsHighGB != 0 {
+		t.Errorf("eager mode is charged %.2f-%.2f GB of graph pool", eager.GraphsGB, eager.GraphsHighGB)
+	}
+
+	// The verdict is drawn at the pessimistic end. 20 GB of weights and a pool
+	// of 0.05-4.0 is a load of 20.05-24.0: a card offering 22 straddles it.
+	cfg := VLLMConfig{TensorParallelSize: 1, GPUMemoryUtilization: 1}
+	for _, tc := range []struct {
+		name                    string
+		perCardGB               float64
+		wantFits, wantUncertain bool
+	}{
+		{"room for the largest pool measured", 25, true, false},
+		{"room for the smallest but not the largest", 22, false, true},
+		{"no room for the weights", 19, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := Fit(est, cfg, GPUInventory{Count: 1, PerCardGB: tc.perCardGB, Known: true}).Configured
+			if o == nil {
+				t.Fatal("no TP=1 option")
+			}
+			if o.Fits != tc.wantFits || o.Uncertain != tc.wantUncertain {
+				t.Errorf("fits=%v uncertain=%v, want fits=%v uncertain=%v (required %.1f, worst %.1f, available %.1f)",
+					o.Fits, o.Uncertain, tc.wantFits, tc.wantUncertain,
+					o.RequiredGB, o.RequiredHigh, o.AvailableGB)
+			}
+		})
 	}
 }
 

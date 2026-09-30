@@ -5,11 +5,11 @@
   </div>
   <div style="margin-bottom:1rem;padding:0.75rem;border-radius:0.25rem;background:var(--pico-card-sectioning-background-color);">
     <strong>VRAM Estimate:</strong>
-    <strong>21.0 GB</strong>
+    <strong>22.1 GB</strong> <small title="The range the estimate lies in. Whether it fits is judged at the high end.">(20.1&ndash;24.1)</small>
     total to load as configured, of 29.4 GB available <small style="opacity:0.7;" title="Derived from the checkpoint's shape. Start the model once and these figures are replaced by what the engine reports.">projected &mdash; run it once to measure</small>
     <br>
     <small>
-      14.0 GB weights + 6.0 GB KV cache at 12345 tokens + 1.0 GB overhead; checkpoint is 14.0 GB &middot; 6.7B params
+      14.0 GB weights + 6.0 GB KV cache at 12345 tokens + 2.1 GB overhead; checkpoint is 14.0 GB &middot; 6.7B params
     </small>
     <table style="margin:0.5rem 0 0;font-size:0.85em;">
       <thead><tr><th>Split</th><th>Weights</th><th>KV cache</th><th>Overhead</th><th>Total needed</th><th>Available</th><th>Full-context requests</th></tr></thead>
@@ -18,19 +18,19 @@
           <td>TP=1 &starf;</td>
           <td>14.0 GB</td>
           <td>6.0 GB</td>
-          <td>1.0 GB</td>
-          <td>21.0 GB</td>
+          <td>2.1 GB</td>
+          <td>22.1 GB</td>
           <td>29.4 GB</td>
-          <td>2</td>
+          <td>1</td>
         </tr>
         <tr>
           <td>TP=2</td>
           <td>15.4 GB</td>
           <td>6.0 GB</td>
-          <td>1.9 GB</td>
-          <td>23.3 GB</td>
+          <td>4.2 GB</td>
+          <td>25.6 GB</td>
           <td>58.9 GB</td>
-          <td>6</td>
+          <td>5</td>
         </tr>
       </tbody>
     </table>

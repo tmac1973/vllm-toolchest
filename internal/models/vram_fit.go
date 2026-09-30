@@ -43,10 +43,28 @@ func (inv GPUInventory) usableGB() float64 {
 // weightsTotalGB.
 const replicationOverhead = 1.10
 
-// graphPoolPerGPUGB is the CUDA/HIP graph capture pool one rank allocates.
-// Measured on this machine at 0.49 and 1.32 GiB across two checkpoints; the
-// midpoint is used, and eager mode pays none of it.
-const graphPoolPerGPUGB = 0.9
+// graphPoolLowPerRankGB and graphPoolHighPerRankGB bound the CUDA/HIP graph
+// capture pool one rank allocates. Eager mode pays none of it.
+//
+// A band, because it is not a constant. What starts have reported, per rank:
+//
+//	MoE hybrid     TP=4   0.07   capture sizes [4]
+//	MoE hybrid     TP=4   0.49
+//	27B hybrid     TP=2   0.93   nine capture sizes, to 64
+//	27B hybrid     TP=4   1.21   the same config
+//	14B dense      TP=1   2.47
+//	4B hybrid      TP=1   3.74
+//
+// This was a flat 0.9, the midpoint of the first two that were taken. The wide
+// runs sitting low looked like sharding, and the 27B says otherwise: measured
+// at two widths on one config, a rank's pool grew with the width. What
+// separates the rows is more likely what was captured -- the smallest is a
+// config that captures one size -- and compilation_config is not read here.
+// Until it is, the band is the same at every width and for every config.
+const (
+	graphPoolLowPerRankGB  = 0.05
+	graphPoolHighPerRankGB = 4.0
+)
 
 // TPOption is what this model costs at one tensor-parallel width, and whether
 // that many cards can supply it.
@@ -72,8 +90,9 @@ type TPOption struct {
 
 	// Fits holds at the pessimistic end of the estimate, so it is a guarantee
 	// rather than a hope. Uncertain is exactly the case where the bounds
-	// straddle what is available -- it fits if the offload behaves and does
-	// not if it does not.
+	// straddle what is available -- it fits if the offload, the graph pool
+	// and the working set land at the kind end of their bands and does not
+	// if they do not.
 	Fits      bool `json:"fits"`
 	Uncertain bool `json:"uncertain,omitempty"`
 
@@ -221,25 +240,33 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		o.Measured = tp == est.MeasuredTP
 		o.KVGB = est.KVAtContextGB
 
+		var low float64
 		if o.Measured {
 			o.WeightsGB = est.WeightsTotalGB
 			o.OverheadGB = est.TotalRequiredGB - est.WeightsTotalGB - est.KVAtContextGB
 			o.RequiredGB = est.TotalRequiredGB
+			low, o.RequiredHigh = o.RequiredGB, o.RequiredGB
 		} else {
 			o.WeightsGB = projectWeights(est.WeightsTotalGB, est.MeasuredTP, tp)
-			// Activation is a function of the batch and the model's width, not
-			// of how it is split, so the total holds. The graph ladder is
-			// captured per rank, so it grows with the width.
-			o.OverheadGB = est.ActivationBaseGB + est.MeasuredGraphPerRankGB*float64(tp)
-			o.RequiredGB = o.WeightsGB + o.KVGB + o.OverheadGB
+			// The graph ladder is captured per rank, so it grows with the
+			// width. How the working set moves with the width is the one thing
+			// a single run cannot say, so off the measured width it is a band
+			// and the row is no longer a single figure.
+			graphs := est.MeasuredGraphPerRankGB * float64(tp)
+			actLow, actHigh := activationAt(est, tp)
+
+			low = o.WeightsGB + o.KVGB + graphs + actLow
+			o.RequiredHigh = o.WeightsGB + o.KVGB + graphs + actHigh
+			o.RequiredGB = (low + o.RequiredHigh) / 2
+			o.OverheadGB = graphs + (actLow+actHigh)/2
 		}
 		if o.OverheadGB < 0 {
 			o.OverheadGB = 0
 		}
-		o.RequiredHigh = o.RequiredGB
 
-		o.Fits = o.RequiredGB <= o.AvailableGB
-		if spare := o.AvailableGB - o.RequiredGB; spare > 0 {
+		o.Fits = o.RequiredHigh <= o.AvailableGB
+		o.Uncertain = !o.Fits && low <= o.AvailableGB
+		if spare := o.AvailableGB - o.RequiredHigh; spare > 0 {
 			o.SpareGB = spare
 			if est.KVAtContextGB > 0 {
 				o.ConcurrentSeqs = 1 + int(spare/est.KVAtContextGB)
@@ -251,7 +278,7 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 	r := RequiredAt(est, c, tp)
 	o.WeightsGB = (r.WeightsGB + r.WeightsHighGB) / 2
 	o.KVGB = r.KVGB
-	o.OverheadGB = r.GraphsGB + r.CacheGB + r.ActivationGB
+	o.OverheadGB = (r.GraphsGB+r.GraphsHighGB)/2 + r.CacheGB + (r.ActivationGB+r.ActivationHighGB)/2
 	o.RequiredGB = (r.TotalGB + r.TotalHighGB) / 2
 	o.RequiredHigh = r.TotalHighGB
 

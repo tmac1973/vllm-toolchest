@@ -36,8 +36,10 @@ type vramBanner struct {
 	MeasuredWhen string
 	MeasuredTP   int
 
-	// RequiredGB is the headline. Ranged marks it widened by an offload whose
-	// size the configuration does not state.
+	// RequiredGB is the headline, and the midpoint of the band beside it.
+	// Ranged is true of every projection: the graph pool and the working set
+	// are bands until a start has measured them, and an offload whose size
+	// the configuration does not state widens it further.
 	RequiredGB     float64
 	RequiredLowGB  float64
 	RequiredHighGB float64
