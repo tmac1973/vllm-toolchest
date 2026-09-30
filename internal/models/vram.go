@@ -106,6 +106,10 @@ type VRAMEstimate struct {
 	WeightsTotalGB float64 `json:"weights_total_gb"`
 	KVAtContextGB  float64 `json:"kv_at_context_gb"`
 	GraphPoolGB    float64 `json:"graph_pool_gb,omitempty"`
+	// DraftGB is the weights of a separate draft model the speculative
+	// config loads beside this one. Not part of this checkpoint, and not in
+	// any of the figures above.
+	DraftGB float64 `json:"draft_gb,omitempty"`
 	// ContextTokens is the context the KV figure was computed for.
 	ContextTokens int `json:"context_tokens,omitempty"`
 
@@ -180,6 +184,7 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	est.Offload = DetectOffload(envPairs, m.VLLMConfig.ExtraFlags)
 	est.KVCachePerTokenB = kvCachePerToken(cfg, m.VLLMConfig)
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
+	est.DraftGB = draftWeightsGB(m.VLLMConfig)
 
 	diskGB := float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
 	params := estimateParamCount(cfg)
@@ -278,6 +283,7 @@ type Requirement struct {
 	GraphsGB      float64
 	CacheGB       float64
 	ActivationGB  float64
+	DraftGB       float64
 
 	TotalGB     float64
 	TotalHighGB float64
@@ -302,12 +308,16 @@ func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
 		// cache, so both scale with the width.
 		CacheGB:      est.DeviceCacheGB * float64(tp),
 		ActivationGB: est.ActivationBaseGB,
+		// Counted once, at its size on disk. How a drafter is split across
+		// ranks has not been measured here, and at a couple of gigabytes the
+		// replication surcharge would be inside the error of everything else.
+		DraftGB: est.DraftGB,
 	}
 	if !c.EnforceEager {
 		r.GraphsGB = graphPoolPerGPUGB * float64(tp)
 	}
 
-	fixed := r.KVGB + r.GraphsGB + r.CacheGB + r.ActivationGB
+	fixed := r.KVGB + r.GraphsGB + r.CacheGB + r.ActivationGB + r.DraftGB
 	r.TotalGB = r.WeightsGB + fixed
 	r.TotalHighGB = r.WeightsHighGB + fixed
 	return r

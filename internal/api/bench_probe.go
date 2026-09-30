@@ -370,7 +370,7 @@ func (s *Server) renderProbeResult(w http.ResponseWriter, modelID string, result
 func (s *Server) handleProbeForm(w http.ResponseWriter, r *http.Request) {
 	type modelChoice struct{ ID, Name string }
 	var choices []modelChoice
-	for _, m := range s.registry.List() {
+	for _, m := range s.servable() {
 		if !m.Enabled || m.Orphaned {
 			continue
 		}

@@ -45,6 +45,16 @@ type modelRow struct {
 	// TunableShapes is how many distinct matmul shapes tuning would measure,
 	// shown in the button's tooltip so the cost is visible before clicking.
 	TunableShapes int
+
+	// Draft marks a drafter for speculative decoding. It is listed because
+	// it is on disk and can be updated or removed, and it is not something
+	// to activate, configure or tune.
+	Draft bool
+	// DraftMethod is the speculative method it is used with, for the badge.
+	DraftMethod string
+	// UsedBy names the models whose speculative config points at this draft.
+	// Removing the draft breaks each of them at its next start.
+	UsedBy []string
 }
 
 func (s *Server) modelRows() []modelRow {
@@ -68,6 +78,20 @@ func (s *Server) modelRows() []modelRow {
 			VRAM:        s.newVRAMLabel(m),
 			Active:      m.ID == s.cfg.ActiveModel,
 			Serving:     m.ID == servingID,
+		}
+		if m.IsDraft() {
+			// None of what follows describes a draft: it has no launch
+			// config of its own, so no VRAM figure, tools badge or tuning.
+			row.Draft = true
+			row.DraftMethod = m.HFConfig.Draft.Method
+			row.VRAM = vramLabel{}
+			row.Active = false
+			for _, u := range s.draftUsers(m) {
+				row.UsedBy = append(row.UsedBy, displayNameOf(u))
+			}
+			row.SearchText = strings.ToLower(strings.Join([]string{m.ID, row.DisplayName, "draft", row.DraftMethod}, " "))
+			rows = append(rows, row)
+			continue
 		}
 		if m.ToolUse.HasToolSupport {
 			row.ToolParser = m.ToolUse.ToolCallParser
@@ -117,6 +141,10 @@ func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model files are missing", http.StatusConflict)
 		return
 	}
+	if m.IsDraft() {
+		http.Error(w, "a draft model cannot be served on its own", http.StatusConflict)
+		return
+	}
 
 	s.cfg.ActiveModel = id
 	if err := s.cfg.Save(""); err != nil {
@@ -149,7 +177,13 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-	s.renderConfigPanel(w, m, panelBanner{})
+	if m.IsDraft() {
+		respondHTML(w)
+		s.renderPartial(w, "plain_message", "A draft model has no launch config of its own. "+
+			"Choose it from the Draft model picker on the model it drafts for.")
+		return
+	}
+	s.renderConfigPanel(w, m, panelBanner{Warning: s.draftWarning(m)})
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {
@@ -242,10 +276,21 @@ func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request)
 
 	if isHTMX(r) {
 		// Re-render the full config panel so effective command updates
-		s.renderConfigPanel(w, m, panelBanner{Warning: envBlockWarning(cfg.Env)})
+		s.renderConfigPanel(w, m, panelBanner{Warning: joinWarnings(envBlockWarning(cfg.Env), s.draftWarning(m))})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// joinWarnings is the non-empty ones, as one line for the panel's banner.
+func joinWarnings(warnings ...string) string {
+	var kept []string
+	for _, w := range warnings {
+		if w != "" {
+			kept = append(kept, w)
+		}
+	}
+	return strings.Join(kept, " · ")
 }
 
 // envBlockWarning is what to say about a model's environment block, or "" when

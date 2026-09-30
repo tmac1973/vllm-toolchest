@@ -84,6 +84,10 @@ type HFConfig struct {
 	// MoE layers begin.
 	DenseLayers int `json:"dense_layers,omitempty"`
 
+	// Draft is set on a checkpoint that drafts for another model instead of
+	// being served itself. See DraftMeta.
+	Draft *DraftMeta `json:"draft,omitempty"`
+
 	// MetaVersion is the parser revision that wrote this record, so a field
 	// added later can be backfilled even when its zero value is legitimate.
 	// AttentionLayers could use zero as "never parsed" because no model has

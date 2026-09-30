@@ -43,6 +43,22 @@ func TestGoldenPartials(t *testing.T) {
 			}, Settled: true},
 		},
 		{
+			// A drafter for speculative decoding: listed because it is on
+			// disk, with nothing on the card that would start or configure it.
+			name:    "model_card_draft",
+			partial: "model_card",
+			data: modelRow{
+				ID: "tcclaviger/Qwen3.8-27B-DFlash2-FP8", SafeID: "tcclaviger--Qwen3-8-27B-DFlash2-FP8",
+				DisplayName: "Qwen3.8-27B-DFlash2-FP8",
+				URL:         "https://huggingface.co/tcclaviger/Qwen3.8-27B-DFlash2-FP8",
+				Quant:       quantBadge{Method: "fp8"},
+				SizeLabel:   "2.0 GB",
+				Draft:       true, DraftMethod: "dflash",
+				UsedBy:     []string{"ThinkingCap-3.8-27B-PARO5"},
+				SearchText: "tcclaviger/qwen3.8-27b-dflash2-fp8 draft dflash",
+			},
+		},
+		{
 			// Past the startup timeout with the process alive. Not an error,
 			// and it must not look like one: this is what a first start of a
 			// large model shows for several minutes.

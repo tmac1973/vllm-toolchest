@@ -1,0 +1,60 @@
+<article class="model-card"
+         id="model-card-tcclaviger--Qwen3-8-27B-DFlash2-FP8"
+         data-search="tcclaviger/qwen3.8-27b-dflash2-fp8 draft dflash">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+        </div>
+        <div class="model-card-name">Qwen3.8-27B-DFlash2-FP8<a href="https://huggingface.co/tcclaviger/Qwen3.8-27B-DFlash2-FP8" target="_blank" rel="noopener" title="Open model page" style="text-decoration:none;color:var(--pico-muted-color);font-size:0.85em;margin-left:0.15rem;">&#x2197;</a> <mark style="padding:0 0.3rem;font-size:0.75rem;" title="A draft model for speculative decoding (dflash). It proposes tokens for another model to verify and cannot be served on its own; choose it from the Draft model picker in that model's Configure panel.">draft</mark>
+            <br><small style="opacity:0.6;">tcclaviger/Qwen3.8-27B-DFlash2-FP8</small>
+            <br><small>Drafts for <strong>ThinkingCap-3.8-27B-PARO5</strong></small>
+        </div>
+        <div class="model-card-quant"><kbd>fp8</kbd></div>
+        <div class="model-card-vram">&mdash;</div>
+        <div class="model-card-size">2.0 GB</div>
+        <div class="model-card-actions">
+            <div role="group">
+                
+                <button type="button" class="outline secondary"
+                        title="Check Hugging Face for files that have changed since this model was downloaded"
+                        hx-get="/api/models/update-check?id=tcclaviger/Qwen3.8-27B-DFlash2-FP8"
+                        hx-target="#update-tcclaviger--Qwen3-8-27B-DFlash2-FP8"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('update-tcclaviger--Qwen3-8-27B-DFlash2-FP8'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Update
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Qwen3.8-27B-DFlash2-FP8</strong> (fp8) from the registry?</p>
+                    <p><small>Its files take 2.0 GB on disk.</small></p>
+                    <p><mark>ThinkingCap-3.8-27B-PARO5 uses this draft and will not start once its files are deleted.</mark></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=tcclaviger/Qwen3.8-27B-DFlash2-FP8&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=tcclaviger/Qwen3.8-27B-DFlash2-FP8"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-tcclaviger--Qwen3-8-27B-DFlash2-FP8"></div>
+    <div class="model-card-config" id="update-tcclaviger--Qwen3-8-27B-DFlash2-FP8"></div>
+</article>
