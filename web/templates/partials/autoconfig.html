@@ -1,0 +1,164 @@
+{{/* Autoconfigure: the start panel, the progress line, the review and the
+     outcome, all rendered into the #autoconfig-<SafeID> slot under a model
+     card. Inline rather than a modal: the review is a table that needs the
+     width, and a run outlives any dialog the operator closes. */}}
+
+{{define "autoconfig_dialog" -}}
+<article class="autoconfig">
+  <div class="model-config-header">
+    <span>Autoconfigure <span class="mc-owner">&mdash; {{.ModelName}}</span></span>
+  </div>
+  <form hx-post="/api/models/autoconfig/start?id={{.ModelID}}" hx-target="#autoconfig-{{.SafeID}}" hx-swap="innerHTML">
+    <fieldset>
+      <legend>How much context do you need?</legend>
+      {{- range .Classes}}
+      <label title="{{.Help}}"><input type="radio" name="context_class" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>
+      {{- end}}
+    </fieldset>
+    {{- if .Busy}}
+    <p class="ac-msg ac-warn">&#9888; {{.Busy}} The helper cannot be started now. An earlier reading of this card will be used if there is one; otherwise the card's command is used without its text.</p>
+    {{- end}}
+    {{- if .TooLarge}}
+    <p class="ac-msg ac-warn">&#9888; {{.TooLarge}} The card's command is still used.</p>
+    {{- end}}
+    {{- if .HelperMissing}}
+    <p>The helper model reads the card's text. It is about 8 GB.</p>
+    <div id="autoconfig-helper-{{.SafeID}}">
+      <button type="button" class="outline secondary"
+              hx-post="/api/settings/helper/download"
+              hx-target="#autoconfig-helper-{{.SafeID}}" hx-swap="innerHTML">Download the helper</button>
+    </div>
+    <p><small>Or start now: the card's command is still used.</small></p>
+    {{- end}}
+    {{- if .HelperUsable}}
+    {{- if .Serving}}
+    <p>If the card needs reading, <strong>{{.Serving}}</strong> will be stopped while it is read and restarted afterwards. A card read before and unchanged since is not read again.</p>
+    {{- else if not .Busy}}
+    <p>If the card needs reading, the helper model will be started, used and stopped.</p>
+    {{- end}}
+    {{- end}}
+    {{- if .HasReading}}
+    <label><input type="checkbox" name="reread"> Read the card again</label>
+    {{- end}}
+    <div role="group" class="ac-buttons">
+      <button type="submit">Start</button>
+      <button type="button" class="secondary outline"
+              onclick="document.getElementById('autoconfig-{{.SafeID}}').innerHTML='';">Cancel</button>
+    </div>
+  </form>
+</article>
+{{- end}}
+
+{{define "autoconfig_progress" -}}
+<article class="autoconfig" hx-get="/api/models/autoconfig/status?id={{.ModelID}}" hx-trigger="every 2s"
+         hx-target="#autoconfig-{{.SafeID}}" hx-swap="innerHTML">
+  <div class="model-config-header">
+    <span>Autoconfigure <span class="mc-owner">&mdash; {{.ModelName}}</span></span>
+  </div>
+  <p aria-busy="true">{{.Progress}}&hellip;</p>
+</article>
+{{- end}}
+
+{{define "autoconfig_hardware_table" -}}
+<table class="autoconfig-table">
+  <thead><tr><th>Setting</th><th>Now</th><th>Proposed</th><th>Why</th><th>The card</th></tr></thead>
+  <tbody>
+  {{- range .Rows}}
+    <tr>
+      <td>{{.Label}}</td>
+      <td>{{.Current}}</td>
+      <td data-all="{{.Proposed}}" data-narrow="{{.ProposedNarrow}}"><strong>{{.Proposed}}</strong></td>
+      <td data-all="{{.Why}}" data-narrow="{{.WhyNarrow}}"><small>{{.Why}}</small></td>
+      <td><small>{{.CardUsed}}</small></td>
+    </tr>
+  {{- end}}
+  </tbody>
+</table>
+{{- end}}
+
+{{define "autoconfig_review" -}}
+<article class="autoconfig" id="autoconfig-review-{{.SafeID}}">
+  <div class="model-config-header">
+    <span>Autoconfigure <span class="mc-owner">&mdash; {{.ModelName}}</span></span>
+  </div>
+  <p><small>{{.Sources}}</small></p>
+  <form hx-post="/api/models/autoconfig/save?id={{.ModelID}}" hx-target="#autoconfig-{{.SafeID}}" hx-swap="innerHTML">
+    <h6>This machine</h6>
+    {{- if .PlanKnown}}
+    {{- if .FirstGuess}}
+    <p class="ac-msg ac-warn">This model has not run here yet, so the hardware settings are a first guess. A real start will refine them.</p>
+    {{- end}}
+    <fieldset class="autoconfig-width">
+      {{- range .Widths}}
+      <label><input type="radio" name="width" value="{{.Value}}"{{if .Checked}} checked{{end}}
+             onchange="this.closest('.autoconfig').querySelectorAll('[data-narrow]').forEach(function(el){var v=el.dataset[this.value]; if(el.firstElementChild){el.firstElementChild.textContent=v}else{el.textContent=v}}, this);"> {{.Label}}</label>
+      {{- end}}
+    </fieldset>
+    {{template "autoconfig_hardware_table" .Hardware}}
+    {{- else}}
+    <p class="ac-msg ac-warn">The hardware settings are left as they are: {{.PlanWhy}}.</p>
+    {{- end}}
+
+    {{- if .CardRows}}
+    <h6>From the model card</h6>
+    <table class="autoconfig-table">
+      <thead><tr><th></th><th>Setting</th><th>Now</th><th>Proposed</th><th>Source</th><th>Why</th></tr></thead>
+      <tbody>
+      {{- range .CardRows}}
+        <tr{{if .Warning}} class="autoconfig-warning"{{end}}>
+          <td><input type="checkbox" name="row" value="{{.Key}}"{{if .Ticked}} checked{{end}} aria-label="Use {{.Label}}"></td>
+          <td><code>{{.Label}}</code></td>
+          <td><small>{{.Current}}</small></td>
+          <td><small class="ac-value">{{.Proposed}}</small></td>
+          <td><small>model card</small></td>
+          <td>
+            {{- if .Warning}}<small><strong>{{.Warning}}</strong></small><br>{{end}}
+            <small>{{.Reason}}</small>
+            <details><summary><small>The card's words</small></summary><small><code>{{.Quote}}</code></small></details>
+          </td>
+        </tr>
+      {{- end}}
+      </tbody>
+    </table>
+    {{- end}}
+
+    {{- if or .FieldNotes .GeneralNotes}}
+    <h6>Notes</h6>
+    <ul class="ac-notes">
+      {{- range .FieldNotes}}
+      <li><code>{{.Field}}</code>: {{range $i, $n := .Notes}}{{if $i}} {{end}}{{$n}}{{end}}</li>
+      {{- end}}
+      {{- range .GeneralNotes}}
+      <li>{{.}}</li>
+      {{- end}}
+    </ul>
+    {{- end}}
+    {{- if .Summary}}
+    <h6>The helper's summary of the card, not checked</h6>
+    <ul class="ac-notes">
+      {{- range .Summary}}
+      <li>{{.}}</li>
+      {{- end}}
+    </ul>
+    {{- end}}
+
+    <div role="group" class="ac-buttons">
+      <button type="submit" name="apply" value="1">Save and apply</button>
+      <button type="submit" name="apply" value="0" class="secondary">Save as Autoconfig profile</button>
+      <button type="button" class="secondary outline"
+              hx-post="/api/models/autoconfig/discard?id={{.ModelID}}"
+              hx-target="#autoconfig-{{.SafeID}}" hx-swap="innerHTML">Discard</button>
+    </div>
+  </form>
+</article>
+{{- end}}
+
+{{define "autoconfig_message" -}}
+<article class="autoconfig">
+  {{- with .Banner.OK}}<p class="ac-msg ac-ok">{{.}}</p>{{end}}
+  {{- with .Banner.Warning}}<p class="ac-msg ac-warn">&#9888; {{.}}</p>{{end}}
+  {{- with .Banner.Error}}<p class="ac-msg ac-error">{{.}}</p>{{end}}
+  <button type="button" class="secondary outline"
+          onclick="document.getElementById('autoconfig-{{.SafeID}}').innerHTML='';">Close</button>
+</article>
+{{- end}}

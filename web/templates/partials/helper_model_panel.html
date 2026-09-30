@@ -4,10 +4,10 @@
      commands to use, and the advice it gives in prose. While it reads, whatever model is serving is stopped
      and then restarted. Without it, autoconfigure still uses the card's own command and this machine's cards.</p>
   {{- if .Message}}
-  <p class="mp-msg {{if eq .MessageKind "error"}}mp-error{{else}}mp-ok{{end}}">{{.Message}}</p>
+  <p class="ac-msg {{if eq .MessageKind "error"}}ac-error{{else}}ac-ok{{end}}">{{.Message}}</p>
   {{- end}}
   {{- if .TooLarge}}
-  <p class="mp-msg mp-warn">&#9888; {{.TooLarge}} Autoconfigure will work from this machine and the card's command alone.</p>
+  <p class="ac-msg ac-warn">&#9888; {{.TooLarge}} Autoconfigure will work from this machine and the card's command alone.</p>
   {{- end}}
   {{- if .DownloadID}}
   {{template "download_started" .DownloadID}}

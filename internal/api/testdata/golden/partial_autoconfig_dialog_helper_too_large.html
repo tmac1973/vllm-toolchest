@@ -1,0 +1,20 @@
+<article class="autoconfig">
+  <div class="model-config-header">
+    <span>Autoconfigure <span class="mc-owner">&mdash; M</span></span>
+  </div>
+  <form hx-post="/api/models/autoconfig/start?id=org/m" hx-target="#autoconfig-org--m" hx-swap="innerHTML">
+    <fieldset>
+      <legend>How much context do you need?</legend>
+      <label title="A few pages of text. Uses the least memory, leaving the most for concurrent requests."><input type="radio" name="context_class" value="short"> Short — about 8,000 tokens</label>
+      <label title="A long document or a long conversation. A good default."><input type="radio" name="context_class" value="medium" checked> Medium — about 32,000 tokens</label>
+      <label title="A small codebase or a book chapter. Needs much more memory."><input type="radio" name="context_class" value="long"> Long — about 128,000 tokens</label>
+      <label title="The model&#39;s own limit, reduced only as far as needed to fit."><input type="radio" name="context_class" value="max"> Maximum — up to 32,768 tokens, as much as fits</label>
+    </fieldset>
+    <p class="ac-msg ac-warn">&#9888; The helper model needs about 9.6 GB and the smallest card offers 7.2 GB. The card's command is still used.</p>
+    <div role="group" class="ac-buttons">
+      <button type="submit">Start</button>
+      <button type="button" class="secondary outline"
+              onclick="document.getElementById('autoconfig-org--m').innerHTML='';">Cancel</button>
+    </div>
+  </form>
+</article>

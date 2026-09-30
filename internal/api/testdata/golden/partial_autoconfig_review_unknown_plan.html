@@ -1,0 +1,67 @@
+<article class="autoconfig" id="autoconfig-review-org--m">
+  <div class="model-config-header">
+    <span>Autoconfigure <span class="mc-owner">&mdash; M</span></span>
+  </div>
+  <p><small>Read the model card of org/m and org/base. The helper model read its text.</small></p>
+  <form hx-post="/api/models/autoconfig/save?id=org/m" hx-target="#autoconfig-org--m" hx-swap="innerHTML">
+    <h6>This machine</h6>
+    <p class="ac-msg ac-warn">The hardware settings are left as they are: no GPU has been read yet.</p>
+    <h6>From the model card</h6>
+    <table class="autoconfig-table">
+      <thead><tr><th></th><th>Setting</th><th>Now</th><th>Proposed</th><th>Source</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><input type="checkbox" name="row" value="field:tool_call_parser" checked aria-label="Use tool_call_parser"></td>
+          <td><code>tool_call_parser</code></td>
+          <td><small>qwen3_xml</small></td>
+          <td><small class="ac-value">qwen3_coder</small></td>
+          <td><small>model card</small></td>
+          <td>
+            <small>From the card&#39;s command.</small>
+            <details><summary><small>The card's words</small></summary><small><code>--tool-call-parser qwen3_coder</code></small></details>
+          </td>
+        </tr>
+        <tr class="autoconfig-warning">
+          <td><input type="checkbox" name="row" value="field:trust_remote_code" checked aria-label="Use trust_remote_code"></td>
+          <td><code>trust_remote_code</code></td>
+          <td><small></small></td>
+          <td><small class="ac-value">true</small></td>
+          <td><small>model card</small></td>
+          <td><small><strong>Lets the engine run Python code shipped in the model repository. Untick it if you do not trust the publisher.</strong></small><br>
+            <small>From the card&#39;s command.</small>
+            <details><summary><small>The card's words</small></summary><small><code>--trust-remote-code</code></small></details>
+          </td>
+        </tr>
+        <tr>
+          <td><input type="checkbox" name="row" value="env:ROCR_VISIBLE_DEVICES" aria-label="Use ROCR_VISIBLE_DEVICES"></td>
+          <td><code>ROCR_VISIBLE_DEVICES</code></td>
+          <td><small></small></td>
+          <td><small class="ac-value">0,1,2,3</small></td>
+          <td><small>model card</small></td>
+          <td>
+            <small>ROCR_VISIBLE_DEVICES: hides GPUs from vLLM.</small>
+            <details><summary><small>The card's words</small></summary><small><code>-e ROCR_VISIBLE_DEVICES=0,1,2,3</code></small></details>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <h6>Notes</h6>
+    <ul class="ac-notes">
+      <li><code>max_model_len</code>: The card&#39;s command used 262144. This is chosen for this machine instead.</li>
+      <li><code>chat_template</code>: The card&#39;s command names a chat template file on the author&#39;s machine.</li>
+      <li>The card shows 2 complete commands; the first is used.</li>
+    </ul>
+    <h6>The helper's summary of the card, not checked</h6>
+    <ul class="ac-notes">
+      <li>Use the image&#39;s latest tag.</li>
+    </ul>
+
+    <div role="group" class="ac-buttons">
+      <button type="submit" name="apply" value="1">Save and apply</button>
+      <button type="submit" name="apply" value="0" class="secondary">Save as Autoconfig profile</button>
+      <button type="button" class="secondary outline"
+              hx-post="/api/models/autoconfig/discard?id=org/m"
+              hx-target="#autoconfig-org--m" hx-swap="innerHTML">Discard</button>
+    </div>
+  </form>
+</article>

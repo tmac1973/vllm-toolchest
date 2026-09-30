@@ -1,0 +1,47 @@
+<table class="autoconfig-table">
+  <thead><tr><th>Setting</th><th>Now</th><th>Proposed</th><th>Why</th><th>The card</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>GPUs (tensor parallel)</td>
+      <td>1</td>
+      <td data-all="4" data-narrow="2"><strong>4</strong></td>
+      <td data-all="Split across 4 cards." data-narrow="Split across 2 cards."><small>Split across 4 cards.</small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>Context length</td>
+      <td>8,192</td>
+      <td data-all="262,144" data-narrow="262,144"><strong>262,144</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>KV cache dtype</td>
+      <td>auto</td>
+      <td data-all="fp8" data-narrow="fp8"><strong>fp8</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>GPU memory utilization</td>
+      <td>0.90</td>
+      <td data-all="0.90" data-narrow="0.90"><strong>0.90</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>Max concurrent sequences</td>
+      <td>0</td>
+      <td data-all="16" data-narrow="16"><strong>16</strong></td>
+      <td data-all="" data-narrow=""><small></small></td>
+      <td><small></small></td>
+    </tr>
+    <tr>
+      <td>KV cache memory (pinned)</td>
+      <td>6.0 GB</td>
+      <td data-all="sized by the engine" data-narrow="sized by the engine"><strong>sized by the engine</strong></td>
+      <td data-all="A pinned pool would override the engine&#39;s own sizing, which the context is planned against." data-narrow="A pinned pool would override the engine&#39;s own sizing, which the context is planned against."><small>A pinned pool would override the engine&#39;s own sizing, which the context is planned against.</small></td>
+      <td><small></small></td>
+    </tr>
+  </tbody>
+</table>
