@@ -2,6 +2,7 @@ package process
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -123,5 +124,23 @@ func TestBuildEnvAppendsExtras(t *testing.T) {
 	// Extras go last so they win over anything inherited from the image.
 	if got := env[len(env)-1]; got != "RADIANCE_DRAFT_TAU=0.35" {
 		t.Errorf("extras must be appended last, got %q", got)
+	}
+}
+
+// 16 is the tool's own default for a new model, and used to be the one value
+// never passed: it was taken for vLLM's default, which is 256 on these cards
+// and 1024 on larger ones. The panel said sixteen and the engine ran far wider.
+func TestBuildArgsPassesMaxNumSeqsAtEveryValue(t *testing.T) {
+	for _, n := range []int{1, 8, 16, 256} {
+		args := strings.Join(BuildArgs(VLLMStartConfig{MaxNumSeqs: n}), " ")
+		want := "--max-num-seqs " + strconv.Itoa(n)
+		if !strings.Contains(args, want) {
+			t.Errorf("max_num_seqs=%d built %q, want it to contain %q", n, args, want)
+		}
+	}
+	// Unset is still unset: a config that states no figure leaves the choice
+	// to the engine.
+	if args := strings.Join(BuildArgs(VLLMStartConfig{}), " "); strings.Contains(args, "--max-num-seqs") {
+		t.Errorf("an unset max_num_seqs was passed: %q", args)
 	}
 }
