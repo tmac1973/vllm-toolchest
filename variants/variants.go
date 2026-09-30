@@ -114,10 +114,20 @@ type Descriptor struct {
 	DocLabel string
 	Note     string
 
-	BaseImage    string
-	Dockerfile   string
-	NeedsFlatten bool
-	VLLMPin      string
+	BaseImage string
+	// BasePull is "always" for a variant that follows a tag that moves:
+	// setup.sh asks the registry where the tag points on install, rebuild
+	// and pull, instead of building on whatever it fetched the first time.
+	BasePull string
+	// BaseReleaseCmd, run in the base image, prints the image's own release
+	// number. Optional, and only ever recorded for the operator to read.
+	BaseReleaseCmd string
+	Dockerfile     string
+	NeedsFlatten   bool
+	// VLLMPin is the vLLM release the base was built against: a tag, "main"
+	// for a from-source build, or PinFromImage when it is read out of the
+	// base at build time.
+	VLLMPin string
 	// TunerRef is the git ref the tuner benchmark script is fetched from,
 	// when the pin is not itself one. A base built between releases reports
 	// a version with no tag behind it.
@@ -365,27 +375,29 @@ func parse(id string, src string) (Descriptor, error) {
 	}
 
 	d := Descriptor{
-		ID:           kv["VARIANT_ID"],
-		Label:        kv["VARIANT_LABEL"],
-		Summary:      kv["VARIANT_SUMMARY"],
-		Vendor:       kv["VARIANT_VENDOR"],
-		Tier:         kv["VARIANT_TIER"],
-		DocURL:       kv["VARIANT_DOC_URL"],
-		DocLabel:     kv["VARIANT_DOC_LABEL"],
-		Note:         kv["VARIANT_NOTE"],
-		BaseImage:    kv["VARIANT_BASE_IMAGE"],
-		Dockerfile:   kv["VARIANT_DOCKERFILE"],
-		NeedsFlatten: kv["VARIANT_NEEDS_FLATTEN"] == "1",
-		VLLMPin:      kv["VARIANT_VLLM_PIN"],
-		TunerRef:     kv["VARIANT_TUNER_REF"],
-		GFXTargets:   strings.Fields(kv["VARIANT_GFX_TARGETS"]),
-		HostArch:     kv["VARIANT_HOST_ARCH"],
-		VenvRoot:     kv["VARIANT_VENV_ROOT"],
-		Launcher:     parseLauncher(kv),
-		StampFile:    kv["VARIANT_STAMP_FILE"],
-		Caps:         strings.Fields(kv["VARIANT_CAPS"]),
-		Capabilities: strings.Fields(kv["VARIANT_CAPABILITIES"]),
-		ImageEnv:     strings.Fields(kv["VARIANT_IMAGE_ENV"]),
+		ID:             kv["VARIANT_ID"],
+		Label:          kv["VARIANT_LABEL"],
+		Summary:        kv["VARIANT_SUMMARY"],
+		Vendor:         kv["VARIANT_VENDOR"],
+		Tier:           kv["VARIANT_TIER"],
+		DocURL:         kv["VARIANT_DOC_URL"],
+		DocLabel:       kv["VARIANT_DOC_LABEL"],
+		Note:           kv["VARIANT_NOTE"],
+		BaseImage:      kv["VARIANT_BASE_IMAGE"],
+		BasePull:       kv["VARIANT_BASE_PULL"],
+		BaseReleaseCmd: kv["VARIANT_BASE_RELEASE_CMD"],
+		Dockerfile:     kv["VARIANT_DOCKERFILE"],
+		NeedsFlatten:   kv["VARIANT_NEEDS_FLATTEN"] == "1",
+		VLLMPin:        kv["VARIANT_VLLM_PIN"],
+		TunerRef:       kv["VARIANT_TUNER_REF"],
+		GFXTargets:     strings.Fields(kv["VARIANT_GFX_TARGETS"]),
+		HostArch:       kv["VARIANT_HOST_ARCH"],
+		VenvRoot:       kv["VARIANT_VENV_ROOT"],
+		Launcher:       parseLauncher(kv),
+		StampFile:      kv["VARIANT_STAMP_FILE"],
+		Caps:           strings.Fields(kv["VARIANT_CAPS"]),
+		Capabilities:   strings.Fields(kv["VARIANT_CAPABILITIES"]),
+		ImageEnv:       strings.Fields(kv["VARIANT_IMAGE_ENV"]),
 	}
 
 	// Attention backends carry a label, because the picker's whole job is to
@@ -555,6 +567,16 @@ func groupKnobs(kv map[string]string, knobs []Knob) []Group {
 	return out
 }
 
+// PinFromImage is the VARIANT_VLLM_PIN value meaning the pin is not stated:
+// setup.sh reads the vLLM version out of the base image and derives the pin
+// and the tuner ref from that.
+const PinFromImage = "image"
+
+// TracksBase reports whether the variant follows a base tag that moves.
+func (d Descriptor) TracksBase() bool {
+	return d.BasePull == "always"
+}
+
 // Validate enforces the manifest invariants that a typo would otherwise turn
 // into a runtime surprise on hardware nobody here can test.
 func (d Descriptor) Validate() error {
@@ -563,6 +585,28 @@ func (d Descriptor) Validate() error {
 	}
 	if d.Tier != "" && d.Tier != "tested" && d.Tier != "community" && d.Tier != "experimental" {
 		return fmt.Errorf("VARIANT_TIER: %q is not tested, community or experimental", d.Tier)
+	}
+
+	if d.BasePull != "" && d.BasePull != "always" {
+		return fmt.Errorf("VARIANT_BASE_PULL: %q is not \"always\"; leave it out for a base that names one release", d.BasePull)
+	}
+	if d.TracksBase() && d.BaseImage == "" {
+		return fmt.Errorf("VARIANT_BASE_PULL is set but there is no VARIANT_BASE_IMAGE to pull")
+	}
+	// The pin says which vLLM is inside the base, and the build checks it. A
+	// base that moves carries a different vLLM from one pull to the next, so
+	// a pin written down here would be right until the first release that
+	// changed it and then stop every build.
+	if d.TracksBase() && d.VLLMPin != PinFromImage {
+		return fmt.Errorf("VARIANT_BASE_PULL='always' needs VARIANT_VLLM_PIN='%s': a base that moves cannot have its vLLM version stated in advance", PinFromImage)
+	}
+	if d.VLLMPin == PinFromImage {
+		if d.BaseImage == "" {
+			return fmt.Errorf("VARIANT_VLLM_PIN='%s' but there is no VARIANT_BASE_IMAGE to read it from", PinFromImage)
+		}
+		if d.TunerRef != "" {
+			return fmt.Errorf("VARIANT_TUNER_REF is set, but VARIANT_VLLM_PIN='%s' reads the tuner ref out of the base as well", PinFromImage)
+		}
 	}
 
 	for _, pair := range d.ImageEnv {

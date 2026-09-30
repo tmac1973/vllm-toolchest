@@ -116,6 +116,34 @@ The answers are stored in `.env` and reused by every later command, so `up`,
 `./setup.sh detect` prints the current backend and variant. setup.sh only
 rewrites the keys it owns, so anything you add to `.env` yourself survives.
 
+### Variants that follow a moving image
+
+Most prebuilt variants name one release of the image they build on, and moving
+to a newer one is a change to the manifest. `rdna4-clav` does not: its image and
+the checkpoints published for it move together and often, so it follows
+`tcclaviger/vllm:latest`. What that means in practice:
+
+```bash
+./setup.sh pull      # fetch the newest base image and rebuild on it
+./setup.sh quick     # rebuild after a code change -- same engine as before
+./setup.sh status    # which vLLM and which image release is installed
+```
+
+- `install`, `rebuild` and `pull` ask the registry where the tag points now.
+  `quick` never does, so the engine changes when you ask and not as a side
+  effect of rebuilding the UI.
+- The vLLM version and the ref the FP8 tuner script is fetched from are read
+  out of the image that was pulled, not stated in the manifest.
+- The image that was in use before a move is kept, and the move prints the
+  command that goes back to it:
+  `VLLMCTL_BASE_IMAGE=<previous> ./setup.sh pull`. Going back sticks through
+  later `quick` rebuilds, until the next `pull` without the override. Only the
+  current base and the one before it are kept; older ones are removed.
+
+What was resolved is recorded in `.env` as `VLLMCTL_BASE_IMAGE` (the local name
+the build uses), `VLLMCTL_BASE_DIGEST`, `VLLMCTL_BASE_PREVIOUS`,
+`VLLMCTL_BASE_VLLM` and `VLLMCTL_BASE_RELEASE`.
+
 ### What the radiance variant adds
 
 Its tuned paths are switchable from the **Settings** page (and via `RADIANCE_*`
@@ -284,6 +312,22 @@ Two things are worth reading off the published image rather than guessing, becau
 the build asserts them: `VARIANT_VENV_ROOT` (from `VIRTUAL_ENV` or `PATH` in the
 image config) and `VARIANT_VLLM_PIN`. Get the pin wrong and the build stops with
 a message telling you the right value.
+
+A base that names a tag which moves (`latest`, `nightly`) has to say so, or it
+is pulled once and never again:
+
+```sh
+VARIANT_BASE_IMAGE='docker.io/someone/their-vllm:latest'
+VARIANT_BASE_PULL='always'            # re-resolve on install, rebuild and pull
+VARIANT_VLLM_PIN='image'              # read the vLLM version out of the base
+```
+
+`VARIANT_VLLM_PIN='image'` is required alongside `VARIANT_BASE_PULL`: a pin
+written down in advance is right until the image's next vLLM bump and then
+fails every build. It can also be used on its own, with a fixed tag, to save
+looking the version up. `VARIANT_BASE_RELEASE_CMD`, optional, is a shell command
+run inside the image that prints its author's release number, for `status` to
+show.
 
 Feature switches are declared here too, once, and the config layer, the Settings
 page and `.env.example` all generate from that declaration:

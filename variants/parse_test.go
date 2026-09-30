@@ -264,6 +264,29 @@ func TestValidateRejects(t *testing.T) {
 			"owned by the process manager",
 		},
 		{
+			// A fixed pin is checked by the build against whatever the tag
+			// points at that day, so this pairing builds until the base's
+			// next vLLM bump and then never again.
+			"a moving base with a stated pin",
+			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:latest'\nVARIANT_BASE_PULL='always'\nVARIANT_VLLM_PIN='v0.29.0'\n",
+			"cannot have its vLLM version stated in advance",
+		},
+		{
+			"a pull policy that is not one",
+			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:latest'\nVARIANT_BASE_PULL='yes'\nVARIANT_VLLM_PIN='image'\n",
+			"is not \"always\"",
+		},
+		{
+			"a pin read from an image that is not named",
+			base + "KNOBS=''\nVARIANT_VLLM_PIN='image'\n",
+			"no VARIANT_BASE_IMAGE to read it from",
+		},
+		{
+			"a tuner ref beside a pin read from the image",
+			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:1.0'\nVARIANT_VLLM_PIN='image'\nVARIANT_TUNER_REF='abc1234'\n",
+			"reads the tuner ref out of the base as well",
+		},
+		{
 			"bad tier",
 			"VARIANT_ID='t'\nVARIANT_LABEL='T'\nVARIANT_TIER='probably fine'\nKNOBS=''\n",
 			"not tested, community or experimental",

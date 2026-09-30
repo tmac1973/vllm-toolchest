@@ -1165,7 +1165,9 @@ prompt_variant() {
 
     local pin
     pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
-    if [[ -n "$pin" && "$pin" != "main" ]]; then
+    if [[ "$pin" == "image" ]]; then
+        echo "    Follows $(variant_field "$BUILD_VARIANT" BASE_IMAGE): vLLM is whatever that image carries."
+    elif [[ -n "$pin" && "$pin" != "main" ]]; then
         echo "    Pins vLLM ${pin}: models needing a newer vLLM will not load."
     fi
     local url
@@ -1328,6 +1330,261 @@ load_env_ports() {
 # applied to every prebuilt variant, not just radiance -- several of these
 # bases publish to Docker Hub the same way, so the same bug is expected.
 
+# ─── Following a base image that moves ───────────────────────────────────────
+#
+# Most prebuilt variants name one release of somebody's image and stay on it.
+# That stops working when the image and the checkpoints published for it move
+# together and often: tcclaviger/vllm shipped three releases in one day, and a
+# checkpoint republished for the newer ones does not load on the release a
+# manifest pinned a fortnight earlier. Every such bump is a manifest edit, a
+# commit and a rebuild.
+#
+# A manifest can instead say VARIANT_BASE_PULL='always' and name a tag that
+# moves. Simply building FROM that tag would be worse than the pin it replaces,
+# for three reasons, and the rest of this section is one answer to each:
+#
+#   - Nothing would ever pull it again. A tag that exists locally satisfies
+#     the build, so the image would be whatever the tag meant on the day it
+#     was first fetched.
+#   - The vLLM pin and the tuner ref describe what is inside one release. The
+#     build checks the first and fetches a script by the second, so both have
+#     to be read from the image that was pulled, not written down beforehand.
+#   - There would be no way back. When a new release breaks a model, the one
+#     that worked has to still be on disk and have a name.
+#
+# So the tag is resolved when the operator asks for it -- install, rebuild and
+# pull -- and never underneath them: quick, the command run after every code
+# change, stays on the image the last resolve chose.
+
+# env_file_value KEY prints KEY's value from .env, empty when absent.
+env_file_value() {
+    { grep "^$1=" "${SCRIPT_DIR}/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-
+}
+
+# variant_tracks_base: does this variant follow a tag that moves?
+variant_tracks_base() {
+    [[ "$(variant_field "$BUILD_VARIANT" BASE_PULL)" == "always" ]]
+}
+
+# variant_pin_from_image: is the vLLM pin read out of the base image rather
+# than stated in the manifest?
+variant_pin_from_image() {
+    [[ "$(variant_field "$BUILD_VARIANT" VLLM_PIN)" == "image" ]]
+}
+
+# vllm_refs_from_version VERSION prints "<pin> <tuner-ref>" for the version
+# string an installed vLLM reports. The pin is the release it belongs to; the
+# tuner ref is the commit it was built from, when the version says.
+#
+#   0.29.0                      -> v0.29.0
+#   0.29.0.dev0+g2bdbbc8080     -> v0.29.0 2bdbbc8080
+#   0.29.0.dev0+g2bdbbc8.d20260 -> v0.29.0 2bdbbc8
+#
+# A build between releases reports a version with no tag behind it, which is
+# why the commit matters: that is the only ref the tuner script can be fetched
+# from that is sure to match.
+vllm_refs_from_version() {
+    local v="$1" release commit=""
+    release="${v%%+*}"
+    release="${release%%.dev*}"
+    release="${release%%.post*}"
+    if [[ "$v" == *+* && "${v#*+}" =~ (^|\.)g([0-9a-f]{7,40})($|\.) ]]; then
+        commit="${BASH_REMATCH[2]}"
+    fi
+    printf 'v%s %s\n' "$release" "$commit"
+}
+
+# image_upstream_ref IMAGE prints the registry reference that names IMAGE by
+# digest -- repo@sha256:... -- or nothing for an image that was never pulled.
+# Local names are skipped: tagging an image adds one for each tag.
+image_upstream_ref() {
+    { $CONTAINER_CMD image inspect "$1" \
+        --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null || true; } \
+        | { grep -v '^localhost/' || true; } | { grep -m1 '@sha256:' || true; }
+}
+
+# tracked_upstream_ref IMAGE is image_upstream_ref for one of this variant's
+# local base images. Once the tag has moved on, an older base is known only by
+# its local name and the registry reference is gone from it -- but its digest
+# is not, and the repository is the manifest's.
+tracked_upstream_ref() {
+    local img="$1" ref repo digest
+    ref="$(image_upstream_ref "$img")"
+    if [[ -n "$ref" ]]; then
+        printf '%s\n' "$ref"
+        return 0
+    fi
+    [[ "$img" == "localhost/vllmctl-${BUILD_VARIANT}-base:"* ]] || return 0
+    digest="$($CONTAINER_CMD image inspect "$img" --format '{{.Digest}}' 2>/dev/null)" || return 0
+    [[ "$digest" == sha256:* ]] || return 0
+    repo="$(variant_field "$BUILD_VARIANT" BASE_IMAGE)"
+    # Drop the tag, which is a colon in the last path component -- not the
+    # one in a registry's host:port.
+    [[ "${repo##*/}" == *:* ]] && repo="${repo%:*}"
+    printf '%s@%s\n' "$repo" "$digest"
+}
+
+# tuner_ref_fetchable REF: can the tuner benchmark be fetched from REF?
+# Answers yes when it cannot find out, so a host with no curl or no network
+# gets the build's own, louder failure instead of a quiet fallback.
+tuner_ref_fetchable() {
+    need_cmd curl || return 0
+    local code
+    code="$(curl -s -o /dev/null -m 20 -w '%{http_code}' \
+        "https://raw.githubusercontent.com/vllm-project/vllm/$1/benchmarks/kernels/benchmark_w8a8_block_fp8.py" 2>/dev/null)" || return 0
+    [[ "$code" != "404" ]]
+}
+
+# What ensure_base_image found out, for write_env_file to record.
+BASE_UPSTREAM_REF=""   # repo@sha256:… of the base in use
+BASE_PREVIOUS=""       # the base in use before this one, still on disk
+BASE_VLLM_VERSION=""   # the vLLM version the base reports
+BASE_RELEASE=""        # the base's own release number, where it has one
+RESOLVED_VLLM_PIN=""
+RESOLVED_TUNER_REF=""
+TRACKED_BASE=""
+
+# resolve_tracked_base MODE SRC settles which image a tracking variant builds
+# on and leaves its local name in TRACKED_BASE.
+#
+# MODE is "refresh" to ask the registry where the tag points now, or "keep" to
+# stay on whatever the last resolve recorded in .env.
+#
+# The image is given a local name carrying its digest, and the build uses
+# that. Building FROM the moving tag would let a later pull change what an
+# unrelated rebuild picks up; building FROM the digest depends on the registry
+# still serving it. The local name is also what keeps the previous base on
+# disk, which is the whole of the way back.
+resolve_tracked_base() {
+    local mode="$1" src="$2" recorded upstream id
+    local prefix="localhost/vllmctl-${BUILD_VARIANT}-"
+    TRACKED_BASE=""
+
+    if [[ -n "${VLLMCTL_BASE_IMAGE:-}" ]]; then
+        # The operator named an image. It is used as given and not re-pulled:
+        # this is how a previous base is gone back to.
+        if ! image_exists "$src"; then
+            log "Pulling ${src}..."
+            $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+        fi
+    elif [[ "$mode" == "keep" ]]; then
+        recorded="$(env_file_value VLLMCTL_BASE_IMAGE)"
+        if [[ -n "$recorded" ]] && image_exists "$recorded"; then
+            TRACKED_BASE="$recorded"
+            return 0
+        fi
+        if [[ -n "$recorded" ]]; then
+            warn "The base image this install was built on is gone: ${recorded}"
+            warn "Resolving ${src} again."
+        fi
+        if ! image_exists "$src"; then
+            log "Pulling ${src}..."
+            $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+        fi
+    else
+        log "Pulling ${src} to see whether it has moved..."
+        $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}.
+       To rebuild on the base image already here, use ./setup.sh quick."
+    fi
+
+    # Already one of ours: a previous base, named to go back to.
+    if [[ "$src" == "$prefix"* ]]; then
+        TRACKED_BASE="$src"
+        return 0
+    fi
+
+    upstream="$(image_upstream_ref "$src")"
+    if [[ -n "$upstream" ]]; then
+        id="${upstream##*@sha256:}"
+    else
+        id="$($CONTAINER_CMD image inspect "$src" --format '{{.Id}}')" || fatal "Could not inspect ${src}"
+        id="${id#sha256:}"
+    fi
+    TRACKED_BASE="${prefix}base:${id:0:12}"
+    $CONTAINER_CMD tag "$src" "$TRACKED_BASE" || fatal "Could not tag ${src} as ${TRACKED_BASE}"
+}
+
+# read_base_image_facts IMAGE asks a base image which vLLM it carries and,
+# where the manifest knows how to find it, the image's own release number.
+#
+# One short container run, with no GPU and no network: it imports nothing,
+# only reads package metadata. This is the same question the build's assertion
+# asks, answered early enough to choose the pin instead of checking it.
+read_base_image_facts() {
+    local img="$1" venv release_cmd out
+    venv="$(variant_field "$BUILD_VARIANT" VENV_ROOT)"
+    release_cmd="$(variant_field "$BUILD_VARIANT" BASE_RELEASE_CMD)"
+    # shellcheck disable=SC2016  # the script is for the container's shell
+    out="$($CONTAINER_CMD run --rm --network none --entrypoint sh "$img" -c '
+        v=""
+        for py in "$1/bin/python" python python3; do
+            v="$("$py" -c "import importlib.metadata as m; print(m.version(\"vllm\"))" 2>/dev/null)" || v=""
+            [ -n "$v" ] && break
+        done
+        echo "vllm=$v"
+        if [ -n "$2" ]; then echo "release=$(sh -c "$2" 2>/dev/null | head -1)"; fi
+    ' sh "$venv" "$release_cmd" 2>/dev/null)" || true
+    BASE_VLLM_VERSION="$(sed -n 's/^vllm=//p' <<<"$out" | head -1)"
+    BASE_RELEASE="$(sed -n 's/^release=//p' <<<"$out" | head -1)"
+}
+
+# resolve_pin_from_image turns what the base reports into the two build
+# inputs the manifest would otherwise have stated.
+resolve_pin_from_image() {
+    local img="$1" refs
+    read_base_image_facts "$img"
+    [[ -n "$BASE_VLLM_VERSION" ]] || fatal "Could not read the vLLM version out of ${img}.
+       ${BUILD_VARIANT} declares VARIANT_VLLM_PIN='image', so the pin comes from
+       the base itself. Check VARIANT_VENV_ROOT, or state the pin in the manifest."
+
+    refs="$(vllm_refs_from_version "$BASE_VLLM_VERSION")"
+    RESOLVED_VLLM_PIN="${refs%% *}"
+    RESOLVED_TUNER_REF="${refs#* }"
+    if [[ -n "$RESOLVED_TUNER_REF" ]] && ! tuner_ref_fetchable "$RESOLVED_TUNER_REF"; then
+        # A commit that only exists in the image author's fork. The release it
+        # was cut from is the same minor, which is as close as the build's own
+        # assertion asks for.
+        warn "vLLM commit ${RESOLVED_TUNER_REF} is not in vllm-project/vllm;"
+        warn "taking the tuner script from ${RESOLVED_VLLM_PIN} instead."
+        RESOLVED_TUNER_REF=""
+    fi
+    export VLLMCTL_VLLM_PIN="$RESOLVED_VLLM_PIN"
+    export VLLMCTL_TUNER_REF="$RESOLVED_TUNER_REF"
+}
+
+# prune_tracked_bases removes this variant's older local base images, keeping
+# the ones named. Each is ten gigabytes or so, and only the one in use and the
+# one before it are any use to keep.
+prune_tracked_bases() {
+    local prefix="localhost/vllmctl-${BUILD_VARIANT}-" ref keep
+    while IFS= read -r ref; do
+        [[ "$ref" == "${prefix}base:"* || "$ref" == "${prefix}flat:"* ]] || continue
+        for keep in "$@"; do
+            [[ "$ref" == "$keep" ]] && continue 2
+        done
+        if $CONTAINER_CMD rmi "$ref" >/dev/null 2>&1; then
+            log "Removed an older base image: ${ref}"
+        fi
+    done < <($CONTAINER_CMD images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+}
+
+# report_tracked_base says what a tracking variant ended up on, and how to get
+# back if that turns out to be a mistake.
+report_tracked_base() {
+    local was="$1" now="$2"
+    log "Base image: ${BASE_UPSTREAM_REF:-$now}"
+    log "            vLLM ${BASE_VLLM_VERSION:-unknown}${BASE_RELEASE:+, release ${BASE_RELEASE}}"
+    [[ -n "$was" && "$was" != "$now" ]] || return 0
+    if [[ "$BASE_PREVIOUS" == "$was" ]]; then
+        warn "The base image changed. The previous one is still here:"
+        warn "  ${was}"
+        warn "To go back to it:  VLLMCTL_BASE_IMAGE=${was} ./setup.sh pull"
+    else
+        warn "The base image changed, and the previous one is no longer on disk:"
+        warn "  ${was}"
+    fi
+}
+
 # variant_base_ref prints the base image for the selected variant. An explicit
 # VLLMCTL_BASE_IMAGE in the environment wins, so an operator can pin a
 # different tag -- an alternate build of the same stack, say -- for one build
@@ -1360,7 +1617,11 @@ variant_base_ref() {
 # why their pin stopped working.
 warn_stale_env_base() {
     local pinned manifest
-    pinned="$(grep '^VLLMCTL_BASE_IMAGE=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2-)" || true
+    # A tracking variant's .env is supposed to differ from its manifest: the
+    # manifest names a tag that moves, and .env names the image that tag was
+    # when it was last resolved.
+    variant_tracks_base && return 0
+    pinned="$(env_file_value VLLMCTL_BASE_IMAGE)"
     [[ -n "$pinned" ]] || return 0
     manifest="$(variant_field "$BUILD_VARIANT" BASE_IMAGE)"
     [[ -n "$manifest" && "$pinned" != "$manifest" ]] || return 0
@@ -1415,16 +1676,56 @@ flatten_image() {
 #
 # A variant that builds vLLM from source declares no base image and returns
 # here immediately.
+#
+# MODE only matters to a variant that follows a moving tag: "refresh" asks the
+# registry where the tag points now, "keep" stays on the image the last
+# resolve chose. Every other variant names one release and gets it either way.
 ensure_base_image() {
-    local src flat tag
+    local mode="${1:-refresh}" src
     warn_stale_env_base
     src="$(variant_base_ref)"
     [[ -n "$src" ]] || return 0
 
-    if ! image_exists "$src"; then
-        log "Pulling ${src} (about 4 GB)..."
-        $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+    if ! variant_tracks_base; then
+        if ! image_exists "$src"; then
+            log "Pulling ${src} (about 4 GB)..."
+            $CONTAINER_CMD pull "$src" || fatal "Could not pull ${src}"
+        fi
+        usable_base_image "$src"
+        variant_pin_from_image && resolve_pin_from_image "$VLLMCTL_BASE_IMAGE"
+        return 0
     fi
+
+    # Read before anything is exported or rewritten: this is the record of
+    # what the running install was built on.
+    local was
+    was="$(env_file_value VLLMCTL_BASE_IMAGE)"
+    BASE_UPSTREAM_REF="$(env_file_value VLLMCTL_BASE_DIGEST)"
+    BASE_PREVIOUS="$(env_file_value VLLMCTL_BASE_PREVIOUS)"
+
+    resolve_tracked_base "$mode" "$src"
+    usable_base_image "$TRACKED_BASE"
+    variant_pin_from_image && resolve_pin_from_image "$VLLMCTL_BASE_IMAGE"
+
+    if [[ "$was" != "$VLLMCTL_BASE_IMAGE" ]]; then
+        # A different base from the one on record, so the record's registry
+        # reference no longer describes it. Asked of the image as pulled: a
+        # flattened copy has a digest of its own.
+        BASE_UPSTREAM_REF="$(tracked_upstream_ref "$TRACKED_BASE")"
+        # The way back is only worth naming while it is still on disk.
+        [[ -n "$was" ]] && BASE_PREVIOUS="$was"
+    fi
+    if [[ -n "$BASE_PREVIOUS" ]] && ! image_exists "$BASE_PREVIOUS"; then
+        BASE_PREVIOUS=""
+    fi
+    report_tracked_base "$was" "$VLLMCTL_BASE_IMAGE"
+    prune_tracked_bases "$VLLMCTL_BASE_IMAGE" "$TRACKED_BASE" "$BASE_PREVIOUS"
+}
+
+# usable_base_image SRC exports VLLMCTL_BASE_IMAGE as SRC, or as a flattened
+# copy of it when the runtime cannot build on SRC as published.
+usable_base_image() {
+    local src="$1" flat tag
 
     if base_is_buildable "$src"; then
         export VLLMCTL_BASE_IMAGE="$src"
@@ -1524,6 +1825,7 @@ write_env_file() {
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
         VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
         VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN VLLMCTL_TUNER_REF
+        VLLMCTL_BASE_DIGEST VLLMCTL_BASE_PREVIOUS VLLMCTL_BASE_VLLM VLLMCTL_BASE_RELEASE
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
         HIP_VISIBLE_DEVICES
     )
@@ -1554,10 +1856,25 @@ write_env_file() {
         [[ -n "$_stamp" ]] && echo "VLLMCTL_STAMP_FILE=${_stamp}"
         # "main" is the from-source marker, not a tag to pin a prebuilt base
         # against, so it is not written through.
-        [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
         local _tref
         _tref="$(variant_field "$BUILD_VARIANT" TUNER_REF)"
+        # "image" means the pin is whatever the base carries, which
+        # ensure_base_image read out of it. Written through like any other so
+        # that a build run outside this script uses the same values.
+        if [[ "$_pin" == "image" ]]; then
+            _pin="$RESOLVED_VLLM_PIN"
+            _tref="$RESOLVED_TUNER_REF"
+        fi
+        [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
         [[ -n "$_tref" ]] && echo "VLLMCTL_TUNER_REF=${_tref}"
+
+        # What a variant that follows a moving tag resolved it to. These are
+        # a record, not inputs: VLLMCTL_BASE_IMAGE above is what gets built
+        # on, and it is what `quick` stays on until the next pull.
+        [[ -n "$BASE_UPSTREAM_REF" ]]  && echo "VLLMCTL_BASE_DIGEST=${BASE_UPSTREAM_REF}"
+        [[ -n "$BASE_PREVIOUS" ]]      && echo "VLLMCTL_BASE_PREVIOUS=${BASE_PREVIOUS}"
+        [[ -n "$BASE_VLLM_VERSION" ]]  && echo "VLLMCTL_BASE_VLLM=${BASE_VLLM_VERSION}"
+        [[ -n "$BASE_RELEASE" ]]       && echo "VLLMCTL_BASE_RELEASE=${BASE_RELEASE}"
 
         [[ -n "$VLLMCTL_MODELS_DIR" ]] && echo "VLLMCTL_MODELS_DIR=${VLLMCTL_MODELS_DIR}"
         [[ -n "$AMD_GFX_VERSION" ]]    && echo "HSA_OVERRIDE_GFX_VERSION=${AMD_GFX_VERSION}"
@@ -1646,8 +1963,13 @@ container_rebuild() {
 }
 
 # Quick rebuild: only rebuild layers that changed (Go code), reuse cached base layers.
+#
+# Takes the base-image mode. The default, "keep", is what makes this safe to
+# run after every code change on a variant whose base tag moves: the engine
+# underneath stays the one the last pull chose. `./setup.sh pull` is this same
+# rebuild with "refresh".
 container_quick_rebuild() {
-    ensure_base_image
+    ensure_base_image "${1:-keep}"
     container_down
     write_env_file
     # For the same reason install and rebuild do it. The unit names the image
@@ -2043,7 +2365,22 @@ print_summary() {
     _tier="$(variant_field "$BUILD_VARIANT" TIER)"
     _pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
     echo -e "  ${CYAN}Variant${NC}       ${BUILD_VARIANT}${_tier:+ [${_tier}]}"
-    if [[ -n "$_pin" && "$_pin" != "main" ]]; then
+    if [[ "$_pin" == "image" ]]; then
+        # Whatever the base carries. What that is for the install on this
+        # machine is on record from the last time the base was resolved.
+        local _bv _br _bi
+        _bv="$(env_file_value VLLMCTL_BASE_VLLM)"
+        _br="$(env_file_value VLLMCTL_BASE_RELEASE)"
+        _bi="$(env_file_value VLLMCTL_BASE_IMAGE)"
+        echo -e "  ${CYAN}vLLM${NC}          follows $(variant_field "$BUILD_VARIANT" BASE_IMAGE)"
+        if [[ -n "$_bv" ]]; then
+            echo -e "  ${CYAN}  installed${NC}   vLLM ${_bv}${_br:+, release ${_br}}"
+        fi
+        if variant_tracks_base; then
+            [[ -n "$_bi" ]] && echo -e "  ${CYAN}  built on${NC}    ${_bi}"
+            echo -e "  ${CYAN}  moves on${NC}    install, rebuild, pull — not quick"
+        fi
+    elif [[ -n "$_pin" && "$_pin" != "main" ]]; then
         echo -e "  ${CYAN}vLLM${NC}          pinned ${_pin} — newer models will not load"
     else
         echo -e "  ${CYAN}vLLM${NC}          tracks main"
@@ -2160,8 +2497,13 @@ Lifecycle:
   install     Detect GPU/runtime/distro, install prerequisites, build image,
               and start the container
   uninstall   Stop container, disable auto-start, and remove container + image
-  quick       Fast rebuild — only recompile Go code, reuse cached base layers
-  rebuild     Full rebuild with no cache, then start
+  quick       Fast rebuild — only recompile Go code, reuse cached base layers.
+              Never changes the vLLM image underneath
+  pull        Pull the variant's base image and rebuild on it (cached). Only
+              does anything new for a variant that follows a moving tag; the
+              previous base is kept, and the command to go back is printed
+  rebuild     Full rebuild with no cache, then start. Also pulls the base
+              image of a variant that follows a moving tag
 
 Runtime:
   up          Start a stopped container. Does NOT re-read .env -- a container
@@ -2202,7 +2544,10 @@ Environment variables:
   GPU=cuda|rocm|xpu                    Override GPU auto-detection
   VLLMCTL_VARIANT=<id>                 Override image variant (skips the prompt)
   RUNTIME=docker|podman                Override container runtime auto-detection
-  VLLMCTL_BASE_IMAGE=<ref>             Override a prebuilt variant's base image
+  VLLMCTL_BASE_IMAGE=<ref>             Override a prebuilt variant's base image.
+                                       For a variant that follows a moving tag
+                                       the override sticks until the next
+                                       install, rebuild or pull without it
   VLLMCTL_SKIP_HOSTCHECK=1             Skip the variant's host requirement checks
 
   VARIANT= is accepted as a short form, but VLLMCTL_VARIANT is preferred:
@@ -2219,6 +2564,7 @@ Examples:
   ./setup.sh disable              # stop starting on boot
   ./setup.sh uninstall            # remove everything
   ./setup.sh quick                # fast rebuild (code changes only)
+  ./setup.sh pull                 # move to the newest base image, keep the old one
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
   VLLMCTL_VARIANT=radiance ./setup.sh install   # build a specific variant
@@ -2243,7 +2589,7 @@ main() {
     fi
 
     case "$command" in
-        install|uninstall|up|down|rebuild|quick|logs|detect|variants|status|enable|disable) ;;
+        install|uninstall|up|down|rebuild|quick|pull|logs|detect|variants|status|enable|disable) ;;
         -h|--help|help) usage; exit 0 ;;
         *)
             err "Unknown command: $command"
@@ -2293,6 +2639,20 @@ main() {
         enable)    autostart_enable;  exit 0 ;;
         disable)   autostart_disable; exit 0 ;;
         uninstall) container_uninstall; exit 0 ;;
+        pull)
+            if variant_tracks_base; then
+                log "Pulling the base image and rebuilding on it..."
+            else
+                log "${BUILD_VARIANT} names one release of its base image, so there is nothing newer to pull."
+                log "Rebuilding (cached)..."
+            fi
+            container_quick_rebuild refresh
+            ok "vllm-toolchest is running"
+            echo ""
+            echo "  Web UI:     http://localhost:${VLLMCTL_PORT}"
+            echo ""
+            exit 0
+            ;;
         quick)
             log "Quick rebuild (cached)..."
             container_quick_rebuild
