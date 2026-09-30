@@ -44,6 +44,11 @@ type Model struct {
 	// autosaving, so it can drift away from the profile at any time, and
 	// Registry.ActiveProfile reports that drift rather than clearing this.
 	ActiveProfile string `json:"active_profile,omitempty"`
+
+	// Helper marks the app's own helper model, which autoconfigure loads to
+	// read a model card. It is not the operator's: it has fixed settings,
+	// cannot be served, and is managed only from Settings.
+	Helper bool `json:"helper,omitempty"`
 }
 
 // HFConfig holds key fields from the model's config.json.
@@ -486,6 +491,21 @@ func (r *Registry) SetEnabled(id string, enabled bool) error {
 		return fmt.Errorf("model not found: %s", id)
 	}
 	m.Enabled = enabled
+	return r.save()
+}
+
+// SetHelper marks or unmarks a model as the app's helper model.
+func (r *Registry) SetHelper(id string, on bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
+	m, ok := r.models[id]
+	if !ok {
+		return fmt.Errorf("model not found: %s", id)
+	}
+	m.Helper = on
 	return r.save()
 }
 

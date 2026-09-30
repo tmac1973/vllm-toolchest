@@ -1,0 +1,9 @@
+<div id="helper-model-panel">
+  <p>Autoconfigure uses a small model of its own, <code>Qwen/Qwen3-4B-Instruct-2507</code>, to read a model's card: which of its
+     commands to use, and the advice it gives in prose. While it reads, whatever model is serving is stopped
+     and then restarted. Without it, autoconfigure still uses the card's own command and this machine's cards.</p>
+  <div hx-get="/api/hf/download/Qwen--Qwen3-4B-Instruct-2507/progress" hx-trigger="load, every 2s" hx-swap="innerHTML">
+  <progress value="0" max="100" style="margin:0;"></progress>
+  <small>Starting download...</small>
+</div>
+</div>

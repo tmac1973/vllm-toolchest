@@ -67,6 +67,10 @@ func (s *Server) modelRows() []modelRow {
 
 	rows := make([]modelRow, 0, len(list))
 	for _, m := range list {
+		// The helper is the app's, managed from Settings; it has no card.
+		if m.Helper {
+			continue
+		}
 		row := modelRow{
 			ID:          m.ID,
 			SafeID:      safeID(m.ID),
@@ -143,6 +147,10 @@ func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if m.IsDraft() {
 		http.Error(w, "a draft model cannot be served on its own", http.StatusConflict)
+		return
+	}
+	if m.Helper {
+		http.Error(w, "the helper model is not served on its own", http.StatusConflict)
 		return
 	}
 

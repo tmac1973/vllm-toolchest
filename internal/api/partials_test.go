@@ -550,6 +550,29 @@ func TestGoldenPartials(t *testing.T) {
 			partial: "timings_list",
 			data:    timingsView{MinSamples: 10},
 		},
+		{
+			name:    "helper_model_panel_absent",
+			partial: "helper_model_panel",
+			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507"},
+		},
+		{
+			name:    "helper_model_panel_downloading",
+			partial: "helper_model_panel",
+			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507", DownloadID: "Qwen--Qwen3-4B-Instruct-2507"},
+		},
+		{
+			name:    "helper_model_panel_installed",
+			partial: "helper_model_panel",
+			data: helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507", Installed: true, SizeLabel: "7.5 GB",
+				Message: "The copy already installed is now the helper model.", MessageKind: "ok"},
+		},
+		{
+			// A card too small for it: autoconfigure still works, and says how.
+			name:    "helper_model_panel_too_large",
+			partial: "helper_model_panel",
+			data: helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507",
+				TooLarge: "The helper model needs about 9.6 GB and the smallest card offers 7.2 GB."},
+		},
 	}
 
 	for _, tc := range cases {

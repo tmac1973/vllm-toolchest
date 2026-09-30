@@ -1,0 +1,9 @@
+<div id="helper-model-panel">
+  <p>Autoconfigure uses a small model of its own, <code>Qwen/Qwen3-4B-Instruct-2507</code>, to read a model's card: which of its
+     commands to use, and the advice it gives in prose. While it reads, whatever model is serving is stopped
+     and then restarted. Without it, autoconfigure still uses the card's own command and this machine's cards.</p>
+  <p class="mp-msg mp-ok">The copy already installed is now the helper model.</p>
+  <p><strong>Installed</strong>, 7.5 GB on disk.</p>
+  <button class="secondary outline" hx-delete="/api/settings/helper" hx-target="#helper-model-panel" hx-swap="outerHTML"
+          hx-confirm="Remove the helper model and delete its files?">Remove</button>
+</div>

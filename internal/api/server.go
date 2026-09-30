@@ -55,6 +55,8 @@ type Server struct {
 
 	// lease marks the engine as borrowed for another model.
 	lease engineLease
+	// wantHelper is set while Settings is downloading the helper model.
+	wantHelper helperWanted
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -70,7 +72,6 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 
 	reg := models.NewRegistry(cfg.DataDir, cfg.ModelsPath())
 	dl := huggingface.NewDownloader(cfg.DataDir, cfg.ModelsPath(), cfg.HFToken)
-	dl.SetOnComplete(recordTransfer(reg))
 
 	s := &Server{
 		cfg:        cfg,
@@ -88,6 +89,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 	if len(env.Launcher) > 0 {
 		s.process.SetLauncher(process.Launcher{Bin: env.Launcher[0], Args: env.Launcher[1:]})
 	}
+	dl.SetOnComplete(s.onTransferComplete)
 	s.bench = benchmark.NewStore(cfg.DataDir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
@@ -323,6 +325,9 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/", s.handleGetSettings)
 			r.Put("/", s.handleUpdateSettings)
 			r.Post("/test-connection", s.handleTestConnection)
+			r.Get("/helper", s.handleHelperPanel)
+			r.Post("/helper/download", s.handleDownloadHelper)
+			r.Delete("/helper", s.handleRemoveHelper)
 		})
 		r.Get("/backup", s.handleBackupExport)
 		r.Post("/restore", s.handleRestore)
