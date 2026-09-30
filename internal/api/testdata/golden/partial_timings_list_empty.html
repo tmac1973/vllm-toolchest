@@ -1,3 +1,3 @@
 
 <p style="opacity:0.6;"><small>No inference traffic captured yet.</small></p>
-<p style="opacity:0.6;"><small>Counts requests that are <strong>not streaming</strong> and go through this server&rsquo;s port rather than straight to vLLM&rsquo;s. A streaming client &mdash; which most chat UIs are by default &mdash; will not appear here. Use the <a href="/benchmarks">Benchmarks</a> page for numbers that do not depend on how you happen to be calling the API.</small></p>
+<p style="opacity:0.6;"><small>Read from the engine&rsquo;s own per-request timers, so every request counts: streaming or not, through this server&rsquo;s port or straight to vLLM&rsquo;s. Each figure is tokens over the time the engine spent in that phase, across recent requests &mdash; the speed one request sees, not the combined throughput of several at once. These are not the numbers in vLLM&rsquo;s log, which divide by the logging interval and read zero whenever no prompt arrived in it.</small></p>

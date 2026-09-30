@@ -1,10 +1,21 @@
 
-<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
+<table><thead><tr><th>Model</th>
+  <th title="Prompt processing: prompt tokens computed, over the time the engine spent in prefill. Tokens served from the prefix cache are not counted.">PP</th>
+  <th title="Token generation: tokens generated, over the time the engine spent decoding. Prefill and queueing are not in it.">TG</th>
+  <th>Requests</th><th>Last seen</th></tr></thead><tbody>
   <tr>
     <td><small>unsloth/Qwen3.8-27B-FP8</small></td>
+    <td>3413 t/s</td>
     <td>102.2 t/s</td>
     <td>47</td>
     <td><small>Sep 8 10:58</small></td>
   </tr>
+  <tr>
+    <td><small>TheBloke/Mixtral-8x7B-AWQ</small></td>
+    <td><span title="Every prompt so far was served from the prefix cache, so no prefill has been timed.">&mdash;</span></td>
+    <td>61.4 t/s</td>
+    <td>12</td>
+    <td><small>Sep 8 10:41</small></td>
+  </tr>
 </tbody></table>
-<p style="opacity:0.6;"><small>Counts requests that are <strong>not streaming</strong> and go through this server&rsquo;s port rather than straight to vLLM&rsquo;s. A streaming client &mdash; which most chat UIs are by default &mdash; will not appear here. Use the <a href="/benchmarks">Benchmarks</a> page for numbers that do not depend on how you happen to be calling the API.</small></p>
+<p style="opacity:0.6;"><small>Read from the engine&rsquo;s own per-request timers, so every request counts: streaming or not, through this server&rsquo;s port or straight to vLLM&rsquo;s. Each figure is tokens over the time the engine spent in that phase, across recent requests &mdash; the speed one request sees, not the combined throughput of several at once. These are not the numbers in vLLM&rsquo;s log, which divide by the logging interval and read zero whenever no prompt arrived in it.</small></p>

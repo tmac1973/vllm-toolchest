@@ -28,10 +28,11 @@ func (s *Server) handleTimingsList(w http.ResponseWriter, r *http.Request) {
 
 	toRow := func(a benchmark.RunningAverage) dashboardTiming {
 		return dashboardTiming{
-			ModelID:   a.ModelID,
-			AvgGenTPS: a.AvgGenTPS,
-			Count:     a.Count,
-			LastSeen:  a.LastUpdated.Format("Jan 2 15:04"),
+			ModelID:      a.ModelID,
+			AvgGenTPS:    a.AvgGenTPS,
+			AvgPromptTPS: a.AvgPromptTPS,
+			Count:        a.Count,
+			LastSeen:     a.LastUpdated.Format("Jan 2 15:04"),
 		}
 	}
 

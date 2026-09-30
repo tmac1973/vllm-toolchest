@@ -196,10 +196,14 @@
 {{/* The passive timing table: what real traffic through the proxy measured. */}}
 {{define "timings_list" -}}
 {{- if .Rows}}
-<table><thead><tr><th>Model</th><th>Avg gen TPS</th><th>Samples</th><th>Last seen</th></tr></thead><tbody>
+<table><thead><tr><th>Model</th>
+  <th title="Prompt processing: prompt tokens computed, over the time the engine spent in prefill. Tokens served from the prefix cache are not counted.">PP</th>
+  <th title="Token generation: tokens generated, over the time the engine spent decoding. Prefill and queueing are not in it.">TG</th>
+  <th>Requests</th><th>Last seen</th></tr></thead><tbody>
 {{- range .Rows}}
   <tr>
     <td><small>{{.ModelID}}</small></td>
+    <td>{{if .AvgPromptTPS}}{{printf "%.0f" .AvgPromptTPS}} t/s{{else}}<span title="Every prompt so far was served from the prefix cache, so no prefill has been timed.">&mdash;</span>{{end}}</td>
     <td>{{printf "%.1f" .AvgGenTPS}} t/s</td>
     <td>{{.Count}}</td>
     <td><small>{{.LastSeen}}</small></td>
@@ -209,11 +213,11 @@
 {{- end}}
 {{- if .Pending}}
 {{- range .Pending}}
-<p style="opacity:0.6;"><small>Collecting samples for <strong>{{.ModelID}}</strong> — {{.Count}} of {{$.MinSamples}}. An average from fewer is mostly noise.</small></p>
+<p style="opacity:0.6;"><small>Collecting requests for <strong>{{.ModelID}}</strong> — {{.Count}} of {{$.MinSamples}}. An average from fewer is mostly noise.</small></p>
 {{- end}}
 {{- end}}
 {{- if and (not .Rows) (not .Pending)}}
 <p style="opacity:0.6;"><small>No inference traffic captured yet.</small></p>
 {{- end}}
-<p style="opacity:0.6;"><small>Counts requests that are <strong>not streaming</strong> and go through this server&rsquo;s port rather than straight to vLLM&rsquo;s. A streaming client &mdash; which most chat UIs are by default &mdash; will not appear here. Use the <a href="/benchmarks">Benchmarks</a> page for numbers that do not depend on how you happen to be calling the API.</small></p>
+<p style="opacity:0.6;"><small>Read from the engine&rsquo;s own per-request timers, so every request counts: streaming or not, through this server&rsquo;s port or straight to vLLM&rsquo;s. Each figure is tokens over the time the engine spent in that phase, across recent requests &mdash; the speed one request sees, not the combined throughput of several at once. These are not the numbers in vLLM&rsquo;s log, which divide by the logging interval and read zero whenever no prompt arrived in it.</small></p>
 {{- end}}
