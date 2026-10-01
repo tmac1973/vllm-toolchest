@@ -5,6 +5,40 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Fifth run on compute: another family, 2026-10-01
+
+`mistralai/Mistral-Small-3.2-24B-Instruct-2506`, chosen for a card unlike
+Qwen's: underscored flags, Mistral's own tokenizer, config and weight
+formats, a `mistral` tool parser, one sampling value in prose, vision. Run
+through the UI by the operator. What it found, in order:
+
+- **#57.** The download tab could not find it: the search asked for the
+  `transformers` library, and the repo is tagged `vllm` only.
+- **#58, then #60.** The repo holds its weights twice, 48 GB each. #58 kept
+  the Hugging Face shards, and the first start failed, "Can't load image
+  processor": those shards come with no tokenizer or processor config. #60
+  keeps the layout that is complete -- here Mistral's consolidated copy.
+  #58 also read `--load_format` and the like as the dashed flags they are.
+- **#59.** The helper read a `mistral` reasoning parser for a model that does
+  not reason, citing `--tool-call-parser mistral`; a parser's name must now
+  appear in the quote as its kind.
+- **#61.** A finished download and a delete now show in the model list
+  without a manual refresh.
+
+The final review proposed 4 cards at its full 131,072 tokens; tool calling
+with `mistral`, `--tokenizer-mode`, `--config-format` and `--load-format
+mistral`, and `--limit-mm-per-prompt {"image":10}`, ticked; no sampling
+row, since the model's `generation_config.json` already sets the card's
+`temperature=0.15`. Save and apply, then Start:
+
+- **Started on the first attempt**, about 4 minutes.
+- KV cache 430,672 tokens: 3.29 full-length requests, against 1 projected.
+  Consumed less weights was 0.78 GiB a rank (12.24 less 11.46), under even
+  the 2.3 the Qwen3.5 run set. The context is the model's maximum, so the
+  refinement had nothing to change.
+- A tool-calling request made a correct `get_weather` call, and an image
+  request read the image's colours.
+
 ## Fourth run on compute: a new model, 2026-10-01
 
 A model never configured here, run through the UI by the operator:
