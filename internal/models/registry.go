@@ -92,6 +92,9 @@ type HFConfig struct {
 	// Draft is set on a checkpoint that drafts for another model instead of
 	// being served itself. See DraftMeta.
 	Draft *DraftMeta `json:"draft,omitempty"`
+	// PLELayers is how many layers carry a per-layer embedding table, the
+	// table PLE offload keeps in host RAM. Zero for most models.
+	PLELayers int `json:"ple_layers,omitempty"`
 
 	// MetaVersion is the parser revision that wrote this record, so a field
 	// added later can be backfilled even when its zero value is legitimate.

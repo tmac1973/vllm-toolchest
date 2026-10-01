@@ -20,7 +20,7 @@ import (
 // 1: MoE shape -- NumExperts, NumExpertsPerTok, MoEIntermediate,
 // SharedExpertInter, DenseLayers.
 // 2: Draft -- whether the checkpoint is a speculative-decoding drafter.
-const hfMetaVersion = 2
+const hfMetaVersion = 3
 
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {
@@ -146,6 +146,15 @@ func ParseHFConfig(modelDir string) HFConfig {
 	}
 
 	cfg.Draft = parseDraft(raw, cfg.Architectures)
+
+	// A per-layer embedding table (the n-gram "engram" tables some Qwen-Next
+	// checkpoints carry) is what PLE offload moves to host RAM. Knowing the
+	// checkpoint has one lets an image that offloads it by default be
+	// estimated as doing so.
+	var pleLayers []int
+	if jsonFieldFrom(src, &pleLayers, "ple_layer_ids") {
+		cfg.PLELayers = len(pleLayers)
+	}
 
 	// Stamped only on the success path: a config.json we could not read or
 	// parse stays stale and gets retried, rather than being recorded as
