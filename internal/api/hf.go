@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -439,7 +442,34 @@ func (s *Server) handleHFDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "downloads_panel", struct{ Rows []downloadRow }{rows})
+	s.renderPartial(w, "downloads_panel", downloadsPanelData{rows, s.modelSet()})
+}
+
+// downloadsPanelData is what the downloads_panel partial renders.
+type downloadsPanelData struct {
+	Rows     []downloadRow
+	ModelSet string // see modelSet
+}
+
+// modelSet is a fingerprint of which models are registered and in which
+// section of the list they sit, carried on the downloads panel. The panel
+// polls every few seconds, so the models page reloads its list when the set
+// changes: a download finishing and registering, a delete, a rescan, or any of
+// them in another tab. It is the set and not the registry's contents because a
+// config edit must not reload the list -- that throws away an open configure
+// panel.
+func (s *Server) modelSet() string {
+	var keys []string
+	for _, m := range s.registry.List() {
+		keys = append(keys, fmt.Sprintf("%s|%t|%t|%t", m.ID, m.IsDraft(), m.Helper, m.Orphaned))
+	}
+	sort.Strings(keys)
+	h := fnv.New64a()
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+	}
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // handleHFDiscardIncomplete deletes a stalled download's partial files. It is

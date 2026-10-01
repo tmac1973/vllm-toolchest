@@ -27,7 +27,8 @@
      hx-get="/api/hf/downloads"
      hx-trigger="load, every 3s, downloadsChanged from:body, modelsChanged from:body"
      hx-swap="innerHTML"
-     hx-on::before-swap="if(event.detail.xhr.responseText===this.innerHTML){event.detail.shouldSwap=false;}">
+     hx-on::before-swap="if(event.detail.xhr.responseText===this.innerHTML){event.detail.shouldSwap=false;}"
+     hx-on::after-swap="modelSetSeen(this)">
 </div>
 
 <div id="model-list"
@@ -38,6 +39,22 @@
 </div>
 
 <script>
+// --- Model list: reload when the set of models changes ---
+// The downloads panel carries a fingerprint of which models are registered.
+// When it moves -- a download finished, a model was deleted, here or in
+// another tab -- the list reloads itself instead of waiting for a manual
+// refresh. The first sighting only records it: the list loads on its own.
+var modelSetLast = null;
+function modelSetSeen(panel) {
+    var el = panel.querySelector('[data-model-set]');
+    if (!el) return;
+    var set = el.dataset.modelSet;
+    if (modelSetLast !== null && set !== modelSetLast) {
+        htmx.trigger(document.body, 'modelsChanged');
+    }
+    modelSetLast = set;
+}
+
 // --- Model list: text filter ---
 // Filters the cards in place rather than round-tripping, so typing stays
 // responsive and an open configure panel is not thrown away.
