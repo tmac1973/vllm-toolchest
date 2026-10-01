@@ -81,6 +81,9 @@
             {{- if .Draft}} <mark style="padding:0 0.3rem;font-size:0.75rem;" title="A draft model for speculative decoding{{with .DraftMethod}} ({{.}}){{end}}. It proposes tokens for another model to verify and cannot be served on its own; choose it from the Draft model picker in that model's Configure panel.">draft</mark>{{end}}
             {{- if .Orphaned}} <del>missing</del>{{end}}
             <br><small style="opacity:0.6;">{{.ID}}</small>
+            {{- range .Bundled}}
+            <br><small title="A drafter for speculative decoding, downloaded in this model's folder. Autoconfigure pairs it; it is not a model of its own.">Includes a drafter: {{.}}</small>
+            {{- end}}
             {{- if .Draft}}
             <br><small>{{if .UsedBy}}Drafts for {{range $i, $n := .UsedBy}}{{if $i}}, {{end}}<strong>{{$n}}</strong>{{end}}{{else}}Not used by any model yet{{end}}</small>
             {{- end}}

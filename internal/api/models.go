@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
@@ -61,6 +62,10 @@ type modelRow struct {
 	// Helper marks autoconfigure's helper model, listed in a section of its
 	// own and managed from Settings.
 	Helper bool
+	// Bundled are the drafters the model carries in its own folder, as
+	// "name · method · size". They are part of its download, not models of
+	// their own, so this is the only place they show.
+	Bundled []string
 }
 
 // modelListView is the Models page's list, in its three sections: the models
@@ -111,6 +116,13 @@ func (s *Server) modelRows() []modelRow {
 			Serving:     m.ID == servingID,
 		}
 		row.Autoconfigurable = !m.IsDraft() && !m.Helper && !m.Orphaned
+		for _, d := range models.BundledDrafts(m) {
+			label := filepath.Base(d.LocalPath)
+			if method := d.HFConfig.Draft.Method; method != "" {
+				label += " · " + method
+			}
+			row.Bundled = append(row.Bundled, label+" · "+huggingface.FormatBytes(d.TotalSizeBytes))
+		}
 		if m.Helper {
 			// The app's own model, managed from Settings: no launch config
 			// of its own to show, nothing to choose or configure.
