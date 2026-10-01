@@ -378,6 +378,31 @@ var rules = []rule{
 		},
 	},
 	{
+		// The same refusal as vLLM 0.29 words it, measured on compute:
+		//
+		//   To serve at least one request with the model's max seq len
+		//   (262144), (5.84 GiB KV cache is needed, which is larger than the
+		//   available KV cache memory (4.92 GiB). Based on the available
+		//   memory, the estimated maximum model length is 214240.
+		//
+		// The ceiling is stated outright, so it is a value, as above.
+		hint: "estimated maximum model length is",
+		match: func(line string) *Item {
+			g := reSeqLenEstimate.FindStringSubmatch(line)
+			if g == nil {
+				return nil
+			}
+			return &Item{
+				Severity:   Error,
+				Message:    "The configured context is longer than the KV cache can hold. Lower it, or free VRAM for the cache.",
+				Field:      "max_model_len",
+				Suggested:  g[2],
+				Applicable: true,
+				Line:       line,
+			}
+		},
+	},
+	{
 		// The pre-flight refusal, and the one that prompted this rule set
 		// being rewritten: vLLM compares the fraction asked for against the
 		// memory actually *free*, not the card's size. Anything else already
@@ -682,10 +707,11 @@ var (
 	// The class stops at ")" so the first spelling does not capture the
 	// closing bracket -- the same trailing-punctuation trap that gave
 	// reProfilingEquiv a value of "0.9826." destined for a config field.
-	reEngineVersion = regexp.MustCompile(`(?i)(?:LLM engine \(v|vLLM API server version\s+)([^\s),]+)`)
-	reLocked        = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
-	reFailedLock    = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
-	reSeqLenVsKV    = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
+	reEngineVersion  = regexp.MustCompile(`(?i)(?:LLM engine \(v|vLLM API server version\s+)([^\s),]+)`)
+	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
+	reSeqLenEstimate = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?estimated maximum model length is (\d+)`)
+	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
 	// The refusal names the device:
 	//   Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than
 	//   desired GPU memory utilization (0.97, 30.9 GiB).

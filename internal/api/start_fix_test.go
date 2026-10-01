@@ -136,3 +136,14 @@ func TestNoFixForAnotherModelOrASuccess(t *testing.T) {
 		t.Errorf("response: %s", rec.Body.String())
 	}
 }
+
+// The same failure as vLLM 0.29 reports it, as seen on compute.
+func TestAStartThatRanOutOfContextOnVLLM029(t *testing.T) {
+	s, m := failingServer(t,
+		"(EngineCore pid=7579) ERROR 10-01 04:29:49 [core.py:1385] ValueError: To serve at least one request with the model's max seq len (262144), (5.84 GiB KV cache is needed, which is larger than the available KV cache memory (4.92 GiB). Based on the available memory, the estimated maximum model length is 214240.",
+		models.VLLMConfig{MaxModelLen: 262144, MaxNumSeqs: 16})
+	fix := s.startFixFor(m)
+	if fix == nil || len(fix.Changes) != 1 || fix.Changes[0].Proposed != "214016" {
+		t.Fatalf("fix = %+v", fix)
+	}
+}

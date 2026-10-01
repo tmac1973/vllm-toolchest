@@ -550,3 +550,14 @@ func TestTheFirstEngineVersionSeenWins(t *testing.T) {
 		t.Errorf("EngineVersion = %q, want the first seen, 0.27.2.dev0", m.EngineVersion)
 	}
 }
+
+// vLLM 0.29 words the KV-cache refusal differently from the release the first
+// rule was written against; found on compute when a fix was offered with
+// nothing to apply.
+func TestKVRefusalAsVLLM029WordsIt(t *testing.T) {
+	line := "(EngineCore pid=7579) ERROR 10-01 04:29:49 [core.py:1385] ValueError: To serve at least one request with the model's max seq len (262144), (5.84 GiB KV cache is needed, which is larger than the available KV cache memory (4.92 GiB). Based on the available memory, the estimated maximum model length is 214240. Try increasing `gpu_memory_utilization` (which also controls CPU memory on the CPU backend) or decreasing `max_model_len` when initializing the engine."
+	it := Scan(line)
+	if it == nil || it.Field != "max_model_len" || it.Suggested != "214240" || !it.Applicable || it.Severity != Error {
+		t.Errorf("Scan = %+v", it)
+	}
+}
