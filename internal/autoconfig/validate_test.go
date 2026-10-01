@@ -556,3 +556,23 @@ func TestMistralLoadFormatNeedsItsWeights(t *testing.T) {
 		}
 	}
 }
+
+func TestNamesParser(t *testing.T) {
+	for _, c := range []struct {
+		quote, parser, kind string
+		want                bool
+	}{
+		{"--tool-call-parser mistral", "mistral", "reasoning", false},
+		{"--tool-call-parser mistral", "mistral", "tool", true},
+		{"vllm serve m --reasoning-parser qwen3 --tool-call-parser qwen3_coder", "qwen3_coder", "reasoning", false},
+		{"vllm serve m --reasoning-parser qwen3 --tool-call-parser qwen3_coder", "qwen3", "reasoning", true},
+		{"Use the qwen3 reasoning parser with vLLM", "qwen3", "reasoning", true},
+		{"vllm serve m --reasoning-parser qwen3 --tool-call-parser qwen3_coder", "qwen3", "tool", false},
+		{"Use the reasoning parser qwen3 with vLLM", "qwen3", "reasoning", true},
+		{"mistral models: set --reasoning-parser mistral", "mistral", "reasoning", true},
+	} {
+		if got := namesParser(c.quote, c.parser, c.kind); got != c.want {
+			t.Errorf("namesParser(%q, %q, %q) = %v", c.quote, c.parser, c.kind, got)
+		}
+	}
+}

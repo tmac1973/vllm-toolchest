@@ -758,20 +758,20 @@ func (v *validator) parsersFromProse(start process.VLLMStartConfig) {
 		return
 	}
 	quote := clip(a.ParserQuote, maxQuote)
-	named := func(p *string) bool {
+	named := func(p *string, kind string) bool {
 		if p == nil || *p == "" {
 			return false
 		}
-		if !strings.Contains(strings.ToLower(a.ParserQuote), strings.ToLower(*p)) {
-			v.note("", originCard, "The helper read a parser named "+*p+", but the sentence it cited does not name it, so it was not used.")
+		if !namesParser(a.ParserQuote, *p, kind) {
+			v.note("", originCard, "The helper read a "+kind+" parser named "+*p+", but the sentence it cited does not name it as one, so it was not used.")
 			return false
 		}
 		return true
 	}
-	if !named(a.ReasoningParser) {
+	if !named(a.ReasoningParser, "reasoning") {
 		a.ReasoningParser = nil
 	}
-	if !named(a.ToolCallParser) {
+	if !named(a.ToolCallParser, "tool") {
 		a.ToolCallParser = nil
 	}
 	if a.ReasoningParser != nil && start.ReasoningParser == "" && *a.ReasoningParser != "" {
@@ -781,6 +781,46 @@ func (v *validator) parsersFromProse(start process.VLLMStartConfig) {
 		v.fieldRow("enable_auto_tool_choice", "true", quote, "Tool calling, which the card describes.", true)
 		v.fieldRow("tool_call_parser", *a.ToolCallParser, quote, "The tool-call parser the card names.", true)
 	}
+}
+
+// namesParser reports a quote that names parser as a parser of kind
+// ("reasoning" or "tool"): the whole name, with the kind in the words beside
+// it -- "--reasoning-parser qwen3", "the qwen3 reasoning parser". The name
+// alone is not enough. On Mistral Small 3.2, which does not reason, the
+// helper read a reasoning parser named mistral and cited "--tool-call-parser
+// mistral": the name was in the quote, as the tool parser's.
+func namesParser(quote, parser, kind string) bool {
+	q, name := strings.ToLower(quote), strings.ToLower(parser)
+	for from := 0; ; {
+		i := strings.Index(q[from:], name)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(name)
+		from = end
+		if i > 0 && isNameChar(q[i-1]) || end < len(q) && isNameChar(q[end]) {
+			continue // part of a longer name: qwen3 in qwen3_coder
+		}
+		// A flag between the name and the words beside it ends them:
+		// "--reasoning-parser qwen3 --tool-call-parser qwen3_coder" names
+		// qwen3_coder as the tool parser only.
+		before := q[max(0, i-40):i]
+		if j := strings.LastIndex(before, "--"); j >= 0 {
+			before = before[j:]
+		}
+		after := q[end:min(len(q), end+30)]
+		if j := strings.Index(after, "--"); j >= 0 {
+			after = after[:j]
+		}
+		if strings.Contains(before, kind) || strings.Contains(after, kind) {
+			return true
+		}
+	}
+}
+
+func isNameChar(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
 }
 
 // otherAdvice passes on what the helper read that is not a setting.
