@@ -222,7 +222,7 @@ func TestGoldenPartials(t *testing.T) {
 			// usage with no way to find or reclaim it.
 			name:    "downloads_panel",
 			partial: "downloads_panel",
-			data: struct{ Rows []downloadRow }{[]downloadRow{
+			data: downloadsPanelData{ModelSet: "k3x9", Rows: []downloadRow{
 				{
 					downloadView: downloadView{
 						ID: "abc123", ModelID: "unsloth/Qwen3.8-27B-FP8", Status: "downloading",
@@ -243,7 +243,7 @@ func TestGoldenPartials(t *testing.T) {
 			// the byte counts are disk reads, and the row has to say so.
 			name:    "downloads_panel_update",
 			partial: "downloads_panel",
-			data: struct{ Rows []downloadRow }{[]downloadRow{{
+			data: downloadsPanelData{ModelSet: "k3x9", Rows: []downloadRow{{
 				downloadView: downloadView{
 					ID: "abc123", ModelID: "unsloth/Qwen3.8-27B-FP8", Status: "downloading",
 					Percent: 12, DownloadedLabel: "3.4 GB", TotalLabel: "28.8 GB",
@@ -309,11 +309,11 @@ func TestGoldenPartials(t *testing.T) {
 			},
 		},
 		{
-			// Nothing in flight and nothing half-finished: the panel renders
-			// nothing at all rather than an empty card.
+			// Nothing in flight and nothing half-finished: no card, only the
+			// model-set fingerprint the models page watches.
 			name:    "downloads_panel_empty",
 			partial: "downloads_panel",
-			data:    struct{ Rows []downloadRow }{nil},
+			data:    downloadsPanelData{ModelSet: "k3x9"},
 		},
 		{
 			name:    "benchmark_form_loaded",
