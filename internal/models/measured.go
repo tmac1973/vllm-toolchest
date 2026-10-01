@@ -128,6 +128,7 @@ func MeasuredEstimate(m *Model, id EngineIdentity) (VRAMEstimate, bool) {
 
 	if b := run.KVBytesPerToken(); b > 0 {
 		est.KVCachePerTokenB = int64(b)
+		est.KVHeads, est.KVWidth = m.HFConfig.NumKeyValueHeads, run.TP
 		est.KVAtContextGB = b * float64(ctx) / (1024 * 1024 * 1024)
 	}
 	est.ActivationBaseGB = e.PeakActivationGB * float64(run.TP)

@@ -299,7 +299,8 @@ func planWidth(in PlanInput, d PlanDefaults, tp, target int, dtype string) (p Wi
 	}
 	tokens := 0
 	if spare > 0 {
-		t := spare * (1 << 30) / float64(est.KVCachePerTokenB) * margin
+		perToken := float64(est.KVCachePerTokenB) * est.KVScale(tp)
+		t := spare * (1 << 30) / perToken * margin
 		tokens = int(math.Floor(t/contextStep)) * contextStep
 	}
 	ctx := min(target, tokens)
