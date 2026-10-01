@@ -527,24 +527,32 @@ func (r *Registry) SetHelper(id string, on bool) error {
 	return r.save()
 }
 
-// RegisterFromDownload creates a new registry entry from a downloaded model.
-func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
-	// Parse config files
+// Describe is a model as registration would see it in modelDir -- its
+// config, quantization, tool use and the default launch config it would be
+// given -- without registering it. The recommendation feed plans a model it
+// has only the config.json of this way, so the plan starts where a download
+// would.
+func Describe(modelID, modelDir string) *Model {
 	hfCfg := ParseHFConfig(modelDir)
 	quantMeta := DetectQuantization(modelDir, modelID)
 	toolMeta := DetectToolUse(modelDir, modelID, hfCfg)
-	visionMeta := DetectVision(modelDir, hfCfg)
-	genDefaults := ParseGenDefaults(modelDir)
-
-	totalSize := dirSize(modelDir)
-
-	// Set default vLLM config based on quant method
 	vllmCfg := defaultVLLMConfig(quantMeta, toolMeta, hfCfg)
-
-	// Auto-enable trust_remote_code for models that need it
 	if needsTrustRemoteCode(modelDir, hfCfg) {
 		vllmCfg.TrustRemoteCode = true
 	}
+	return &Model{
+		ID: modelID, LocalPath: modelDir, HFConfig: hfCfg, Quantization: quantMeta,
+		ToolUse: toolMeta, Vision: DetectVision(modelDir, hfCfg), GenDefaults: ParseGenDefaults(modelDir),
+		VLLMConfig: vllmCfg,
+	}
+}
+
+// RegisterFromDownload creates a new registry entry from a downloaded model.
+func (r *Registry) RegisterFromDownload(modelID, modelDir string) error {
+	d := Describe(modelID, modelDir)
+	hfCfg, quantMeta, toolMeta, visionMeta, genDefaults, vllmCfg := d.HFConfig, d.Quantization, d.ToolUse, d.Vision, d.GenDefaults, d.VLLMConfig
+
+	totalSize := dirSize(modelDir)
 
 	// Compute display name
 	displayName := filepath.Base(modelDir)

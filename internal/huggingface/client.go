@@ -59,11 +59,21 @@ type ModelSearchResult struct {
 	// Safetensors is the exact size, by dtype; nil when the repository
 	// publishes no safetensors metadata.
 	Safetensors *Safetensors `json:"safetensors,omitempty"`
+	// SHA is the commit the result describes, so a later read of its files
+	// sees the same snapshot.
+	SHA string `json:"sha,omitempty"`
+	// PipelineTag is the Hub's task for the repository: text-generation,
+	// image-text-to-text, feature-extraction and so on.
+	PipelineTag string `json:"pipeline_tag,omitempty"`
 }
 
 // ModelConfigMeta is the part of a repo's config.json the search needs.
 type ModelConfigMeta struct {
 	QuantizationConfig *QuantConfig `json:"quantization_config,omitempty"`
+	// Architectures and ModelType are what the Hub reports from config.json:
+	// enough to name a model's architecture before its config is fetched.
+	Architectures []string `json:"architectures,omitempty"`
+	ModelType     string   `json:"model_type,omitempty"`
 }
 
 // GatedField handles HF's gated field which can be bool (false) or string ("auto"/"manual").
@@ -200,6 +210,67 @@ func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchRe
 const searchExpand = "&expand[]=author&expand[]=downloads&expand[]=likes&expand[]=tags&expand[]=gated" +
 	"&expand[]=private&expand[]=lastModified&expand[]=createdAt&expand[]=library_name&expand[]=pipeline_tag" +
 	"&expand[]=config&expand[]=safetensors"
+
+// CandidateQuery is one query for the recommendation feed's pool: one
+// library, one quantization tag or none, one order.
+type CandidateQuery struct {
+	Library string // "transformers" or "vllm"
+	Tag     string // a Hub quant tag; empty for the unquantized bucket
+	Sort    string // "downloads" or "lastModified"
+	Limit   int
+}
+
+// Candidates runs one pool query. The policy -- which queries, how many,
+// what to keep -- is the caller's; this asks and tidies as Search does: no
+// GGUF-only repositories, and each with its format badge.
+func (c *Client) Candidates(ctx context.Context, q CandidateQuery) ([]ModelSearchResult, error) {
+	if q.Limit <= 0 {
+		q.Limit = 50
+	}
+	if q.Sort == "" {
+		q.Sort = "downloads"
+	}
+	if q.Library == "" {
+		q.Library = "transformers"
+	}
+	u := fmt.Sprintf("%s/models?filter=%s&sort=%s&direction=-1&limit=%d%s&expand[]=sha",
+		c.apiURL(), url.QueryEscape(q.Library), url.QueryEscape(q.Sort), q.Limit, searchExpand)
+	if q.Tag != "" {
+		u += "&filter=" + url.QueryEscape(q.Tag)
+	}
+	var raw []ModelSearchResult
+	if err := c.getJSON(ctx, u, &raw); err != nil {
+		return nil, fmt.Errorf("candidates: %w", err)
+	}
+	var out []ModelSearchResult
+	for _, r := range raw {
+		if isGGUFOnly(r.ID, r.Tags) {
+			continue
+		}
+		r.QuantFormat = DetectQuantFormat(r.ID, r.Tags, r.Config)
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// FetchConfigJSON is a repository's config.json at a revision, as bytes, for
+// a caller that parses it with the same code as a local one.
+func (c *Client) FetchConfigJSON(ctx context.Context, modelID, revision string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL(c.base, modelID, revision, "config.json"), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("config.json for %s: HTTP %d", modelID, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
 
 // searchLibrary runs one Hub query for repos of one library.
 func (c *Client) searchLibrary(ctx context.Context, query, library, tag string) ([]ModelSearchResult, error) {

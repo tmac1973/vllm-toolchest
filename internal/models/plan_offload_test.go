@@ -121,3 +121,22 @@ func TestWithoutFlagKeepsQuotedValues(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestHeadsSplit(t *testing.T) {
+	for _, c := range []struct {
+		q, kv, tp int
+		want      bool
+	}{
+		{16, 2, 4, true},  // Qwen3.5: two KV heads copied onto four cards
+		{32, 8, 4, true},  // split
+		{24, 6, 4, false}, // six KV heads do not split four ways or divide four
+		{24, 6, 2, true},
+		{40, 8, 8, true},
+		{30, 6, 4, false}, // the query heads do not divide
+		{0, 0, 4, true},   // unknown passes
+	} {
+		if got := headsSplit(HFConfig{NumAttentionHeads: c.q, NumKeyValueHeads: c.kv}, c.tp); got != c.want {
+			t.Errorf("heads %d/%d at TP=%d: %v", c.q, c.kv, c.tp, got)
+		}
+	}
+}
