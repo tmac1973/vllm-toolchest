@@ -158,6 +158,9 @@
       {{- end}}
     </ul>
     {{- end}}
+    {{- if .HelperAnswer}}
+    <details><summary><small>The helper's answer, as it gave it</small></summary><pre><small>{{.HelperAnswer}}</small></pre></details>
+    {{- end}}
 
     <div role="group" class="ac-buttons">
       <button type="submit" name="apply" value="1">Save and apply</button>

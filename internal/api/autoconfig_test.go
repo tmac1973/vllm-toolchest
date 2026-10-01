@@ -9,7 +9,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
-// finishedRun runs autoconfigure for org/model without a helper and waits for
+// finishedRun runs autoconfigure for org/model with a stand-in helper and waits for
 // the result.
 func finishedRun(t *testing.T) *Server {
 	t.Helper()
@@ -140,6 +140,22 @@ func TestTheDialogAndTheReview(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "From the model card") || !strings.Contains(body, `name="width" value="narrow"`) {
 		t.Errorf("a held result did not render its review:\n%s", body)
+	}
+	// The helper's answer is shown as given, so a reading that came to
+	// nothing can be told from one the checks dropped.
+	if !strings.Contains(body, "The helper's answer, as it gave it") {
+		t.Errorf("the helper's answer is not in the review:\n%s", body[strings.Index(body, "Notes"):])
+	}
+	run, _ := s.autoconfigSnapshot()
+	res := *run.result
+	res.Advice = []byte(`{"temperature":null,"top_p":0.95}`)
+	m, _ := s.registry.Get("org/model")
+	if v := s.autoconfigReview(m, &res); !strings.Contains(v.HelperAnswer, `"temperature": null`) {
+		t.Errorf("helper answer: %q", v.HelperAnswer)
+	}
+	res.Advice = nil
+	if v := s.autoconfigReview(m, &res); v.HelperAnswer != "" {
+		t.Error("a run without a reading showed one")
 	}
 	post(s, "/api/models/autoconfig/discard?id=org/model", url.Values{})
 	rec = httptest.NewRecorder()

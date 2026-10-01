@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -220,7 +222,10 @@ type autoconfigReviewView struct {
 	FieldNotes                 []fieldNotes
 	GeneralNotes               []string
 	Summary                    []string
-	Suggestions                []autoconfig.DraftSuggestion
+	// HelperAnswer is the helper's answer as it gave it, indented, for
+	// seeing why a reading was or was not used; "" when it gave none.
+	HelperAnswer string
+	Suggestions  []autoconfig.DraftSuggestion
 }
 
 type fieldNotes struct {
@@ -258,6 +263,13 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 			v.Sources += "The reading of its text from the last run was reused."
 		default:
 			v.Sources += "Its text was not read; its command was."
+		}
+	}
+
+	if len(res.Advice) > 0 {
+		var b bytes.Buffer
+		if json.Indent(&b, res.Advice, "", "  ") == nil {
+			v.HelperAnswer = b.String()
 		}
 	}
 
