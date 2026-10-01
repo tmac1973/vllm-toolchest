@@ -616,7 +616,8 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 0.3rem;
         }
-        .model-card-buttons button {
+        .model-card-buttons button,
+        .model-card-buttons [role="button"] {
             margin: 0;
             font-size: 0.8rem;
             padding: 0.25rem 0.4rem;
@@ -715,6 +716,10 @@
         .autoconfig-warning td { background: color-mix(in srgb, var(--graphite-warn, var(--pico-primary)) 12%, transparent); }
         .autoconfig .ac-notes { font-size: 0.8rem; }
         .autoconfig .ac-buttons { margin-top: 0.75rem; width: auto; }
+        /* The Models page's later sections: drafts and the helper model. */
+        .model-section { margin-top: 1.75rem; }
+        .model-section-title { margin: 0 0 0.25rem; }
+        .model-section-note { font-size: 0.8rem; color: var(--pico-muted-color); margin: 0 0 0.6rem; }
         .ac-notice {
             border: 1px solid var(--pico-muted-border-color); border-radius: 6px;
             padding: 0.6rem 0.8rem; margin-bottom: 0.75rem;

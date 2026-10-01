@@ -1,5 +1,5 @@
 {{define "model_list"}}
-{{- if not .Rows -}}
+{{- if not (or .Rows .Drafts .Helpers) -}}
 <p>No models registered. <a href="/models/browse">Download models from HuggingFace &rarr;</a></p>
 {{- else -}}
 <div class="model-list-controls">
@@ -17,8 +17,35 @@
 <div class="model-card-list">
 {{- range .Rows}}
     {{template "model_card" .}}
+{{- else}}
+    <p class="model-section-note">No models that can be served yet. <a href="/models/browse">Download one from HuggingFace &rarr;</a></p>
 {{- end}}
 </div>
+{{- /* Drafts and the helper are on disk like models, and neither can be
+       chosen to serve, so they are listed apart rather than among the models
+       a radio button picks from. */}}
+{{- with .Drafts}}
+<section class="model-section">
+    <h6 class="model-section-title">Draft models</h6>
+    <p class="model-section-note">Small models for speculative decoding: they propose tokens for another model to verify, and are not served on their own. Pair one from a model's <em>Configure</em> panel, or let <em>Autoconfigure</em> do it.</p>
+    <div class="model-card-list">
+    {{- range .}}
+        {{template "model_card" .}}
+    {{- end}}
+    </div>
+</section>
+{{- end}}
+{{- with .Helpers}}
+<section class="model-section">
+    <h6 class="model-section-title">Helper model</h6>
+    <p class="model-section-note">Autoconfigure's own model, which reads model cards. It is installed and removed in <a href="/settings">Settings</a>.</p>
+    <div class="model-card-list">
+    {{- range .}}
+        {{template "model_card" .}}
+    {{- end}}
+    </div>
+</section>
+{{- end}}
 {{- end -}}
 {{end}}
 
@@ -31,7 +58,7 @@
             {{/* vLLM serves one model per process, so this is a choice among
                  models rather than a set of them: picking one says what Start
                  will launch, and nothing is loaded until it does. */}}
-            {{- if not .Draft}}
+            {{- if not (or .Draft .Helper)}}
             <input type="radio" name="active-model" style="margin:0;"
                    {{if .Active}}checked{{end}}
                    {{if .Orphaned}}disabled{{end}}
@@ -59,7 +86,7 @@
             {{- end}}
         </div>
         <div class="model-card-quant"><kbd>{{.Quant.Method}}{{with .Quant.Width}} <span class="nowrap">{{.}}</span>{{end}}</kbd></div>
-        <div class="model-card-vram"{{if not .Draft}} title="Total VRAM to load this model as configured, across all GPUs"{{end}}>{{if .Draft}}&mdash;{{else}}{{template "vram_label" .VRAM}}{{end}}</div>
+        <div class="model-card-vram"{{if not (or .Draft .Helper)}} title="Total VRAM to load this model as configured, across all GPUs"{{end}}>{{if or .Draft .Helper}}&mdash;{{else}}{{template "vram_label" .VRAM}}{{end}}</div>
         <div class="model-card-size">{{.SizeLabel}}</div>
         <div class="model-card-actions">
             {{/* A grid two buttons wide, not a Pico group. A group is one row
@@ -67,6 +94,9 @@
                  wider than the column: the row ran left over the size. This
                  wraps, so another button is another cell and not a wider row. */}}
             <div class="model-card-buttons">
+                {{- if .Helper}}
+                <a href="/settings" role="button" class="outline secondary">Settings</a>
+                {{- else}}
                 {{- if not .Draft}}
                 <button type="button" class="outline"
                         hx-get="/api/models/config-panel?id={{.ID}}"
@@ -113,6 +143,7 @@
                         onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
                     Remove
                 </button>
+                {{- end}}
             </div>
             {{/* Removing a model and deleting tens of gigabytes are different
                  acts, and the old single Delete button did both without

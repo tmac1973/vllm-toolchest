@@ -93,7 +93,7 @@ func TestTuneButtonRendersOnlyWhenEligible(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	s.renderPartial(&buf, "model_list", struct{ Rows []modelRow }{s.modelRows()})
+	s.renderPartial(&buf, "model_list", s.modelListView())
 
 	// html/template escapes "/" as "\/" inside a JS string, which is correct
 	// -- it is what stops a model id containing "</script>" from breaking out

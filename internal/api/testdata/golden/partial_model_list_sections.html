@@ -1,0 +1,202 @@
+<div class="model-list-controls">
+    <input type="search" class="model-filter" placeholder="Filter by name, quant, architecture…"
+           oninput="filterModels(this.value)" aria-label="Filter models">
+</div>
+<div class="model-card-header">
+    <div></div>
+    <div>Model</div>
+    <div>Quant</div>
+    <div>VRAM est.</div>
+    <div>Size</div>
+    <div></div>
+</div>
+<div class="model-card-list">
+    <article class="model-card"
+         id="model-card-org--model"
+         data-search="org/model">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+            <input type="radio" name="active-model" style="margin:0;"
+                   
+                   
+                   title="Serve this model when the server starts"
+                   
+                   hx-put="/api/models/activate?id=org/model"
+                   hx-target="#model-list"
+                   hx-swap="innerHTML"
+                   >
+        </div>
+        <div class="model-card-name">Model
+            <br><small style="opacity:0.6;">org/model</small>
+        </div>
+        <div class="model-card-quant"><kbd>awq</kbd></div>
+        <div class="model-card-vram" title="Total VRAM to load this model as configured, across all GPUs"><span title="Total VRAM to load this model as configured, across all GPUs">0.0 GB</span></div>
+        <div class="model-card-size">23.5 GB</div>
+        <div class="model-card-actions">
+            
+            <div class="model-card-buttons">
+                <button type="button" class="outline"
+                        hx-get="/api/models/config-panel?id=org/model"
+                        hx-target="#config-org--model"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('config-org--model'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Configure
+                </button>
+                <button type="button" class="outline"
+                        title="Propose a configuration from the model card and this machine's cards, to review before anything changes"
+                        hx-get="/api/models/autoconfig?id=org/model"
+                        hx-target="#autoconfig-org--model"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('autoconfig-org--model'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Autoconfigure
+                </button>
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Model</strong> (awq) from the registry?</p>
+                    <p><small>Its files take 23.5 GB on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=org/model&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=org/model"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-org--model"></div>
+    <div class="model-card-config" id="update-org--model"></div>
+    <div class="model-card-config" id="autoconfig-org--model"></div>
+</article>
+</div>
+<section class="model-section">
+    <h6 class="model-section-title">Draft models</h6>
+    <p class="model-section-note">Small models for speculative decoding: they propose tokens for another model to verify, and are not served on their own. Pair one from a model's <em>Configure</em> panel, or let <em>Autoconfigure</em> do it.</p>
+    <div class="model-card-list">
+        <article class="model-card"
+         id="model-card-org--drafter"
+         data-search="org/drafter draft">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+        </div>
+        <div class="model-card-name">Drafter <mark style="padding:0 0.3rem;font-size:0.75rem;" title="A draft model for speculative decoding (dflash). It proposes tokens for another model to verify and cannot be served on its own; choose it from the Draft model picker in that model's Configure panel.">draft</mark>
+            <br><small style="opacity:0.6;">org/drafter</small>
+            <br><small>Drafts for <strong>Model</strong></small>
+        </div>
+        <div class="model-card-quant"><kbd>fp8</kbd></div>
+        <div class="model-card-vram">&mdash;</div>
+        <div class="model-card-size">2.0 GB</div>
+        <div class="model-card-actions">
+            
+            <div class="model-card-buttons">
+                <button type="button" class="outline secondary"
+                        onclick="this.closest('.model-card').querySelector('.remove-dialog').showModal();">
+                    Remove
+                </button>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Drafter</strong> (fp8) from the registry?</p>
+                    <p><small>Its files take 2.0 GB on disk.</small></p>
+                    <p><mark>Model uses this draft and will not start once its files are deleted.</mark></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=org/drafter&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=org/drafter"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-org--drafter"></div>
+    <div class="model-card-config" id="update-org--drafter"></div>
+    <div class="model-card-config" id="autoconfig-org--drafter"></div>
+</article>
+    </div>
+</section>
+<section class="model-section">
+    <h6 class="model-section-title">Helper model</h6>
+    <p class="model-section-note">Autoconfigure's own model, which reads model cards. It is installed and removed in <a href="/settings">Settings</a>.</p>
+    <div class="model-card-list">
+        <article class="model-card"
+         id="model-card-Qwen--Qwen3-4B-Instruct-2507"
+         data-search="qwen/qwen3-4b-instruct-2507 helper">
+    <div class="model-card-row">
+        <div class="model-card-toggle">
+            
+        </div>
+        <div class="model-card-name">Qwen3-4B-Instruct-2507
+            <br><small style="opacity:0.6;">Qwen/Qwen3-4B-Instruct-2507</small>
+        </div>
+        <div class="model-card-quant"><kbd>none</kbd></div>
+        <div class="model-card-vram">&mdash;</div>
+        <div class="model-card-size">7.5 GB</div>
+        <div class="model-card-actions">
+            
+            <div class="model-card-buttons">
+                <a href="/settings" role="button" class="outline secondary">Settings</a>
+            </div>
+            
+            <dialog class="remove-dialog" style="max-width:420px;">
+                <article>
+                    <header>Remove Model</header>
+                    <p>Remove <strong>Qwen3-4B-Instruct-2507</strong> (none) from the registry?</p>
+                    <p><small>Its files take 7.5 GB on disk.</small></p>
+                    <footer>
+                        <div role="group">
+                            <button type="button" class="secondary"
+                                    onclick="this.closest('dialog').close();">Cancel</button>
+                            <button type="button"
+                                    hx-delete="/api/models/delete?id=Qwen/Qwen3-4B-Instruct-2507&keep_files=true"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Keep Files</button>
+                            <button type="button" class="contrast"
+                                    hx-delete="/api/models/delete?id=Qwen/Qwen3-4B-Instruct-2507"
+                                    hx-target="closest .model-card"
+                                    hx-swap="outerHTML"
+                                    onclick="this.closest('dialog').close();">Delete Files</button>
+                        </div>
+                    </footer>
+                </article>
+            </dialog>
+        </div>
+    </div>
+    <div class="model-card-config" id="config-Qwen--Qwen3-4B-Instruct-2507"></div>
+    <div class="model-card-config" id="update-Qwen--Qwen3-4B-Instruct-2507"></div>
+    <div class="model-card-config" id="autoconfig-Qwen--Qwen3-4B-Instruct-2507"></div>
+</article>
+    </div>
+</section>
