@@ -14,6 +14,7 @@ function initLogPanels() {
 
         const pre = panel.querySelector('pre');
         const tailToggle = panel.querySelector('.log-tail-toggle');
+        const wrapToggle = panel.querySelector('.log-wrap-toggle');
         const copyBtn = panel.querySelector('.log-copy-btn');
         const clearBtn = panel.querySelector('.log-clear-btn');
         if (!pre) return;
@@ -23,6 +24,22 @@ function initLogPanels() {
         if (tailToggle) {
             tailToggle.addEventListener('change', () => {
                 liveTail = tailToggle.checked;
+                if (liveTail) pre.scrollTop = pre.scrollHeight;
+            });
+        }
+
+        // Long lines wrap by default. A horizontal scrollbar is not enough:
+        // with the overlay scrollbars Linux desktops default to, it is hidden
+        // until the pointer finds the box's bottom edge, and a log line
+        // reads as cut off. Unwrapped stays available, and is remembered.
+        if (wrapToggle) {
+            let wrap = true;
+            try { wrap = localStorage.getItem('logWrap') !== '0'; } catch (e) {}
+            wrapToggle.checked = wrap;
+            pre.classList.toggle('log-nowrap', !wrap);
+            wrapToggle.addEventListener('change', () => {
+                pre.classList.toggle('log-nowrap', !wrapToggle.checked);
+                try { localStorage.setItem('logWrap', wrapToggle.checked ? '1' : '0'); } catch (e) {}
                 if (liveTail) pre.scrollTop = pre.scrollHeight;
             });
         }
