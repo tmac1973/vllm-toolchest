@@ -28,6 +28,9 @@ type DraftMeta struct {
 	// With the hidden size and vocabulary, which the draft shares with its
 	// target, it is what says whether a pairing can work.
 	TargetLayers int `json:"target_layers,omitempty"`
+	// Tokens is how many tokens it was trained to propose, where the
+	// checkpoint says: a speculators-format draft's proposal method does.
+	Tokens int `json:"tokens,omitempty"`
 }
 
 // IsDraft reports whether the model is a drafter rather than something that
@@ -52,12 +55,66 @@ func parseDraft(raw map[string]json.RawMessage, architectures []string) *DraftMe
 		jsonFieldFrom(raw, &d.TargetLayers, "num_target_layers")
 		return d
 	}
+	// The speculators format -- RedHat's EAGLE-3 drafters -- names its
+	// algorithm and how many tokens it proposes.
+	if block, ok := raw["speculators_config"]; ok {
+		var sc struct {
+			Algorithm       string `json:"algorithm"`
+			ProposalMethods []struct {
+				SpeculativeTokens int `json:"speculative_tokens"`
+			} `json:"proposal_methods"`
+		}
+		if json.Unmarshal(block, &sc) == nil && sc.Algorithm != "" {
+			d := &DraftMeta{Method: strings.ToLower(sc.Algorithm)}
+			if len(sc.ProposalMethods) > 0 {
+				d.Tokens = sc.ProposalMethods[0].SpeculativeTokens
+			}
+			return d
+		}
+	}
 	for _, arch := range architectures {
 		if strings.HasSuffix(arch, "DraftModel") {
 			return &DraftMeta{}
 		}
 	}
 	return nil
+}
+
+// BundledDrafts are the drafters a model carries in its own directory, one
+// folder down: tcclaviger/gemma-4-31B-it-MXFP416-MTP ships RedHat's EAGLE-3
+// drafter in gemma-4-31B-it-speculator.eagle3/. They are not registered as
+// models of their own, so without this autoconfigure offered to download the
+// drafter the model had already brought.
+func BundledDrafts(m *Model) []*Model {
+	if m == nil || m.LocalPath == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(m.LocalPath)
+	if err != nil {
+		return nil
+	}
+	var out []*Model
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(m.LocalPath, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
+			continue
+		}
+		cfg := ParseHFConfig(dir)
+		if cfg.Draft == nil {
+			continue
+		}
+		out = append(out, &Model{
+			ID:             m.ID + "/" + e.Name(),
+			DisplayName:    e.Name() + ", bundled with this model",
+			LocalPath:      dir,
+			HFConfig:       cfg,
+			TotalSizeBytes: dirSize(dir),
+		})
+	}
+	return out
 }
 
 // SpeculativeRef is the part of a --speculative-config this tool reads. The
@@ -108,6 +165,9 @@ func (m *Model) SpeculativeConfigFor(tokens int) string {
 	}
 	if tokens <= 0 {
 		tokens = m.MaxDraftTokens()
+	}
+	if tokens <= 0 {
+		tokens = m.HFConfig.Draft.Tokens
 	}
 	// Written by hand rather than marshalled so the keys come out in the
 	// order every model card prints them, and the field reads the same

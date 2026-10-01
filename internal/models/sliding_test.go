@@ -1,6 +1,8 @@
 package models
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,5 +36,31 @@ func TestSlidingWindowLayersStopAtTheWindow(t *testing.T) {
 	dir = writeConfig(t, `{"num_hidden_layers":2,"hidden_size":64,"num_attention_heads":4,"layer_types":["sliding_attention","full_attention"]}`)
 	if cfg := ParseHFConfig(dir); cfg.AttentionLayers != 2 || cfg.SlidingLayers != 0 {
 		t.Errorf("without a window: %+v", cfg)
+	}
+}
+
+// tcclaviger's Gemma 4 ships RedHat's EAGLE-3 drafter in a folder of its own.
+// It is found, read as an eagle3 drafter that proposes three tokens, and kept
+// out of the target's weights.
+func TestBundledDraft(t *testing.T) {
+	dir := writeConfig(t, `{"architectures":["Gemma4ForConditionalGeneration"],"num_hidden_layers":60,"hidden_size":5376}`)
+	os.WriteFile(filepath.Join(dir, "model-00000.safetensors"), make([]byte, 1000), 0o644)
+	sub := filepath.Join(dir, "gemma-4-31B-it-speculator.eagle3")
+	os.Mkdir(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "config.json"), []byte(`{"architectures":["Eagle3DraftModel"],
+		"speculators_config":{"algorithm":"eagle3","proposal_methods":[{"proposal_type":"greedy","speculative_tokens":3}]}}`), 0o644)
+	os.WriteFile(filepath.Join(sub, "model.safetensors"), make([]byte, 400), 0o644)
+
+	m := &Model{ID: "tcclaviger/gemma-4-31B-it-MXFP416-MTP", LocalPath: dir, HFConfig: ParseHFConfig(dir), TotalSizeBytes: dirSize(dir)}
+	drafts := BundledDrafts(m)
+	if len(drafts) != 1 || drafts[0].HFConfig.Draft.Method != "eagle3" || drafts[0].HFConfig.Draft.Tokens != 3 {
+		t.Fatalf("drafts: %+v", drafts)
+	}
+	want := `{"method": "eagle3", "model": "` + sub + `", "num_speculative_tokens": 3}`
+	if got := drafts[0].SpeculativeConfigFor(0); got != want {
+		t.Errorf("config %s, want %s", got, want)
+	}
+	if got := EstimateVRAM(m, nil).CheckpointGB * (1 << 30); got > float64(m.TotalSizeBytes-400)+1 {
+		t.Errorf("the bundled drafter was counted as weights: %.0f bytes of %d", got, m.TotalSizeBytes)
 	}
 }

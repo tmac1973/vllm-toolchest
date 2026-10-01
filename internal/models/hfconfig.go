@@ -23,7 +23,8 @@ import (
 // 3: PLELayers.
 // 4: MTPLayers.
 // 5: SlidingLayers, SlidingWindow, GlobalKVHeads, GlobalHeadDim.
-const hfMetaVersion = 5
+// 6: Draft method and tokens of a speculators-format drafter.
+const hfMetaVersion = 6
 
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {

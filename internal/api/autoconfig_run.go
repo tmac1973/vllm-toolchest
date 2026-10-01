@@ -165,6 +165,7 @@ func (s *Server) autoconfigDeps(m *models.Model, run *autoconfigRun, class model
 			d.Drafts = append(d.Drafts, x)
 		}
 	}
+	d.Drafts = append(d.Drafts, models.BundledDrafts(m)...)
 
 	switch helper := s.helperModel(); {
 	case helper == nil:
