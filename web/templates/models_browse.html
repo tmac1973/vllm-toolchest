@@ -7,7 +7,41 @@
 .quant-key summary:hover { opacity: 1; }
 .quant-key table { margin: 0.75rem 0 0.5rem 0; font-size: 0.85rem; }
 .quant-key td, .quant-key th { padding: 0.3rem 0.5rem; vertical-align: top; }
+
+/* The recommendation feed: cards in the page flow, growing with their
+   content. Everything is scoped under .recommend-feed. */
+.recommend-feed { margin-bottom: 1rem; padding: 0.75rem 1rem; }
+.recommend-feed .recommend-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; padding: 0; margin-bottom: 0.5rem; background: none; border: 0; }
+.recommend-feed .recommend-profile { opacity: 0.7; }
+.recommend-feed .recommend-refresh { display: flex; align-items: center; gap: 0.5rem; }
+.recommend-feed .recommend-refresh small { opacity: 0.6; }
+.recommend-feed .recommend-refresh button { margin: 0; padding: 0.2rem 0.75rem; font-size: 0.8rem; }
+.recommend-feed .recommend-chips { margin: 0 0 0.6rem 0; }
+.recommend-feed .recommend-chip { padding: 0.25rem 0.75rem; font-size: 0.85rem; }
+.recommend-feed .recommend-chip[aria-pressed="false"] { background: transparent; color: var(--pico-primary); }
+.recommend-feed .recommend-stale, .recommend-feed .recommend-empty { opacity: 0.75; margin: 0.25rem 0 0.5rem 0; }
+.recommend-feed .recommend-card { margin: 0 0 0.5rem 0; padding: 0.5rem 0.75rem; }
+.recommend-feed .recommend-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; }
+.recommend-feed .recommend-card-head > div:first-child { min-width: 0; flex: 1 1 22rem; overflow-wrap: anywhere; }
+.recommend-feed .recommend-card-side { display: flex; align-items: center; gap: 0.5rem; }
+.recommend-feed .recommend-card-side button { margin: 0; padding: 0.2rem 0.75rem; font-size: 0.8rem; }
+.recommend-feed .recommend-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.2rem; font-size: 0.7rem; color: #fff; }
+.recommend-feed .recommend-context { opacity: 0.7; }
+.recommend-feed .recommend-gated { color: var(--pico-del-color); }
+.recommend-feed .recommend-hub { font-size: 0.75rem; margin-left: 0.4rem; text-decoration: none; }
+.recommend-feed .recommend-unverified summary, .recommend-feed .recommend-more summary { cursor: pointer; opacity: 0.75; }
+.recommend-feed .recommend-more { margin-bottom: 0.5rem; }
+.recommend-feed .recommend-unverified ul { margin: 0.4rem 0 0 1rem; }
 </style>
+
+<article class="recommend-feed">
+    <div id="recommend-feed"
+         hx-get="/api/recommend?intent=quality"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <p aria-busy="true"><small>Working out which models fit this machine&hellip;</small></p>
+    </div>
+</article>
 
 <details class="quant-key">
     <summary>What do the format badges mean?</summary>

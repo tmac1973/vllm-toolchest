@@ -652,6 +652,28 @@ func TestGoldenPartials(t *testing.T) {
 			},
 		},
 		{
+			// The feed: two verified cards, one accelerated and gated and
+			// not, and two that could not be checked.
+			name:    "recommend_feed",
+			partial: "recommend_feed",
+			data:    newRecommendFeedView(feedResult(true), feedNow),
+		},
+		{
+			// The registry unread: no architecture clause, no stray separator.
+			name:    "recommend_feed_archs_unknown",
+			partial: "recommend_feed",
+			data:    newRecommendFeedView(feedResult(false), feedNow),
+		},
+		{
+			name:    "recommend_feed_unavailable",
+			partial: "recommend_feed",
+			data: func() recommendFeedView {
+				r := feedResult(true)
+				r.Verified, r.Unverified, r.Unavailable = nil, nil, "Hugging Face could not be reached: dial tcp: i/o timeout"
+				return newRecommendFeedView(r, feedNow)
+			}(),
+		},
+		{
 			name:    "helper_model_panel_absent",
 			partial: "helper_model_panel",
 			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507"},

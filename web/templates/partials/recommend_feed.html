@@ -1,0 +1,71 @@
+{{define "recommend_feed" -}}
+<header class="recommend-head">
+  <div>
+    <strong>Recommended for this machine</strong>
+    <br><small class="recommend-profile" title="What these recommendations were worked out for. If one looks wrong, check this first.">{{.Profile}}</small>
+  </div>
+  <div class="recommend-refresh">
+    {{- with .Age}}<small>{{.}}</small>{{end}}
+    <button type="button" class="outline secondary"
+            hx-post="/api/recommend/refresh" hx-swap="none"
+            hx-indicator="#recommend-busy"
+            hx-on::after-request="var c=document.querySelector('.recommend-chip[aria-pressed=\'true\']'); if(c){c.click()}"
+            title="Ask Hugging Face again. The list is otherwise kept for six hours.">Refresh</button>
+    <span id="recommend-busy" class="htmx-indicator" aria-busy="true"></span>
+  </div>
+</header>
+{{- if .Unavailable}}
+<p class="recommend-empty"><small>No recommendations right now: {{.Unavailable}}. Search below still works.</small></p>
+{{- else}}
+<div role="group" class="recommend-chips">
+  {{- range .Chips}}
+  <button type="button" class="recommend-chip" aria-pressed="{{if .Pressed}}true{{else}}false{{end}}"
+          hx-get="/api/recommend?intent={{.Intent}}" hx-target="#recommend-feed" hx-swap="innerHTML">{{.Label}}</button>
+  {{- end}}
+</div>
+{{- if .Stale}}
+<p class="recommend-stale"><small>This list is more than six hours old. Refresh to ask Hugging Face again.</small></p>
+{{- end}}
+{{- if .Empty}}
+<p class="recommend-empty"><small>Nothing among the models looked at fits this machine. Search below for something smaller.</small></p>
+{{- end}}
+{{- range .Cards}}{{template "recommend_card" .}}{{end}}
+{{- with .More}}
+<details class="recommend-more">
+  <summary><small>Show {{len .}} more</small></summary>
+  {{- range .}}{{template "recommend_card" .}}{{end}}
+</details>
+{{- end}}
+{{- with .Unverified}}
+<details class="recommend-unverified">
+  <summary><small>{{len .}} could not be fully checked</small></summary>
+  <ul>
+    {{- range .}}
+    <li><small><strong>{{.ID}}</strong>{{if .Gated}} [gated]{{end}} &mdash; {{.Reason}}</small></li>
+    {{- end}}
+  </ul>
+</details>
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{define "recommend_card" -}}
+<article class="recommend-card">
+  <div class="recommend-card-head">
+    <div>
+      <strong>{{.ID}}</strong>{{if .Gated}} <small class="recommend-gated" title="This is a gated model. Configure your HF token in Settings to download.">[gated]</small>{{end}}
+      <a href="https://huggingface.co/{{.ID}}" target="_blank" rel="noopener" class="recommend-hub" title="View on HuggingFace">&#8599;</a>
+      <br><small>{{.Fit}}</small>
+      <br><small class="recommend-context">{{.Context}}</small>
+    </div>
+    <div class="recommend-card-side">
+      <span class="recommend-badge" style="background:{{.Color}};">{{.Format}}</span>
+      <small>{{.Weights}}</small>
+      <button type="button" class="outline"
+              hx-get="/api/hf/model?id={{.ID}}" hx-target="#recdetail-{{.SafeID}}" hx-swap="innerHTML"
+              title="Sizes, disk space and the download button">Details</button>
+    </div>
+  </div>
+  <div id="recdetail-{{.SafeID}}"></div>
+</article>
+{{- end}}
