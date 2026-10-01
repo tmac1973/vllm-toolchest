@@ -79,13 +79,17 @@ const (
 //	MoE hybrid     TP=4   5.50   an earlier engine build
 //	27B hybrid     TP=2   6.49   of it non-torch 2.65
 //	35B-A3B MoE    TP=4   2.30   Qwen3.5 FP8, vLLM 0.29
+//	24B dense      TP=4   0.78   Mistral Small 3.2 BF16, vLLM 0.29
 //
 // Without it the 27B's projection was 12 to 15 GB under what the engine
-// needed, at its pessimistic end. It is a band across what was seen and no
-// wider, because three models on one host cannot say what it depends on. The
-// third sat well under the first two, and was what took the low end from 4.5
-// to 2.3: its projection had been saved from overstating its room only by the
-// KV cache being understated twice over.
+// needed, at its pessimistic end. It is a band across what was seen, because
+// a handful of models on one host cannot say what it depends on. The third
+// sat well under the first two, and was what took the low end from 4.5 to
+// 2.3: its projection had been saved from overstating its room only by the KV
+// cache being understated twice over. The fourth, the one dense model, sat
+// lower again, outside the band. The band was left: its projection erred
+// safe, and one dense model cannot say whether dense models as a class sit
+// there -- the first three are all hybrids.
 //
 // Charged from two ranks up, as the replication surcharge is. The one
 // single-rank start on record consumed barely more than its weights, on a
