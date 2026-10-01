@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 )
@@ -97,10 +98,6 @@ type ModelGroup struct {
 }
 
 // Search queries HuggingFace for models compatible with vLLM.
-// We don't filter by pipeline_tag because models may be tagged as
-// text-generation, image-text-to-text, or other tags that vLLM supports.
-// Instead we filter by the transformers library tag and sort by downloads.
-// Search queries HuggingFace for models compatible with vLLM.
 //
 // quantFilter is one of QuantFilterOptions' values, or "". When it names tags,
 // they go into the query so the Hub does the filtering. That is the difference
@@ -111,7 +108,8 @@ type ModelGroup struct {
 //
 // We don't filter by pipeline_tag because models may be tagged as
 // text-generation, image-text-to-text, or other tags that vLLM supports.
-// Instead we filter by the transformers library tag and sort by downloads.
+// Instead we filter by library -- see searchLibraries -- and sort by
+// downloads.
 func (c *Client) Search(ctx context.Context, query, quantFilter string) ([]ModelSearchResult, error) {
 	tags := QuantFilterTags(quantFilter)
 	if len(tags) == 0 {
@@ -147,22 +145,37 @@ func (c *Client) Search(ctx context.Context, query, quantFilter string) ([]Model
 	return merged, nil
 }
 
-// search runs one Hub query, optionally narrowed to a tag.
-func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchResult, error) {
-	// config=true returns each repo's config.json inline. Without it the only
-	// clues to a model's format are its tags and its name, and the name is
-	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
-	// compressed-tensors, and were being labelled AWQ.
-	u := fmt.Sprintf("%s/models?search=%s&filter=transformers&sort=downloads&direction=-1&limit=50&config=true",
-		c.apiURL(), url.QueryEscape(query))
-	if tag != "" {
-		u += "&filter=" + url.QueryEscape(tag)
-	}
+// searchLibraries are the Hub libraries a servable repo is tagged with. A repo
+// published for vLLM may carry only "vllm": mistralai/Mistral-Small-3.2-24B-
+// Instruct-2506 does, and searching transformers alone never found it. The
+// Hub ANDs repeated filters, so each is its own request, merged.
+var searchLibraries = []string{"transformers", "vllm"}
 
+// search runs one Hub query per library, optionally narrowed to a tag, and
+// merges them by downloads.
+func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchResult, error) {
+	seen := map[string]bool{}
 	var raw []ModelSearchResult
-	if err := c.getJSON(ctx, u, &raw); err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+	var firstErr error
+	for _, lib := range searchLibraries {
+		batch, err := c.searchLibrary(ctx, query, lib, tag)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, r := range batch {
+			if !seen[r.ID] {
+				seen[r.ID] = true
+				raw = append(raw, r)
+			}
+		}
 	}
+	if len(raw) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	sort.SliceStable(raw, func(i, j int) bool { return raw[i].Downloads > raw[j].Downloads })
 
 	// Filter out GGUF-only repos (we serve safetensors/AWQ/GPTQ, not GGUF)
 	var results []ModelSearchResult
@@ -175,6 +188,24 @@ func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchRe
 	}
 
 	return results, nil
+}
+
+// searchLibrary runs one Hub query for repos of one library.
+func (c *Client) searchLibrary(ctx context.Context, query, library, tag string) ([]ModelSearchResult, error) {
+	// config=true returns each repo's config.json inline. Without it the only
+	// clues to a model's format are its tags and its name, and the name is
+	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
+	// compressed-tensors, and were being labelled AWQ.
+	u := fmt.Sprintf("%s/models?search=%s&filter=%s&sort=downloads&direction=-1&limit=50&config=true",
+		c.apiURL(), url.QueryEscape(query), url.QueryEscape(library))
+	if tag != "" {
+		u += "&filter=" + url.QueryEscape(tag)
+	}
+	var raw []ModelSearchResult
+	if err := c.getJSON(ctx, u, &raw); err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	return raw, nil
 }
 
 // GroupResults groups search results by author + normalized base model name.
