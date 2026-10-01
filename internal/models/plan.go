@@ -264,7 +264,13 @@ func planWidth(in PlanInput, d PlanDefaults, tp, target int, dtype string) (p Wi
 	o := evaluateTP(est, c, in.Inventory, tp, util)
 	measured := o.Measured && est.Source == SourceMeasured
 
-	nonKV := o.RequiredGB - o.KVGB
+	// The context is sized as the engine sizes its pool: against consumed
+	// memory, with the graphs and working set on top. Charging those too
+	// left every plan at about half the room the engine then found.
+	nonKV := o.ConsumedGB
+	if nonKV <= 0 {
+		nonKV = o.RequiredGB - o.KVGB
+	}
 	spare := o.AvailableGB - nonKV
 
 	p = WidthPlan{

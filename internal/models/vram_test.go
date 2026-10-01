@@ -635,27 +635,43 @@ func TestGraphPoolBandHoldsEveryMeasurement(t *testing.T) {
 	}
 }
 
-// What a rank of a split consumes beyond its weights -- non-torch memory and
-// the allocator's reserve -- had no term at all. It is a band across what the
-// engine has reported, charged from two ranks up.
-func TestRankOverheadBandHoldsEveryMeasurement(t *testing.T) {
-	// Consumed less weights, per rank: the 27B at TP=4 and TP=2, the MoE at
-	// TP=4 on two engine builds.
-	for _, perRank := range []float64{11.67 - 7.05, 19.89 - 13.40, 24.20 - 18.88, 24.57 - 19.07} {
-		if perRank < rankOverheadLowGB || perRank > rankOverheadHighGB {
-			t.Errorf("a start measured %.2f GiB per rank, outside the band %.2f-%.2f",
-				perRank, rankOverheadLowGB, rankOverheadHighGB)
+// What a rank of a split consumes beyond its projected weights is a band by
+// the width of the weights, across what the engine has reported, charged from
+// two ranks up.
+func TestRankOverheadBandsHoldEveryMeasurement(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		bytesPerParam float64
+		perRank       float64
+	}{
+		{"Mistral Small 3.2 BF16", 2, -0.06},
+		{"Qwen3.5-35B-A3B FP8", 1.0625, 1.40},
+		{"Mistral Small 3.2 FP8", 1.0625, 2.03},
+		{"Flash-Next MXFP4", 0.5625, 5.10},
+		{"ThinkingCap PARO, width unknown", 0, 6.64},
+		{"27B TP=4, older build", 0, 11.67 - 7.05},
+		{"27B TP=2, older build", 0, 19.89 - 13.40},
+		{"MoE TP=4, older build", 0.5625, 24.57 - 19.07},
+	} {
+		// An unstated width is charged the top on purpose, so only the
+		// ceiling is checked for it.
+		low, high := rankOverheadFor(c.bytesPerParam)
+		if c.bytesPerParam == 0 {
+			low = -1
+		}
+		if c.perRank > high || c.perRank < low-0.1 {
+			t.Errorf("%s measured %.2f GiB a rank, outside its band %.2f-%.2f", c.name, c.perRank, low, high)
 		}
 	}
 
-	est := VRAMEstimate{CheckpointGB: 20, DeviceWeightsGB: 20, DeviceWeightsHighGB: 20}
+	est := VRAMEstimate{CheckpointGB: 20, DeviceWeightsGB: 20, DeviceWeightsHighGB: 20, WeightBytesPerParam: 1}
 	if one := RequiredAt(est, VLLMConfig{}, 1); one.RankOverheadGB != 0 || one.RankOverheadHighGB != 0 {
 		t.Errorf("a single rank is charged %.2f-%.2f GB for being split", one.RankOverheadGB, one.RankOverheadHighGB)
 	}
+	low, high := rankOverheadFor(1)
 	four := RequiredAt(est, VLLMConfig{}, 4)
-	if four.RankOverheadGB != rankOverheadLowGB*4 || four.RankOverheadHighGB != rankOverheadHighGB*4 {
-		t.Errorf("four ranks are charged %.2f-%.2f GB, want %.2f-%.2f",
-			four.RankOverheadGB, four.RankOverheadHighGB, rankOverheadLowGB*4, rankOverheadHighGB*4)
+	if four.RankOverheadGB != low*4 || four.RankOverheadHighGB != high*4 {
+		t.Errorf("four ranks are charged %.2f-%.2f GB, want %.2f-%.2f", four.RankOverheadGB, four.RankOverheadHighGB, low*4, high*4)
 	}
 }
 

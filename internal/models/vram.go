@@ -77,6 +77,11 @@ type VRAMEstimate struct {
 	KVWidth int `json:"kv_width,omitempty"`
 	KVHeads int `json:"kv_heads,omitempty"`
 
+	// WeightBytesPerParam is the checkpoint's bytes per weight, zero when not
+	// known. It decides which overhead band a rank is charged; see
+	// rankOverheadFor.
+	WeightBytesPerParam float64 `json:"weight_bytes_per_param,omitempty"`
+
 	// Source says where these figures came from, and it is the most important
 	// field here. "measured" is what a real start reported; "projected" is
 	// arithmetic over the checkpoint's shape, which this project has now been
@@ -197,6 +202,7 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	tp := max(1, m.VLLMConfig.TensorParallelSize)
 	target := float64(kvCachePerToken(cfg, m.VLLMConfig) + mtpKVPerToken(cfg, m.VLLMConfig))
 	est.KVHeads, est.KVWidth = cfg.NumKeyValueHeads, tp
+	est.WeightBytesPerParam = m.Quantization.BytesPerParam
 	est.KVCachePerTokenB = int64(target*kvReplication(cfg.NumKeyValueHeads, tp)) + draftKVPerTokenAt(m.VLLMConfig, tp)
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 	est.DraftGB = draftWeightsGB(m.VLLMConfig)
@@ -372,8 +378,9 @@ func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
 
 	// A cost of splitting, as the replication surcharge is.
 	if tp >= 2 {
-		r.RankOverheadGB = rankOverheadLowGB * float64(tp)
-		r.RankOverheadHighGB = rankOverheadHighGB * float64(tp)
+		low, high := rankOverheadFor(est.WeightBytesPerParam)
+		r.RankOverheadGB = low * float64(tp)
+		r.RankOverheadHighGB = high * float64(tp)
 	}
 
 	fixed := r.KVGB + r.CacheGB + r.DraftGB
