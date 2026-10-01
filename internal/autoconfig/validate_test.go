@@ -609,3 +609,55 @@ func TestMistralConfigFormatUnsetsAContradictedQuantization(t *testing.T) {
 		t.Error("unset without a params.json to read it from")
 	}
 }
+
+// The helper read an EAGLE-3 drafter from Gemma 4's card, which ships it in
+// the model's own folder. It is paired from there, ticked, rather than
+// offered for download.
+func TestABundledDraftIsPaired(t *testing.T) {
+	quote := "Bundled EAGLE-3 speculative decoder by RedHat ([RedHatAI/gemma-4-31B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)) in `gemma-4-31B-it-speculator.eagle3/`"
+	card := "# Gemma 4\n\n> - " + quote + ".\n"
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"architectures":["Gemma4ForConditionalGeneration"]}`), 0o644)
+	sub := filepath.Join(dir, "gemma-4-31B-it-speculator.eagle3")
+	os.Mkdir(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "config.json"), []byte(`{"architectures":["Eagle3DraftModel"],"speculators_config":{"algorithm":"eagle3","proposal_methods":[{"speculative_tokens":3}]}}`), 0o644)
+
+	m := &models.Model{ID: "tcclaviger/gemma-4-31B-it-MXFP416-MTP", LocalPath: dir}
+	in := Inputs{Model: m, Card: Card{Raw: card, Text: card}, MachineEnv: machineEnv, Drafts: models.BundledDrafts(m), HasAdvice: true,
+		Advice: Advice{DraftMethod: str("eagle3"), DraftRepo: str("RedHatAI/gemma-4-31B-it-speculator.eagle3"), SpeculativeQuote: quote}}
+	c := Validate(in)
+	r := rowByKey(c.Rows, "field:speculative_config")
+	if r == nil || !r.Ticked || !strings.Contains(r.Value, sub) || !strings.Contains(r.Value, `"num_speculative_tokens": 3`) {
+		t.Fatalf("speculative row: %+v", r)
+	}
+	if c.WantDraft != "" {
+		t.Errorf("a download was offered for a drafter already here: %s %s", c.WantDraft, c.DraftRepo)
+	}
+}
+
+func TestContextInQuoteMatchesWholeNumbers(t *testing.T) {
+	for _, c := range []struct {
+		quote  string
+		tokens int
+		want   bool
+	}{
+		{"Context window of up to 256K tokens", 256, false},
+		{"Context window of up to 256K tokens", 262144, true},
+		{"The model has a default context length of 262,144 tokens.", 262144, true},
+		{"The model has a default context length of 262,144 tokens.", 262, false},
+		{"serve with --max-model-len 131072", 131072, true},
+		{"serve with --max-model-len 1310720", 131072, false},
+	} {
+		if got := contextInQuote(c.quote, c.tokens); got != c.want {
+			t.Errorf("contextInQuote(%q, %d) = %v", c.quote, c.tokens, got)
+		}
+	}
+
+	// The helper's 256 for "256K" is read as 262,144.
+	card := "# Gemma 4\n\n- Context window of up to 256K tokens\n"
+	in := Inputs{Model: &models.Model{ID: "org/m"}, Card: Card{Raw: card, Text: card}, HasAdvice: true,
+		Advice: Advice{RecommendedContext: intp(256), ContextQuote: "Context window of up to 256K tokens"}}
+	if !noteFor(Validate(in).Notes, "max_model_len", "262144 tokens") {
+		t.Errorf("notes: %+v", Validate(in).Notes)
+	}
+}

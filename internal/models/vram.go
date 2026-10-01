@@ -214,7 +214,13 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 	est.DraftGB = draftWeightsGB(m.VLLMConfig)
 
-	diskGB := float64(m.TotalSizeBytes) / (1024 * 1024 * 1024)
+	// A drafter bundled in the model's folder is on disk with it but is not
+	// its weights; when it is used, DraftGB counts it.
+	size := m.TotalSizeBytes
+	for _, d := range BundledDrafts(m) {
+		size -= d.TotalSizeBytes
+	}
+	diskGB := float64(size) / (1024 * 1024 * 1024)
 	params := estimateParamCount(cfg)
 	bpp := m.Quantization.BytesPerParam
 

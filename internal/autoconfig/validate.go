@@ -891,9 +891,14 @@ func (v *validator) otherAdvice() {
 		return
 	}
 	if a.RecommendedContext != nil {
-		if v.verified(a.ContextQuote) && contextInQuote(a.ContextQuote, *a.RecommendedContext) {
+		ctx := *a.RecommendedContext
+		// "256K" read as 256: the quote says how many thousands.
+		if ctx > 0 && ctx < 1024 && contextInQuote(a.ContextQuote, ctx*1024) {
+			ctx *= 1024
+		}
+		if v.verified(a.ContextQuote) && contextInQuote(a.ContextQuote, ctx) {
 			v.note("max_model_len", originCard, fmt.Sprintf("The card recommends a context of %d tokens. The context is chosen for this machine from the size you asked for. The card says: “%s”",
-				*a.RecommendedContext, clip(a.ContextQuote, maxQuote)))
+				ctx, clip(a.ContextQuote, maxQuote)))
 		}
 	}
 	n := 0
@@ -1069,12 +1074,40 @@ func contextInQuote(quote string, tokens int) bool {
 		forms = append(forms, strconv.Itoa(tokens/1000)+"k")
 	}
 	for _, f := range forms {
-		if strings.Contains(q, f) {
+		if containsWhole(q, f) {
 			return true
 		}
 	}
 	return false
 }
+
+// containsWhole reports form in q as a whole number: not the start of a
+// longer one, nor of "256K" when the form is "256". Found on Gemma 4's card:
+// the helper read a context of 256 from "up to 256K tokens", and the check
+// took the 256 in 256K as the number stated.
+func containsWhole(q, form string) bool {
+	for from := 0; ; {
+		i := strings.Index(q[from:], form)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(form)
+		from = end
+		if i > 0 && isDigit(q[i-1]) {
+			continue
+		}
+		if end < len(q) {
+			c := q[end]
+			if isDigit(c) || c >= 'a' && c <= 'z' || c == ',' && end+1 < len(q) && isDigit(q[end+1]) {
+				continue
+			}
+		}
+		return true
+	}
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func groupDigits(n int) string {
 	s := strconv.Itoa(n)
