@@ -586,8 +586,9 @@ func (v *validator) samplingFromProse(chosen *Command) {
 	}
 	if !v.verified(a.SamplingQuote) {
 		// Only worth saying when the reading could have been used: with the
-		// command's own override, or a generation_config.json, it could not.
-		if !commandOverrides(chosen) && !genDefaultsSet(v.in.Model) {
+		// command's own override, or a generation_config.json setting every
+		// value read, it could not.
+		if !commandOverrides(chosen) && !fileSetsAll(v.in.Model, values) {
 			v.unverified("sampling values", "", a.SamplingQuote)
 		}
 		return
@@ -645,6 +646,20 @@ func (v *validator) samplingFromProse(chosen *Command) {
 			Reason: "Sampling settings the card recommends. The model publishes no generation_config.json, so nothing else sets them."}
 		v.row(r)
 	}
+}
+
+// fileSetsAll reports a generation_config.json that sets every value read.
+func fileSetsAll(m *models.Model, values map[string]float64) bool {
+	if !genDefaultsSet(m) {
+		return false
+	}
+	file := genDefaultsMap(m.GenDefaults)
+	for k := range values {
+		if _, ok := file[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func genDefaultsSet(m *models.Model) bool {
