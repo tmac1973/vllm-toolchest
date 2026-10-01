@@ -668,7 +668,11 @@ func BuildArgs(cfg VLLMStartConfig) []string {
 	if cfg.TensorParallelSize > 1 {
 		args = append(args, "--tensor-parallel-size", strconv.Itoa(cfg.TensorParallelSize))
 	}
-	if cfg.GPUMemoryUtilization > 0 && cfg.GPUMemoryUtilization != 0.90 {
+	// Always passed, never left to the engine's default: the default is not
+	// 0.90 everywhere. vLLM 0.29 on compute defaults to 0.92, so every model
+	// configured at 0.90 ran at 0.92 while the UI, the planner and the
+	// measurements all took it for 0.90.
+	if cfg.GPUMemoryUtilization > 0 {
 		args = append(args, "--gpu-memory-utilization", fmt.Sprintf("%.2f", cfg.GPUMemoryUtilization))
 	}
 	if cfg.EnforceEager {
