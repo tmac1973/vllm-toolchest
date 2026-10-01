@@ -3,6 +3,44 @@
 **Depends on:** phase 15 (exact sizes), phase 16 (architecture registry) ·
 **Enables:** phase 18's feed and phase 19's config handoff.
 
+## As built, 2026-10-01
+
+Built to this plan with these changes, each from what the code or the live
+Hub showed:
+
+- **One planner.** Steps 12, 13 and 15's fit, width and context arithmetic
+  are `models.PlanFit` -- autoconfigure's planner, proven on hardware -- on
+  the model as registration would describe it (`models.Describe`), at
+  `ContextMax`. The width stated is the narrowest that holds the most
+  context, the context is what the all-cards plan holds, and offload on an
+  image that has it comes with it. A recommendation and a later
+  Autoconfigure therefore agree.
+- **Step 13's width rule was wrong** and is in the planner instead: it
+  rejected any TP not dividing the KV heads, which would have refused
+  Qwen3.5-35B-A3B (two KV heads) the four cards it serves on. vLLM needs the
+  query heads to divide by TP, and the KV heads to divide it or be divided by
+  it (`models.headsSplit`). Autoconfigure gains the check too.
+- **Queries** name every field (`expand[]` returns nothing else) including
+  `sha` and `pipeline_tag`, and run in both the `transformers` and `vllm`
+  libraries (#57): twenty per refresh, four at a time.
+- **Sizes**: the coarse filter's lower bound and the finalists' file trees,
+  per the step 7 and 12 amendments.
+- **Found on the first live build against compute's profile**, and fixed:
+  - With expert offload the plan dropped no size at all, and 700 GB models
+    took half the forty places only to be Dropped. The bound is the cards
+    plus usable RAM, and only for 4-bit formats, the ones the image offloads.
+  - All forty finalists were FP8: acceleration is a quarter of the coarse
+    score and FP8 repos are popular. Each bucket is sure of places
+    (accelerated 16, 4-bit 12, unquantized 12); the rest go by score.
+  - FP8 stored as compressed-tensors (`float-quantized`) counts as FP8.
+  - Embeddings, rerankers and speech models are left out by `pipeline_tag`;
+    so are repositories under 50 downloads not from a trusted publisher, and
+    weights under 0.25 GB -- CI test fixtures, popular and tiny.
+- `Candidate` also carries `full_context_requests` and `offload`.
+
+The live build against compute's profile: about two seconds with a warm
+cache, 35 verified, 1 unverified (a config it could not read), 4 dropped.
+
 ## Goal
 
 Build `internal/recommend`: the machine profile, the candidate pool, the

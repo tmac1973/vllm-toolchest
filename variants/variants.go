@@ -149,6 +149,12 @@ type Descriptor struct {
 	// same kernel then gets the same guidance for free.
 	Capabilities []string
 
+	// NoAccel are quantization formats (lowercase, as the Hub tags them) that
+	// this image cannot accelerate although its silicon could: the kernels
+	// are missing. The recommendation feed subtracts them from what it calls
+	// accelerated. No shipped variant sets VARIANT_NO_ACCEL yet.
+	NoAccel []string
+
 	// ImageEnv is the environment this variant's image needs in order to
 	// behave as its author intended: kernel routing, backend selection, and
 	// anything else that is not an operator choice.
@@ -397,6 +403,7 @@ func parse(id string, src string) (Descriptor, error) {
 		StampFile:      kv["VARIANT_STAMP_FILE"],
 		Caps:           strings.Fields(kv["VARIANT_CAPS"]),
 		Capabilities:   strings.Fields(kv["VARIANT_CAPABILITIES"]),
+		NoAccel:        strings.Fields(strings.ToLower(kv["VARIANT_NO_ACCEL"])),
 		ImageEnv:       strings.Fields(kv["VARIANT_IMAGE_ENV"]),
 	}
 

@@ -67,6 +67,8 @@ type Server struct {
 
 	// archs is the image's supported model architectures, read at boot.
 	archs archRegistry
+	// recommend is the recommendation feed's engine.
+	recommend recommendState
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -259,6 +261,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/gpu-map", s.handleGPUMap)
 		r.Get("/arch-registry", s.handleArchRegistry)
+		r.Get("/recommend", s.handleRecommend)
+		r.Post("/recommend/refresh", s.handleRecommendRefresh)
 
 		r.Route("/models", func(r chi.Router) {
 			r.Get("/", s.handleListModels)

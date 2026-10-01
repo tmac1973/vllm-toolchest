@@ -221,7 +221,15 @@ func PlanFit(in PlanInput) FitPlan {
 // plan without offload does. Never when the card or a configuration that has
 // run decided the dtype.
 func bestOffload(in PlanInput, d PlanDefaults, widths []int, target int, dtype string) (WidthPlan, bool, string) {
-	tp := widths[len(widths)-1]
+	tp := 0
+	for _, w := range widths {
+		if headsSplit(in.Model.HFConfig, w) {
+			tp = w
+		}
+	}
+	if tp == 0 {
+		return WidthPlan{}, false, ""
+	}
 	p, ok, why := planOffload(in, d, tp, target, dtype)
 	if in.CardKVDtype == "" && dtype == "auto" && (!ok || p.ContextTokens < target) {
 		if q, qok, _ := planOffload(in, d, tp, target, "fp8"); qok && (!ok || q.ContextTokens > p.ContextTokens) {
@@ -262,6 +270,9 @@ func widest(plans []WidthPlan) *WidthPlan {
 // set when the estimate itself could not be made.
 func planWidths(in PlanInput, d PlanDefaults, widths []int, target int, dtype string) (plans []WidthPlan, why string) {
 	for _, tp := range widths {
+		if !headsSplit(in.Model.HFConfig, tp) {
+			continue
+		}
 		p, ok, reason := planWidth(in, d, tp, target, dtype)
 		if reason != "" {
 			return nil, reason
@@ -271,6 +282,25 @@ func planWidths(in PlanInput, d PlanDefaults, widths []int, target int, dtype st
 		}
 	}
 	return plans, ""
+}
+
+// headsSplit reports a width vLLM can split the model's attention across: the
+// query heads divide by it, and the KV heads either divide by it, each card
+// taking its share, or divide it, each head copied onto several cards -- the
+// way Qwen3.5-35B-A3B's two KV heads serve on four. Unknown counts pass.
+func headsSplit(cfg HFConfig, tp int) bool {
+	if tp <= 1 {
+		return true
+	}
+	if cfg.NumAttentionHeads > 0 && cfg.NumAttentionHeads%tp != 0 {
+		return false
+	}
+	for _, kv := range []int{cfg.NumKeyValueHeads, cfg.GlobalKVHeads} {
+		if kv > 0 && kv%tp != 0 && tp%kv != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // planWidth plans one width. ok is false when the width does not hold the
