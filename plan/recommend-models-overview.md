@@ -118,7 +118,7 @@ in the case driving the design, four AMD R9700s (gfx1201, 32 GB each) on the
    therefore the name that was actually checked.
 5. Below the verified models, an **Unverified** section lists candidates that
    could not be fully checked, each saying which input was missing — *"size
-   unknown — the repository publishes no safetensors metadata"*. Models proven
+   unknown — the repository's file listing has no weight files"*. Models proven
    not to run are dropped and never shown.
 6. The user switches chips. The press is a local request to this server and
    nothing more: it reaches no external service and sorts nothing, because all

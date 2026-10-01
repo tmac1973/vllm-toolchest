@@ -121,7 +121,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
 				Architecture: "Qwen3MoeForCausalLM", QuantInfo: "FP8 8-bit",
-				VRAMLabel: "~29.8 GB", SizeLabel: "28.8 GB", TotalBytes: 30_900_000_000,
+				WeightsLabel: "28.1 GB", SizeLabel: "28.8 GB", TotalBytes: 30_900_000_000,
 				Files: []hfDetailFile{
 					{Filename: "model-00001-of-00007.safetensors", SizeLabel: "4.6 GB", Category: "weight"},
 					{Filename: "config.json", SizeLabel: "1.4 KB", Category: "config"},
@@ -138,7 +138,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
 				Architecture: "Qwen3MoeForCausalLM", QuantInfo: "FP8 8-bit",
-				VRAMLabel: "~29.8 GB", SizeLabel: "28.8 GB",
+				WeightsLabel: "28.1 GB", SizeLabel: "28.8 GB",
 				AlreadyHave:    true,
 				AvailableBytes: 400_000_000_000, AvailableLabel: "372.5 GB",
 				FreeLabel: "374.6 GB", MarginLabel: "2.0 GB", FitsOnDisk: true,
@@ -152,7 +152,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
 				Architecture: "Qwen3MoeForCausalLM", QuantInfo: "FP8 8-bit",
-				VRAMLabel: "~29.8 GB", SizeLabel: "28.8 GB",
+				WeightsLabel: "28.1 GB", SizeLabel: "28.8 GB",
 				Partial:        true,
 				PartialLabel:   "12.1 GB",
 				AvailableBytes: 400_000_000_000, AvailableLabel: "372.5 GB",
@@ -167,7 +167,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "meta-llama/Llama-4-70B", SafeID: "meta-llama--Llama-4-70B",
 				Architecture: "Llama4ForCausalLM", QuantInfo: "FP16/BF16 (unquantized)",
-				VRAMLabel: "~141.0 GB", SizeLabel: "140.0 GB",
+				WeightsLabel: "137.9 GB", SizeLabel: "140.0 GB",
 				AvailableBytes: 8_000_000_000, AvailableLabel: "7.5 GB",
 				FreeLabel: "9.5 GB", MarginLabel: "2.0 GB", FitsOnDisk: false,
 			},
@@ -181,7 +181,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "unsloth/Qwen3.8-27B-FP8", SafeID: "unsloth--Qwen3-8-27B-FP8",
 				Architecture: "Qwen3MoeForCausalLM", QuantInfo: "FP8 8-bit",
-				VRAMLabel: "~29.8 GB", SizeLabel: "28.8 GB",
+				SizeLabel:      "28.8 GB",
 				AvailableBytes: -1, FitsOnDisk: true,
 			},
 		},
@@ -193,7 +193,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: hfModelDetail{
 				ID: "meta-llama/Llama-4-70B", SafeID: "meta-llama--Llama-4-70B",
 				Architecture: "Llama4ForCausalLM", QuantInfo: "FP16/BF16 (unquantized)",
-				VRAMLabel: "~141.0 GB", SizeLabel: "140.0 GB",
+				WeightsLabel: "137.9 GB", SizeLabel: "140.0 GB",
 				GatedWarning:   true,
 				VRAMWarning:    "Estimated VRAM (141.0 GB) exceeds GPU memory (32 GB). Consider a quantized variant or TP=2.",
 				Disabled:       true,

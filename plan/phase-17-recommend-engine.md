@@ -345,16 +345,27 @@ no bytes-variant to keep in step.
    both the fp8 and the 4-bit buckets by design, since it is a container
    rather than a scheme.
 
-7. **Coarse filter**, cheap tier only. Drop a candidate when
-   `Safetensors.WeightBytes()` is known and, divided by 1024³ to reach GB,
-   exceeds `Inventory.Count × Inventory.PerCardGB` — every card on the host,
-   ignoring
+7. **Coarse filter**, cheap tier only. Drop a candidate when the *least*
+   its weights can weigh exceeds `Inventory.Count × Inventory.PerCardGB` —
+   every card on the host, ignoring
    tensor-parallel divisibility entirely, because divisibility needs
    `num_key_value_heads` and that is not in the cheap tier. This is
    deliberately the most permissive possible bound: it drops only what cannot
    run on this hardware under any split, which is exactly what "proven bad"
    should mean at this stage. Anything it lets through is judged properly at
    steps 12–14. Do not drop on unknown size, and do not drop on architecture.
+
+   *Amended 2026-10-01, when phase 15 was built.* The Hub's
+   `Safetensors.Parameters` are not storage counts for a packed format it
+   recognises: `Qwen3.5-35B-A3B-GPTQ-Int4` reports `I32: 32.2B`, which is
+   32.2B 4-bit parameters, about 16 GB, where 32-bit storage would say 129.
+   For one it does not recognise they are storage: tcclaviger's MXFP416
+   reports `U8: 10.4B` bytes. So the bound here is a lower one: float dtypes
+   (`F64` … `F8_*`) at their width, integer dtypes (`I*`, `U*`, which may be
+   containers for packed weights) at 4 bits. It is never above the true size,
+   and exact for GPTQ and AWQ. On an image declaring `expert_offload`, add
+   the host's RAM to the bound for a model whose config shows experts: the
+   coarse tier cannot see that, so do not drop on size there at all.
 
 8. **Set `Accelerated`** on every surviving candidate, before the coarse
    score reads it: true when `Profile.Accelerated` contains the candidate's
@@ -441,11 +452,19 @@ no bytes-variant to keep in step.
     once here so neither the objectives nor the template divide. Then call
     `models.ParseHFConfig(<the cache directory>)`, then
     `models.EstimateVRAM`, then `models.Fit` against `Profile.Inventory`.
-    Before calling `Fit`, set `VRAMEstimate.CheckpointGB` from
-    `Safetensors.WeightBytes()` divided by 1024³ — that field is in GB and
-    means "what the weights actually occupy", and the Hub figure is exactly
-    that, so supplying it stops the formula being consulted for a number
-    already known exactly.
+    Before calling `Fit`, set `VRAMEstimate.CheckpointGB` from `WeightBytes`
+    divided by 1024³.
+
+    *Amended 2026-10-01.* `WeightBytes` is the finalist's weight files, from
+    its file tree, exactly as `huggingface.ModelDetail.WeightsBytes` is for
+    the detail view (phase 15): the one source exact for every format (see
+    step 7 for why the Hub's counts are not). Fetch the tree once per
+    finalist beside its `config.json`, at its `sha`, and cache it under the
+    same `modelID@lastModified` key; `WeightsKnown` is false when the tree
+    lists no weight file, and the Unverified reason becomes `size unknown —
+    the repository's file listing has no weight files`. `ParamsB` stays the
+    Hub's `Total`, with the caveat that for a format the Hub does not
+    recognise it counts stored elements, not parameters.
 
 13. **Tensor-parallel validity.** `Fit` enumerates the widths the host can
     supply; discard any returned `TPOption` whose `TP` does not divide

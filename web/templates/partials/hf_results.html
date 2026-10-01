@@ -33,7 +33,7 @@
 <div class="grid" style="margin-bottom:0.5rem;">
   <div><small>Architecture</small><br><strong>{{.Architecture}}</strong></div>
   <div><small>Quantization</small><br><strong>{{.QuantInfo}}</strong></div>
-  <div><small>Est. VRAM</small><br><strong>{{.VRAMLabel}}</strong></div>
+  <div><small>Weights</small><br>{{if .WeightsLabel}}<strong>{{.WeightsLabel}}</strong>{{else}}<small style="opacity:0.6;" title="The repository's file listing has no weight files, so its size is not known.">size unknown</small>{{end}}</div>
   <div><small>Download Size</small><br><strong>{{.SizeLabel}}</strong></div>
 </div>
 <details style="margin-bottom:0.5rem;">

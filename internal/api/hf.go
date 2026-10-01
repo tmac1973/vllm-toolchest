@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 func (s *Server) handleHFSearch(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +159,9 @@ type hfModelDetail struct {
 	SafeID       string
 	Architecture string
 	QuantInfo    string
-	VRAMLabel    string
+	// WeightsLabel is what the weights occupy, exactly, from the Hub's
+	// safetensors counts; "" when the repository publishes none.
+	WeightsLabel string
 	SizeLabel    string
 	TotalBytes   int64
 	Files        []hfDetailFile
@@ -211,16 +214,24 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 	// Compared against the smallest card rather than the first: a group is
 	// bounded by its weakest member, and index 0 is an arbitrary choice that
 	// happens to be the right answer only on a uniform host.
+	//
+	// The weights alone are the floor: the KV cache and the runtime come on
+	// top, so weights beyond the cards is a model that cannot be served
+	// whole, and beyond one card one that needs several.
 	var vramWarning string
-	if inv := s.gpuInventory(); detail.VRAMEstGB > 0 && inv.Known {
-		if detail.VRAMEstGB > inv.PerCardGB*float64(inv.Count) {
+	weightsGB := float64(detail.WeightsBytes) / (1 << 30)
+	if inv := s.gpuInventory(); detail.WeightsKnown && inv.Known {
+		if weightsGB > inv.PerCardGB*float64(inv.Count) {
 			vramWarning = fmt.Sprintf(
-				"Estimated VRAM (%.1f GB) exceeds this host's %d × %.0f GB. Consider a quantized variant.",
-				detail.VRAMEstGB, inv.Count, inv.PerCardGB)
-		} else if detail.VRAMEstGB > inv.PerCardGB {
+				"Its weights (%.1f GB) are more than this host's %d × %.0f GB of GPU memory. Consider a quantized variant.",
+				weightsGB, inv.Count, inv.PerCardGB)
+			if d, ok := variants.Get(s.vllmEnv.Variant); ok && d.Has("expert_offload") {
+				vramWarning += " On this image a mixture-of-experts model may still run with its experts in system RAM; Autoconfigure plans that."
+			}
+		} else if weightsGB > inv.PerCardGB {
 			vramWarning = fmt.Sprintf(
-				"Estimated VRAM (%.1f GB) exceeds one card (%.0f GB); it will need tensor parallelism.",
-				detail.VRAMEstGB, inv.PerCardGB)
+				"Its weights (%.1f GB) are more than one card (%.0f GB); it will need tensor parallelism.",
+				weightsGB, inv.PerCardGB)
 		}
 	}
 
@@ -239,7 +250,7 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 		SafeID:       safeID(detail.ID),
 		Architecture: orDash(detail.Architecture),
 		QuantInfo:    quantInfo,
-		VRAMLabel:    formatVRAM(detail.VRAMEstGB),
+		WeightsLabel: weightsLabel(detail),
 		SizeLabel:    huggingface.FormatBytes(detail.TotalSize),
 		TotalBytes:   detail.TotalSize,
 		GatedWarning: gated,
@@ -555,11 +566,12 @@ func formatCount(n int) string {
 	}
 }
 
-func formatVRAM(gb float64) string {
-	if gb <= 0 {
-		return "Unknown"
+// weightsLabel is the exact weight size, or "" when it is not known.
+func weightsLabel(d *huggingface.ModelDetail) string {
+	if !d.WeightsKnown {
+		return ""
 	}
-	return fmt.Sprintf("~%.1f GB", gb)
+	return huggingface.FormatBytes(d.WeightsBytes)
 }
 
 func orDash(s string) string {

@@ -56,6 +56,9 @@ type ModelSearchResult struct {
 	// &config=true. It carries quantization_config, which is what vLLM reads
 	// and therefore the only trustworthy answer to "what format is this?".
 	Config *ModelConfigMeta `json:"config,omitempty"`
+	// Safetensors is the exact size, by dtype; nil when the repository
+	// publishes no safetensors metadata.
+	Safetensors *Safetensors `json:"safetensors,omitempty"`
 }
 
 // ModelConfigMeta is the part of a repo's config.json the search needs.
@@ -190,14 +193,22 @@ func (c *Client) search(ctx context.Context, query, tag string) ([]ModelSearchRe
 	return results, nil
 }
 
+// searchExpand asks for each field a search result uses. With any expand[]
+// the Hub returns only the fields expanded -- config=true is then ignored,
+// and tags and downloads go with it -- so asking for safetensors means asking
+// for everything else by name too. config is what DetectQuantFormat reads.
+const searchExpand = "&expand[]=author&expand[]=downloads&expand[]=likes&expand[]=tags&expand[]=gated" +
+	"&expand[]=private&expand[]=lastModified&expand[]=createdAt&expand[]=library_name&expand[]=pipeline_tag" +
+	"&expand[]=config&expand[]=safetensors"
+
 // searchLibrary runs one Hub query for repos of one library.
 func (c *Client) searchLibrary(ctx context.Context, query, library, tag string) ([]ModelSearchResult, error) {
 	// config=true returns each repo's config.json inline. Without it the only
 	// clues to a model's format are its tags and its name, and the name is
 	// wrong often enough to matter: "…-AWQ-W4A16" repos are usually
 	// compressed-tensors, and were being labelled AWQ.
-	u := fmt.Sprintf("%s/models?search=%s&filter=%s&sort=downloads&direction=-1&limit=50&config=true",
-		c.apiURL(), url.QueryEscape(query), url.QueryEscape(library))
+	u := fmt.Sprintf("%s/models?search=%s&filter=%s&sort=downloads&direction=-1&limit=50%s",
+		c.apiURL(), url.QueryEscape(query), url.QueryEscape(library), searchExpand)
 	if tag != "" {
 		u += "&filter=" + url.QueryEscape(tag)
 	}
@@ -248,19 +259,23 @@ type ModelDetail struct {
 	// Revision is the commit the file list was read at. Downloading from it
 	// rather than from main is what keeps a repo that changes mid-transfer
 	// from handing over half of one snapshot and half of the next.
-	Revision       string            `json:"revision,omitempty"`
-	Author         string            `json:"author"`
-	Tags           []string          `json:"tags"`
-	Gated          GatedField        `json:"gated"`
-	Files          []ModelFile       `json:"files"`
-	TotalSize      int64             `json:"total_size"`
-	Architecture   string            `json:"architecture,omitempty"`
-	QuantFormat    string            `json:"quant_format,omitempty"`
-	QuantConfig    *QuantizationInfo `json:"quant_config,omitempty"`
-	ParameterCount int64             `json:"parameter_count,omitempty"`
-	VRAMEstGB      float64           `json:"vram_est_gb,omitempty"`
-	MaxContext     int               `json:"max_context,omitempty"`
-	IsGGUFRepo     bool              `json:"is_gguf_repo"`
+	Revision     string            `json:"revision,omitempty"`
+	Author       string            `json:"author"`
+	Tags         []string          `json:"tags"`
+	Gated        GatedField        `json:"gated"`
+	Files        []ModelFile       `json:"files"`
+	TotalSize    int64             `json:"total_size"`
+	Architecture string            `json:"architecture,omitempty"`
+	QuantFormat  string            `json:"quant_format,omitempty"`
+	QuantConfig  *QuantizationInfo `json:"quant_config,omitempty"`
+	// WeightsBytes is what the weights occupy, exactly: the weight files a
+	// download takes, by their sizes in the file tree. WeightsKnown is false
+	// when the tree lists no weight file.
+	WeightsBytes int64        `json:"weights_bytes,omitempty"`
+	WeightsKnown bool         `json:"weights_known"`
+	Safetensors  *Safetensors `json:"safetensors,omitempty"`
+	MaxContext   int          `json:"max_context,omitempty"`
+	IsGGUFRepo   bool         `json:"is_gguf_repo"`
 }
 
 type ModelFile struct {
@@ -300,13 +315,16 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 
 	// Fetch model metadata
 	var meta struct {
-		ID     string     `json:"id"`
-		Author string     `json:"author"`
-		Tags   []string   `json:"tags"`
-		Gated  GatedField `json:"gated"`
-		SHA    string     `json:"sha"`
+		ID          string       `json:"id"`
+		Author      string       `json:"author"`
+		Tags        []string     `json:"tags"`
+		Gated       GatedField   `json:"gated"`
+		SHA         string       `json:"sha"`
+		Safetensors *Safetensors `json:"safetensors"`
 	}
-	metaURL := fmt.Sprintf("%s/models/%s", c.apiURL(), modelID)
+	// Each field by name: with any expand[] the Hub returns only those.
+	metaURL := fmt.Sprintf("%s/models/%s?expand[]=author&expand[]=tags&expand[]=gated&expand[]=sha&expand[]=safetensors",
+		c.apiURL(), modelID)
 	if err := c.getJSON(ctx, metaURL, &meta); err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
 	}
@@ -314,6 +332,7 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 	detail.Tags = meta.Tags
 	detail.Gated = meta.Gated
 	detail.Revision = meta.SHA
+	detail.Safetensors = meta.Safetensors
 
 	// Fetch file tree
 	files, err := c.listFiles(ctx, modelID, meta.SHA)
@@ -334,14 +353,15 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 
 	detail.IsGGUFRepo = hasGGUF && !hasSafetensors
 
-	// Compute total size of downloadable files
-	for _, f := range detail.Files {
-		// For mixed repos, skip .bin weights if safetensors exist
-		if hasSafetensors && f.Category == "weight" &&
-			strings.HasSuffix(strings.ToLower(f.Filename), ".bin") {
-			continue
-		}
+	// What a download takes, and of it the weights. Through the same filter a
+	// download uses: summing the tree counted both copies of a repo that holds
+	// its weights twice, as Mistral's do -- 96 GB for a 48 GB download.
+	for _, f := range DownloadableFiles(detail.Files) {
 		detail.TotalSize += f.Size
+		if f.Category == "weight" {
+			detail.WeightsBytes += f.Size
+			detail.WeightsKnown = true
+		}
 	}
 
 	// Fetch config.json for architecture info
@@ -358,21 +378,12 @@ func (c *Client) GetModel(ctx context.Context, modelID string) (*ModelDetail, er
 				GroupSize: cfg.QuantizationConfig.GroupSize,
 			}
 		}
-		detail.ParameterCount = estimateParamCount(cfg)
 		// Same mapping as the search row, so a model does not change format
 		// between the list and the panel that opens under it.
 		detail.QuantFormat = DetectQuantFormat(modelID, detail.Tags,
 			&ModelConfigMeta{QuantizationConfig: cfg.QuantizationConfig})
 	} else {
 		detail.QuantFormat = DetectQuantFormat(modelID, detail.Tags, nil)
-	}
-
-	// VRAM estimation
-	if detail.ParameterCount > 0 {
-		bits := quantBits(detail.QuantFormat)
-		detail.VRAMEstGB = estimateVRAM(detail.ParameterCount, bits, 4096)
-	} else if detail.TotalSize > 0 {
-		detail.VRAMEstGB = float64(detail.TotalSize) * 1.1 / (1024 * 1024 * 1024)
 	}
 
 	return detail, nil
@@ -776,59 +787,6 @@ func categorizeFile(filename string) (category string, required bool) {
 	}
 
 	return "other", false
-}
-
-// estimateParamCount estimates parameter count from model config.
-func estimateParamCount(cfg *modelConfig) int64 {
-	if cfg.HiddenSize == 0 || cfg.NumHiddenLayers == 0 {
-		return 0
-	}
-	h := int64(cfg.HiddenSize)
-	l := int64(cfg.NumHiddenLayers)
-	v := int64(cfg.VocabSize)
-	inter := int64(cfg.IntermediateSize)
-	if inter == 0 {
-		inter = 4 * h // default MLP ratio
-	}
-
-	// Rough formula: embedding + (attn + mlp) * layers + lm_head
-	embedding := v * h
-	attnPerLayer := 4 * h * h    // Q, K, V, O projections
-	mlpPerLayer := 3 * h * inter // gate, up, down
-	lmHead := v * h
-
-	return embedding + (attnPerLayer+mlpPerLayer)*l + lmHead
-}
-
-// quantBits returns approximate bits-per-parameter for a quant format.
-func quantBits(format string) int {
-	switch strings.ToUpper(format) {
-	case "AWQ", "GPTQ":
-		return 4
-	case "FP8":
-		return 8
-	case "BNB-4BIT":
-		return 4
-	case "BNB-8BIT":
-		return 8
-	case "GGUF":
-		return 5 // average estimate
-	default:
-		return 16 // FP16/BF16
-	}
-}
-
-// estimateVRAM estimates VRAM in GB from parameter count and quant bits.
-func estimateVRAM(paramCount int64, bits int, contextLen int) float64 {
-	if paramCount == 0 || bits == 0 {
-		return 0
-	}
-	weightBytes := float64(paramCount) * float64(bits) / 8.0
-	overhead := 1.2
-	if contextLen > 8192 {
-		overhead = 1.3
-	}
-	return weightBytes * overhead / (1024 * 1024 * 1024)
 }
 
 // FormatBytes formats a byte count as a human-readable string.
