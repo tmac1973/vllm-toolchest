@@ -4,6 +4,24 @@
 built in parallel with phase 15; numbered second because phase 15 ships
 user-visible value and this does not.
 
+## As built, 2026-10-01
+
+- **The cache key is a hash of vLLM's model registry file**
+  (`vllm/model_executor/models/registry.py`, `Env.RegistryFingerprint`), not
+  the variant's stamp version. rdna4-clav has no stamp file, so its version
+  is empty and a list cached under it would never be refreshed when
+  `:latest` moves; and the vLLM version does not move with every clav
+  release (28.02.2 and 28.04.9 both carried 0.27.0.dev0, and the second
+  added `qwen4_exp`). The registry file changes exactly when the answer can.
+  An unreadable registry is never a cache hit.
+- **The probe marks its lines** (`ARCH <name>`), since importing vLLM can log
+  to stdout; on compute's image it did not, and all 386 lines were names.
+- The probe's process handling is shared with the device-name probe
+  (`Env.runProbe`) rather than copied.
+- Checked on compute's image over SSH before building: 386 architectures in
+  about 19 seconds, `Qwen4ExpForConditionalGeneration`, `Gemma4ForCausalLM`
+  and `Mistral3ForConditionalGeneration` among them.
+
 ## Goal
 
 Learn which model architectures the running image's vLLM can actually load,

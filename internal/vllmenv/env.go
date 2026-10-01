@@ -10,9 +10,12 @@ package vllmenv
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -254,10 +257,88 @@ except Exception:
 // Returns the name with spaces replaced by underscores, matching the form vLLM
 // uses in config filenames.
 func (e Env) ProbeDeviceName(timeout time.Duration) (string, error) {
+	out, err := e.runProbe(timeout, deviceNameProbe)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", errEmptyDeviceName
+	}
+	return strings.ReplaceAll(name, " ", "_"), nil
+}
+
+// supportedArchsProbe lists the model architectures the installed vLLM can
+// load. An import and a registry read: no GPU, no engine. Each name is
+// marked, because importing vLLM can log to stdout too.
+const supportedArchsProbe = `
+from vllm.model_executor.models import ModelRegistry
+for a in sorted(ModelRegistry.get_supported_archs()):
+    print("ARCH " + a)
+`
+
+// ProbeSupportedArchs asks the installed vLLM which model architectures it
+// can load. It is version-specific and lives only inside the image: the 28.04.9
+// rdna4-clav image was needed for qwen4_exp, and a model whose architecture
+// the image lacks fails only at start, after its download. On compute's image
+// it lists 386 in about twenty seconds.
+//
+// An empty list is an error, not a vLLM that supports nothing: treating it as
+// data would mark every model unverified.
+func (e Env) ProbeSupportedArchs(timeout time.Duration) ([]string, error) {
+	out, err := e.runProbe(timeout, supportedArchsProbe)
+	if err != nil {
+		return nil, err
+	}
+	return parseArchs(string(out))
+}
+
+// RegistryFingerprint identifies the model registry the image's vLLM reads
+// its supported architectures from: a hash of
+// vllm/model_executor/models/registry.py, "" when it cannot be read.
+//
+// It keys the cached list rather than the variant's stamp version, which
+// rdna4-clav does not have, or the vLLM version, which the clav releases do
+// not always move: 28.02.2 and 28.04.9 both carried 0.27.0.dev0, and the
+// second added qwen4_exp. The registry file changes exactly when the answer
+// can.
+func (e Env) RegistryFingerprint() string {
+	if e.SitePackages == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(e.SitePackages, "vllm/model_executor/models/registry.py"))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
+}
+
+// parseArchs reads the probe's marked lines, sorted and without duplicates.
+func parseArchs(out string) ([]string, error) {
+	seen := map[string]bool{}
+	var archs []string
+	for _, line := range strings.Split(out, "\n") {
+		name, ok := strings.CutPrefix(strings.TrimSpace(line), "ARCH ")
+		if name = strings.TrimSpace(name); ok && name != "" && !seen[name] {
+			seen[name] = true
+			archs = append(archs, name)
+		}
+	}
+	if len(archs) == 0 {
+		return nil, errNoArchs
+	}
+	sort.Strings(archs)
+	return archs, nil
+}
+
+// runProbe runs a Python snippet in the image's interpreter and returns its
+// stdout.
+func (e Env) runProbe(timeout time.Duration, script string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, e.Python, "-c", deviceNameProbe)
+	cmd := exec.CommandContext(ctx, e.Python, "-c", script)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Importing vLLM spawns children of its own. Two problems follow from
@@ -275,22 +356,17 @@ func (e Env) ProbeDeviceName(timeout time.Duration) (string, error) {
 	}
 	cmd.WaitDelay = 5 * time.Second
 
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	name := strings.TrimSpace(string(out))
-	if name == "" {
-		return "", errEmptyDeviceName
-	}
-	return strings.ReplaceAll(name, " ", "_"), nil
+	return cmd.Output()
 }
 
 type probeError string
 
 func (e probeError) Error() string { return string(e) }
 
-const errEmptyDeviceName = probeError("vllm reported an empty device name")
+const (
+	errEmptyDeviceName = probeError("vllm reported an empty device name")
+	errNoArchs         = probeError("vllm listed no supported model architectures")
+)
 
 func sitePackagesWithVLLM(root string) (string, bool) {
 	matches, _ := filepath.Glob(filepath.Join(root, "lib/python3.*/site-packages"))
