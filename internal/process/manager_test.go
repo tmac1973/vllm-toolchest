@@ -144,3 +144,15 @@ func TestBuildArgsPassesMaxNumSeqsAtEveryValue(t *testing.T) {
 		t.Errorf("an unset max_num_seqs was passed: %q", args)
 	}
 }
+
+// The utilization is always passed: the engine's own default is not 0.90 on
+// every image, and vLLM 0.29 on compute ran models configured at 0.90 at 0.92.
+func TestBuildArgsAlwaysPassesTheUtilization(t *testing.T) {
+	args := strings.Join(BuildArgs(VLLMStartConfig{GPUMemoryUtilization: 0.90}), " ")
+	if !strings.Contains(args, "--gpu-memory-utilization 0.90") {
+		t.Errorf("args = %s", args)
+	}
+	if args := strings.Join(BuildArgs(VLLMStartConfig{}), " "); strings.Contains(args, "--gpu-memory-utilization") {
+		t.Errorf("an unset utilization was passed: %s", args)
+	}
+}
