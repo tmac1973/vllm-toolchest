@@ -17,6 +17,9 @@ import (
 // function, so a run is tested with fakes.
 type Deps struct {
 	Model *models.Model
+	// Image is the image this machine serves with, for checking a card that
+	// names the one it needs.
+	Image Image
 	// Base is the live config when the run began.
 	Base models.VLLMConfig
 	// Previous returns an earlier reading of the card with this hash, when
@@ -53,10 +56,12 @@ type Deps struct {
 // needs.
 type Result struct {
 	ModelID string
-	Class   models.ContextClass
-	Base    models.VLLMConfig
-	Plan    models.FitPlan
-	Rows    []Row
+	// ImageWarning says the card needs an image this machine is not running.
+	ImageWarning string
+	Class        models.ContextClass
+	Base         models.VLLMConfig
+	Plan         models.FitPlan
+	Rows         []Row
 	// Notes are validation's and the run's own. The plan's notes stay on
 	// Plan, so a re-plan at save replaces them rather than leaving stale
 	// ones behind.
@@ -134,9 +139,11 @@ func Run(ctx context.Context, d Deps, class models.ContextClass) (*Result, error
 		Model: d.Model, Base: d.Base, Card: card, Commands: commands, Inline: inline,
 		Advice: adv, HasAdvice: hasAdvice,
 		Flags: d.Flags, Backends: d.Backends, MachineEnv: d.MachineEnv, Drafts: d.Drafts,
+		Image: d.Image,
 	}
 	checked := Validate(in)
 	res.Rows, res.CardKVDtype = checked.Rows, checked.CardKVDtype
+	res.ImageWarning = checked.ImageWarning
 	res.WantDraft, res.DraftRepo = checked.WantDraft, checked.DraftRepo
 	res.Notes = append(res.Notes, checked.Notes...)
 	if res.AdviceFrom == "helper" {

@@ -14,6 +14,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/llmcall"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
 // autoconfigTimeout bounds one run: the card, a helper start that may have to
@@ -166,6 +167,9 @@ func (s *Server) autoconfigDeps(m *models.Model, run *autoconfigRun, class model
 		}
 	}
 	d.Drafts = append(d.Drafts, models.BundledDrafts(m)...)
+	if desc, ok := variants.Get(s.vllmEnv.Variant); ok {
+		d.Image = autoconfig.Image{ID: desc.ID, Label: desc.Label, BaseImage: desc.BaseImage}
+	}
 
 	switch helper := s.helperModel(); {
 	case helper == nil:
