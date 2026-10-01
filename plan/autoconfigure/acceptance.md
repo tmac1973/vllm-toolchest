@@ -5,6 +5,39 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Seventh run on compute: Gemma 4, 2026-10-01
+
+`tcclaviger/gemma-4-31B-it-MXFP416-MTP`: a hybrid of sliding-window and
+global attention, a custom MXFP4 format only the rdna4-clav image loads, and
+an EAGLE-3 drafter bundled in its own folder. The first review planned 91,136
+tokens with an fp8 cache and offered to download the drafter it already had.
+
+- **#66.** Sixty layers were costed as full attention: 983,040 bytes a token.
+  Fifty are sliding (1,024-token window), ten global at their own shape; the
+  estimate became 85,120 at 262,144.
+- **#67.** The bundled drafter is found and paired from the model's folder;
+  "256K" is read as 262,144, not 256. **#68** checks the card's required
+  image against the running one; **#69** names the drafter on the card.
+- **#72, #73.** The drafter cannot start on today's image: its TP-padding
+  code (`vllm/config/tp_padding.py`, 2026-09-27) reads the target's
+  `num_key_value_heads`, which transformers 5.17 refuses for Gemma 4's
+  per-layer config with a RuntimeError that `getattr`'s default does not
+  catch. Read over SSH in the image; reported upstream. The failed-start
+  notice now offers to drop a speculative config the engine cannot build,
+  and unticking a setting already applied now removes it.
+
+Without the drafter, Save and apply, then Start:
+
+- **Started on the first attempt**, 4 cards at 262,144 with the default
+  cache; about 11 minutes, most of it engine init.
+- KV cache 747,098 tokens: 2.85 full-length requests, against 2 planned.
+  25,195 bytes a token per card against 21,280 estimated -- the global
+  layers' 20,480 exactly, the sliding layers' share under by about 4,700.
+  Window plus one scheduled chunk (2,496) would give 23,229; the rest is not
+  explained by one start, and the margin covered it.
+- Consumed 11.14 GiB a rank: weights 9.21 plus 1.93, in the wide band.
+- A tool call came back correct; decode about 24.5 tokens a second.
+
 ## Sixth run on compute: a third-party quant, 2026-10-01
 
 `stelterlab/Mistral-Small-3.2-24B-Instruct-2506-FP8`: someone else's quant,
