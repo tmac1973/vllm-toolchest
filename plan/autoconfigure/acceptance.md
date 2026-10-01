@@ -5,6 +5,31 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Sixth run on compute: a third-party quant, 2026-10-01
+
+`stelterlab/Mistral-Small-3.2-24B-Instruct-2506-FP8`: someone else's quant,
+whose card is the original's with its own command added above it, and whose
+repo is Mistral's layout only. Looked at ahead of the download, which found
+#63: its `config.json` declares fp8, which a new model's config takes, and
+its `params.json` compressed-tensors, which `--config-format mistral` has
+the engine read. The review now proposes unsetting the quantization.
+
+The review chose the repo's own command over the original's pasted below it;
+ticked Mistral's three flags, tool calling, the unset quantization, and
+`{"temperature": 0.15}` -- read from the helper's quote, there being no
+`generation_config.json` -- and rejected, with a note, the helper's
+`mistral` reasoning parser again. Save and apply, then Start:
+
+- **Started on the first attempt**, about 2.5 minutes. The engine selected
+  its compressed-tensors FP8 kernel.
+- KV cache 525,040 tokens: 4.01 full-length requests at 131,072, against 2
+  projected. Consumed less weights, 2.11 GiB a rank.
+- A tool-calling request made a correct `get_weather` call.
+
+Three models of two families, a first-party quant, a first-party BF16 and a
+third-party quant, have now gone from download to serving on their first
+start with the review's defaults.
+
 ## Fifth run on compute: another family, 2026-10-01
 
 `mistralai/Mistral-Small-3.2-24B-Instruct-2506`, chosen for a card unlike
