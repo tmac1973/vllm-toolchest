@@ -47,6 +47,10 @@ type PlanInput struct {
 	// Estimate returns what the model needs under a candidate config:
 	// measured when a measurement applies to it, projected otherwise.
 	Estimate func(c VLLMConfig) VRAMEstimate
+	// ExpertOffload says the running image can hold a MoE's experts in
+	// system RAM, and HostRAMGB is that RAM. See planOffload.
+	ExpertOffload bool
+	HostRAMGB     float64
 }
 
 // WidthPlan is one tensor-parallel width, fully configured.
@@ -61,6 +65,9 @@ type WidthPlan struct {
 
 	RequiredGB, RequiredHighGB, AvailableGB float64
 	Measured                                bool
+	// Offload is a plan with the experts in system RAM: its config turns
+	// expert offload on, and it holds one full-length request at a time.
+	Offload bool
 
 	// Notes say why each field has this width's value.
 	Notes []ProfileNote
@@ -75,6 +82,10 @@ type FitPlan struct {
 
 	All    WidthPlan
 	Narrow *WidthPlan
+	// Offload is the experts-in-RAM alternative, offered when All cuts the
+	// context and offload holds more of it. When nothing fits without
+	// offload, All is the offload plan and this is nil.
+	Offload *WidthPlan
 
 	// FirstGuess is true when no measurement stands behind the figures.
 	FirstGuess bool
@@ -167,14 +178,27 @@ func PlanFit(in PlanInput) FitPlan {
 	}
 
 	all := widest(plans)
+	offload, canOffload, offloadWhy := bestOffload(in, defaults, widths, target, dtype)
 	if all == nil {
+		if canOffload {
+			return FitPlan{Known: true, All: offload, FirstGuess: true, Notes: append(general, ProfileNote{
+				Reason: "It does not fit on the cards at any width, so its experts are held in system RAM. This model has not run here yet, so these figures are an estimate.",
+				Origin: "this machine",
+			})}
+		}
 		if why == "" {
 			why = "does not fit on this machine at any width"
+			if offloadWhy != "" {
+				why += ", and not with expert offload either: " + offloadWhy
+			}
 		}
 		return FitPlan{Why: why}
 	}
 
 	fp := FitPlan{Known: true, All: *all, FirstGuess: !all.Measured, Notes: general}
+	if canOffload && all.ContextTokens < target && offload.ContextTokens > all.ContextTokens {
+		fp.Offload = &offload
+	}
 	if !fixed {
 		for i := range plans {
 			p := plans[i]
@@ -190,6 +214,21 @@ func PlanFit(in PlanInput) FitPlan {
 		})
 	}
 	return fp
+}
+
+// bestOffload is the offload plan at the widest width, trying the engine's
+// default KV dtype and then fp8 when the default cuts the context, as the
+// plan without offload does. Never when the card or a configuration that has
+// run decided the dtype.
+func bestOffload(in PlanInput, d PlanDefaults, widths []int, target int, dtype string) (WidthPlan, bool, string) {
+	tp := widths[len(widths)-1]
+	p, ok, why := planOffload(in, d, tp, target, dtype)
+	if in.CardKVDtype == "" && dtype == "auto" && (!ok || p.ContextTokens < target) {
+		if q, qok, _ := planOffload(in, d, tp, target, "fp8"); qok && (!ok || q.ContextTokens > p.ContextTokens) {
+			return q, true, ""
+		}
+	}
+	return p, ok, why
 }
 
 // planTarget is the context a class asks for, for this model.

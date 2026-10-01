@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // Deps is what a run needs from the server around it. Everything that
@@ -214,17 +215,21 @@ func (r *Result) Config(width string, ticked map[string]bool) (models.VLLMConfig
 	if !maps.Equal(ticked, DefaultTicks(r.Rows)) && r.plan != nil {
 		plan = r.plan(cfg, r.CardKVDtype)
 	}
-	if plan.Known {
-		w := plan.All
-		if width == "narrow" && plan.Narrow != nil {
-			w = *plan.Narrow
-		}
+	if w := ChosenWidth(plan, width); w != nil {
 		cfg.TensorParallelSize = w.Config.TensorParallelSize
 		cfg.MaxModelLen = w.Config.MaxModelLen
 		cfg.GPUMemoryUtilization = w.Config.GPUMemoryUtilization
 		cfg.MaxNumSeqs = w.Config.MaxNumSeqs
 		cfg.KVCacheDtype = w.Config.KVCacheDtype
 		cfg.KVCacheMemory = 0
+		if w.Offload {
+			// The plan's own config has the flag on and any MTP config out;
+			// see models.planOffload for why MTP cannot stay.
+			cfg.ExtraFlags = process.SetFlag(cfg.ExtraFlags, []string{models.ExpertOffloadFlag})
+			if w.Config.SpeculativeConfig == "" {
+				cfg.SpeculativeConfig = ""
+			}
+		}
 	}
 	return cfg, plan, nil
 }
@@ -235,8 +240,11 @@ func ChosenWidth(plan models.FitPlan, width string) *models.WidthPlan {
 	if !plan.Known {
 		return nil
 	}
-	if width == "narrow" && plan.Narrow != nil {
+	switch {
+	case width == "narrow" && plan.Narrow != nil:
 		return plan.Narrow
+	case width == "offload" && plan.Offload != nil:
+		return plan.Offload
 	}
 	return &plan.All
 }
@@ -251,7 +259,7 @@ func (r *Result) Profile(width string, ticked map[string]bool, meta models.Profi
 	if err != nil {
 		return models.ConfigProfile{}, plan, err
 	}
-	if width != "narrow" || plan.Narrow == nil {
+	if ChosenWidth(plan, width) == &plan.All {
 		width = "all"
 	}
 
