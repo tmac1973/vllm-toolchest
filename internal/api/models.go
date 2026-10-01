@@ -58,6 +58,34 @@ type modelRow struct {
 	// UsedBy names the models whose speculative config points at this draft.
 	// Removing the draft breaks each of them at its next start.
 	UsedBy []string
+	// Helper marks autoconfigure's helper model, listed in a section of its
+	// own and managed from Settings.
+	Helper bool
+}
+
+// modelListView is the Models page's list, in its three sections: the models
+// that can be served, the drafts that serve beside them, and the app's own
+// helper model. Neither of the last two can be chosen to serve, which is why
+// they are not mixed in with the models that can.
+type modelListView struct {
+	Rows    []modelRow
+	Drafts  []modelRow
+	Helpers []modelRow
+}
+
+func (s *Server) modelListView() modelListView {
+	var v modelListView
+	for _, r := range s.modelRows() {
+		switch {
+		case r.Helper:
+			v.Helpers = append(v.Helpers, r)
+		case r.Draft:
+			v.Drafts = append(v.Drafts, r)
+		default:
+			v.Rows = append(v.Rows, r)
+		}
+	}
+	return v
 }
 
 func (s *Server) modelRows() []modelRow {
@@ -70,10 +98,6 @@ func (s *Server) modelRows() []modelRow {
 
 	rows := make([]modelRow, 0, len(list))
 	for _, m := range list {
-		// The helper is the app's, managed from Settings; it has no card.
-		if m.Helper {
-			continue
-		}
 		row := modelRow{
 			ID:          m.ID,
 			SafeID:      safeID(m.ID),
@@ -86,7 +110,17 @@ func (s *Server) modelRows() []modelRow {
 			Active:      m.ID == s.cfg.ActiveModel,
 			Serving:     m.ID == servingID,
 		}
-		row.Autoconfigurable = !m.IsDraft() && !m.Orphaned
+		row.Autoconfigurable = !m.IsDraft() && !m.Helper && !m.Orphaned
+		if m.Helper {
+			// The app's own model, managed from Settings: no launch config
+			// of its own to show, nothing to choose or configure.
+			row.Helper = true
+			row.VRAM = vramLabel{}
+			row.Active = false
+			row.SearchText = strings.ToLower(strings.Join([]string{m.ID, row.DisplayName, "helper"}, " "))
+			rows = append(rows, row)
+			continue
+		}
 		if m.IsDraft() {
 			// None of what follows describes a draft: it has no launch
 			// config of its own, so no VRAM figure, tools badge or tuning.
@@ -132,7 +166,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondHTML(w)
-	s.renderPartial(w, "model_list", struct{ Rows []modelRow }{s.modelRows()})
+	s.renderPartial(w, "model_list", s.modelListView())
 }
 
 // handleActivateModel records which model the Start button launches. The whole
@@ -169,7 +203,7 @@ func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondHTML(w)
-	s.renderPartial(w, "model_list", struct{ Rows []modelRow }{s.modelRows()})
+	s.renderPartial(w, "model_list", s.modelListView())
 }
 
 func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {

@@ -640,6 +640,20 @@ func TestGoldenPartials(t *testing.T) {
 				Warning: "HIP_VISIBLE_DEVICES: hides GPUs from vLLM"}},
 		},
 		{
+			// Served models first; drafts and the helper in sections of their
+			// own, since neither can be chosen to serve.
+			name:    "model_list_sections",
+			partial: "model_list",
+			data: modelListView{
+				Rows: []modelRow{{ID: "org/model", SafeID: "org--model", DisplayName: "Model", SizeLabel: "23.5 GB",
+					Quant: quantBadge{Method: "awq"}, Autoconfigurable: true, SearchText: "org/model"}},
+				Drafts: []modelRow{{ID: "org/drafter", SafeID: "org--drafter", DisplayName: "Drafter", SizeLabel: "2.0 GB",
+					Quant: quantBadge{Method: "fp8"}, Draft: true, DraftMethod: "dflash", UsedBy: []string{"Model"}, SearchText: "org/drafter draft"}},
+				Helpers: []modelRow{{ID: "Qwen/Qwen3-4B-Instruct-2507", SafeID: "Qwen--Qwen3-4B-Instruct-2507", DisplayName: "Qwen3-4B-Instruct-2507",
+					SizeLabel: "7.5 GB", Quant: quantBadge{Method: "none"}, Helper: true, SearchText: "qwen/qwen3-4b-instruct-2507 helper"}},
+			},
+		},
+		{
 			name:    "helper_model_panel_absent",
 			partial: "helper_model_panel",
 			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507"},

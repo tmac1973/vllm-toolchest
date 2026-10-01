@@ -57,8 +57,12 @@ func TestTheHelperIsNotAModelToServe(t *testing.T) {
 			t.Error("the helper is servable")
 		}
 	}
-	if slices.ContainsFunc(s.modelRows(), func(r modelRow) bool { return r.ID == models.HelperRepo }) {
-		t.Error("the helper has a card on the Models page")
+	v := s.modelListView()
+	if slices.ContainsFunc(v.Rows, func(r modelRow) bool { return r.ID == models.HelperRepo }) {
+		t.Error("the helper is listed among the models that can be served")
+	}
+	if len(v.Helpers) != 1 || v.Helpers[0].Autoconfigurable || v.Helpers[0].Active {
+		t.Errorf("the helper section: %+v", v.Helpers)
 	}
 	h, _ := s.registry.Get(models.HelperRepo)
 	if err := s.launchBlocker(h); err == nil {
