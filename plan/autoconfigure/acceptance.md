@@ -22,7 +22,7 @@ tokens with an fp8 cache and offered to download the drafter it already had.
   code (`vllm/config/tp_padding.py`, 2026-09-27) reads the target's
   `num_key_value_heads`, which transformers 5.17 refuses for Gemma 4's
   per-layer config with a RuntimeError that `getattr`'s default does not
-  catch. Read over SSH in the image; reported upstream. The failed-start
+  catch. Read over SSH in the image; not yet reported upstream. The failed-start
   notice now offers to drop a speculative config the engine cannot build,
   and unticking a setting already applied now removes it.
 
