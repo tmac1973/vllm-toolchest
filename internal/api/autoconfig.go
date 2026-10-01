@@ -222,6 +222,8 @@ type autoconfigReviewView struct {
 	FieldNotes                 []fieldNotes
 	GeneralNotes               []string
 	Summary                    []string
+	// ImageWarning says the card needs an image this machine does not run.
+	ImageWarning string
 	// HelperAnswer is the helper's answer as it gave it, indented, for
 	// seeing why a reading was or was not used; "" when it gave none.
 	HelperAnswer string
@@ -249,6 +251,8 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 		FirstGuess: res.Plan.Known && res.Plan.FirstGuess,
 		PlanKnown:  res.Plan.Known, PlanWhy: res.Plan.Why,
 		Hardware: hardwareTable(safeID(m.ID), res.Base, res.Plan, res.Notes),
+
+		ImageWarning: res.ImageWarning,
 	}
 
 	switch {

@@ -82,6 +82,9 @@
     <span>Autoconfigure <span class="mc-owner">&mdash; {{.ModelName}}</span></span>
   </div>
   <p><small>{{.Sources}}</small></p>
+  {{- if .ImageWarning}}
+  <p class="ac-msg ac-warn">&#9888; {{.ImageWarning}}</p>
+  {{- end}}
   <form hx-post="/api/models/autoconfig/save?id={{.ModelID}}" hx-target="#autoconfig-{{.SafeID}}" hx-swap="innerHTML">
     <h6>This machine</h6>
     {{- if .PlanKnown}}

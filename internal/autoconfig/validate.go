@@ -77,6 +77,8 @@ type Inputs struct {
 	MachineEnv []string
 	// Drafts are the draft models on this disk.
 	Drafts []*models.Model
+	// Image is the image this machine serves with.
+	Image Image
 }
 
 // Checked is the card after checking: the rows to propose, notes for the
@@ -93,6 +95,9 @@ type Checked struct {
 	DraftRepo string
 	// Command is the command the rows came from, nil when there was none.
 	Command *Command
+	// ImageWarning says the card needs a vLLM image other than the one this
+	// machine runs; "" when it names none, or names this one.
+	ImageWarning string
 }
 
 // fieldFlags is the flag each field is written as, for asking whether the
@@ -168,6 +173,7 @@ func Validate(in Inputs) Checked {
 	v.samplingFromProse(chosen)
 	v.parsersFromProse(start)
 	v.otherAdvice()
+	v.imageRequirement()
 	return v.out
 }
 
