@@ -64,6 +64,9 @@ type Server struct {
 	autoconf autoconfigState
 	llm      *llmcall.Client
 	cards    cachedCards
+
+	// archs is the image's supported model architectures, read at boot.
+	archs archRegistry
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -255,6 +258,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/gpu-map", s.handleGPUMap)
+		r.Get("/arch-registry", s.handleArchRegistry)
 
 		r.Route("/models", func(r chi.Router) {
 			r.Get("/", s.handleListModels)

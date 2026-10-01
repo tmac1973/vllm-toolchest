@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,5 +352,36 @@ func TestProbeDeviceNameHonoursTimeout(t *testing.T) {
 	// runaway child would still pin a HIP context and its VRAM.
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("probe took %v; the timeout did not fire", elapsed)
+	}
+}
+
+// The probe's names are marked, because importing vLLM can log to stdout too.
+func TestParseArchs(t *testing.T) {
+	out := "INFO 10-01 12:00:00 [__init__.py:1] Automatically detected platform rocm.\n" +
+		"ARCH Qwen4ExpForConditionalGeneration\n\n  ARCH Gemma4ForCausalLM  \nARCH Gemma4ForCausalLM\nWARNING something\n"
+	got, err := parseArchs(out)
+	if err != nil || strings.Join(got, ",") != "Gemma4ForCausalLM,Qwen4ExpForConditionalGeneration" {
+		t.Errorf("got %v, %v", got, err)
+	}
+	// An empty registry is a broken probe, not a vLLM that supports nothing.
+	if got, err := parseArchs("INFO only logging\n"); err == nil || got != nil {
+		t.Errorf("empty: %v, %v", got, err)
+	}
+}
+
+// The cache key: a hash of the registry file, changing when it does.
+func TestRegistryFingerprint(t *testing.T) {
+	sp := t.TempDir()
+	if (Env{SitePackages: sp}).RegistryFingerprint() != "" || (Env{}).RegistryFingerprint() != "" {
+		t.Error("a fingerprint without a registry file")
+	}
+	dir := filepath.Join(sp, "vllm/model_executor/models")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "registry.py"), []byte("A = 1\n"), 0o644)
+	first := (Env{SitePackages: sp}).RegistryFingerprint()
+	os.WriteFile(filepath.Join(dir, "registry.py"), []byte("A = 1\nB = 2\n"), 0o644)
+	second := (Env{SitePackages: sp}).RegistryFingerprint()
+	if first == "" || second == "" || first == second {
+		t.Errorf("fingerprints %q %q", first, second)
 	}
 }

@@ -75,6 +75,7 @@ func main() {
 	// and must not hold up the listener. Until it lands, the architecture
 	// -derived fallback stands.
 	go resolveDeviceName(cfg, env, srv)
+	go resolveSupportedArchs(cfg, env, srv)
 	go srv.RefreshServeFlags()
 
 	httpSrv := &http.Server{
@@ -193,6 +194,67 @@ func readCachedDeviceName(dataDir, gpuArch string) string {
 
 func writeCachedDeviceName(dataDir, gpuArch, name string) error {
 	return os.WriteFile(deviceNameCache(dataDir), []byte(gpuArch+" "+name+"\n"), 0o644)
+}
+
+// archCache is where the image's supported model architectures are kept
+// between boots.
+func archCache(dataDir string) string { return filepath.Join(dataDir, "arch-registry.txt") }
+
+// readCachedArchs is the cached architecture list when it was written for
+// this variant and this registry, nil otherwise: a miss, not a failure, as
+// readCachedDeviceName treats one.
+func readCachedArchs(dataDir, variant, fingerprint string) []string {
+	if variant == "" || fingerprint == "" {
+		return nil
+	}
+	b, err := os.ReadFile(archCache(dataDir))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) < 2 || strings.TrimSpace(lines[0]) != variant+" "+fingerprint {
+		return nil
+	}
+	var archs []string
+	for _, l := range lines[1:] {
+		if l = strings.TrimSpace(l); l != "" {
+			archs = append(archs, l)
+		}
+	}
+	return archs
+}
+
+func writeCachedArchs(dataDir, variant, fingerprint string, archs []string) error {
+	body := variant + " " + fingerprint + "\n" + strings.Join(archs, "\n") + "\n"
+	return os.WriteFile(archCache(dataDir), []byte(body), 0o644)
+}
+
+// resolveSupportedArchs learns which model architectures the image's vLLM can
+// load: from the cache when the registry has not changed, otherwise by asking
+// it. Never fatal -- a machine with no venv still serves the UI, and the
+// recommendation feed then says it could not check.
+func resolveSupportedArchs(cfg *config.Config, env vllmenv.Env, srv *api.Server) {
+	if env.VenvRoot == "" {
+		return
+	}
+	fp := env.RegistryFingerprint()
+	if archs := readCachedArchs(cfg.DataDir, env.Variant, fp); archs != nil {
+		srv.SetSupportedArchs(archs, "cache")
+		return
+	}
+	// An import and a registry read, not a GPU start: seconds, not minutes.
+	archs, err := env.ProbeSupportedArchs(90 * time.Second)
+	if err != nil {
+		slog.Warn("could not read the image's supported model architectures", "error", err)
+		return
+	}
+	srv.SetSupportedArchs(archs, "probe")
+	slog.Info("read the image's supported model architectures", "count", len(archs))
+	if fp != "" {
+		if err := writeCachedArchs(cfg.DataDir, env.Variant, fp, archs); err != nil {
+			slog.Warn("could not cache the supported architectures", "error", err)
+		}
+	}
 }
 
 // resolveDeviceName asks the running vLLM what it calls this GPU.
