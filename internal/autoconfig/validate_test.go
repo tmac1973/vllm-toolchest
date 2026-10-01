@@ -576,3 +576,36 @@ func TestNamesParser(t *testing.T) {
 		}
 	}
 }
+
+// stelterlab's FP8 Mistral Small 3.2 says fp8 in config.json, which a new
+// model's config takes, and compressed-tensors in params.json, which
+// --config-format mistral has the engine read instead. Serving it that way
+// unsets the quantization, so the engine reads it from params.json.
+func TestMistralConfigFormatUnsetsAContradictedQuantization(t *testing.T) {
+	cmd := "```\nvllm serve stelterlab/Mistral-Small-3.2-24B-Instruct-2506-FP8 --tokenizer-mode mistral --config-format mistral --load-format mistral --tool-call-parser mistral --enable-auto-tool-choice\n```\n"
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "consolidated.safetensors"), nil, 0o644)
+	os.WriteFile(filepath.Join(dir, "params.json"), []byte(`{"dim":5120,"quantization":{"quant_method":"compressed-tensors","format":"float-quantized"}}`), 0o644)
+	m := &models.Model{ID: "stelterlab/Mistral-Small-3.2-24B-Instruct-2506-FP8", LocalPath: dir}
+	in := Inputs{Model: m, Base: models.VLLMConfig{Quantization: "fp8"}, Card: Card{Raw: cmd, Text: cmd}, Commands: ExtractCommands(cmd), MachineEnv: machineEnv}
+
+	r := rowByKey(Validate(in).Rows, "field:quantization")
+	if r == nil || !r.Ticked || r.Value != "" || r.Proposed() != "unset" || !strings.Contains(r.Reason, "compressed-tensors") {
+		t.Fatalf("quantization row: %+v", r)
+	}
+	cfg, err := Apply(in.Base, []Row{*r}, nil)
+	if err != nil || cfg.Quantization != "" {
+		t.Errorf("applied: %q, %v", cfg.Quantization, err)
+	}
+
+	// Already agreeing, or no Mistral config: no row.
+	in.Base.Quantization = "compressed_tensors"
+	if rowByKey(Validate(in).Rows, "field:quantization") != nil {
+		t.Error("a quantization that agrees was unset")
+	}
+	in.Base.Quantization = "fp8"
+	os.Remove(filepath.Join(dir, "params.json"))
+	if rowByKey(Validate(in).Rows, "field:quantization") != nil {
+		t.Error("unset without a params.json to read it from")
+	}
+}

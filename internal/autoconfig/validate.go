@@ -162,6 +162,7 @@ func Validate(in Inputs) Checked {
 			v.note("", originCard, "The card also shows, for a special case: "+clip(c.Raw, maxQuote))
 		}
 	}
+	v.mistralQuantization()
 	v.fromInline(chosen)
 	v.speculative(chosen, start, variantSpec, variantSpecQuote)
 	v.samplingFromProse(chosen)
@@ -356,6 +357,66 @@ func (v *validator) fieldRow(field, value, quote, reason string, prescribed bool
 		r.Reason = notListedReason
 	}
 	v.row(r)
+}
+
+// mistralQuantization clears a quantization that contradicts params.json, when
+// the review serves the model from its Mistral config.
+//
+// --config-format mistral has the engine read params.json instead of
+// config.json, and the two can disagree. stelterlab's FP8 Mistral Small 3.2
+// says fp8 in config.json, which is what a new model's config is given, and
+// compressed-tensors in params.json; the engine refuses a --quantization that
+// does not match the config it reads. Unset, it reads the method itself.
+func (v *validator) mistralQuantization() {
+	r := v.lastRowWithKey("flag:--config-format")
+	if r == nil || r.Proposed() != "mistral" || v.in.Base.Quantization == "" || v.in.Model == nil {
+		return
+	}
+	method := paramsQuantMethod(v.in.Model.LocalPath)
+	if method == "" || normaliseQuant(method) == normaliseQuant(v.in.Base.Quantization) {
+		return
+	}
+	v.out.Rows = append(v.out.Rows, Row{
+		Key: "field:quantization", Kind: RowField, Field: "quantization", Value: "",
+		Origin: originCard, Quote: r.Quote, Ticked: r.Ticked,
+		Reason: fmt.Sprintf("With --config-format mistral the engine reads params.json, which declares %s, not the %s config.json gives; it refuses a quantization that does not match. Unset, the engine reads it from params.json.",
+			method, v.in.Base.Quantization),
+	})
+}
+
+// paramsQuantMethod is the quant_method params.json declares, "" when it has
+// none or there is no params.json.
+func paramsQuantMethod(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "params.json"))
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		Quantization struct {
+			QuantMethod string `json:"quant_method"`
+		} `json:"quantization"`
+	}
+	if json.Unmarshal(data, &p) != nil {
+		return ""
+	}
+	return p.Quantization.QuantMethod
+}
+
+func normaliseQuant(s string) string {
+	return strings.ReplaceAll(strings.ToLower(s), "-", "_")
+}
+
+// lastRowWithKey is the row with key, nil when there is none.
+func (v *validator) lastRowWithKey(key string) *Row {
+	for i := len(v.out.Rows) - 1; i >= 0; i-- {
+		if v.out.Rows[i].Key == key {
+			return &v.out.Rows[i]
+		}
+	}
+	return nil
 }
 
 // hasConsolidatedWeights reports Mistral's single-file weights in the model's

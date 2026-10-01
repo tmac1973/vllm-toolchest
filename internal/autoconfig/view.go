@@ -32,6 +32,9 @@ func (r Row) Proposed() string {
 		_, v, _ := strings.Cut(r.Env, "=")
 		return v
 	}
+	if r.Value == "" {
+		return "unset" // the engine decides
+	}
 	return r.Value
 }
 
