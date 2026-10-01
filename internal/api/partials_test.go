@@ -69,10 +69,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: serviceStatusView{Status: process.Status{
 				State: process.StateStarting, ModelID: "unsloth/Qwen3.8-27B-FP8", PID: 4242, Uptime: "7m12s",
 				Overdue: true,
-				Notice: "Still starting after 5m0s, which is longer than the startup timeout. " +
-					"Nothing has failed: the process is alive and being watched, and the log shows what it is doing. " +
-					"A model's first start is often much slower than later ones. " +
-					"This changes to Running when the engine answers.",
+				Notice:  "Still starting after 5m0s, past the startup timeout. Nothing has failed; the log shows progress.",
 			}},
 		},
 		{
@@ -82,8 +79,7 @@ func TestGoldenPartials(t *testing.T) {
 			data: serviceStatusView{Status: process.Status{
 				State: process.StateStarting, ModelID: "unsloth/Qwen3.8-27B-FP8", PID: 4242, Uptime: "2m3s",
 				StartFailed: true,
-				Notice: "The engine reported that it failed to start, but its process has not exited. " +
-					"The log says why. Stop clears it.",
+				Notice:      "The engine failed to start but has not exited. See the log; Stop clears it.",
 			}},
 		},
 		{

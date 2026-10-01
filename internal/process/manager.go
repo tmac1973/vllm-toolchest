@@ -167,14 +167,10 @@ func (m *Manager) GetStatus() Status {
 		switch {
 		case m.startFailed:
 			s.StartFailed = true
-			s.Notice = "The engine reported that it failed to start, but its process has not exited. " +
-				"The log says why. Stop clears it."
+			s.Notice = "The engine failed to start but has not exited. See the log; Stop clears it."
 		case m.overdue:
 			s.Overdue = true
-			s.Notice = fmt.Sprintf("Still starting after %s, which is longer than the startup timeout. "+
-				"Nothing has failed: the process is alive and being watched, and the log shows what it is doing. "+
-				"A model's first start is often much slower than later ones. "+
-				"This changes to Running when the engine answers.", m.startupTimeout)
+			s.Notice = fmt.Sprintf("Still starting after %s, past the startup timeout. Nothing has failed; the log shows progress.", m.startupTimeout)
 		}
 	}
 	if m.lastError != "" {
