@@ -637,12 +637,14 @@ func TestGoldenPartials(t *testing.T) {
 		},
 		{
 			// Served models first; drafts and the helper in sections of their
-			// own, since neither can be chosen to serve.
+			// own, since neither can be chosen to serve. A drafter that came
+			// in a model's own folder is named on that model's card.
 			name:    "model_list_sections",
 			partial: "model_list",
 			data: modelListView{
 				Rows: []modelRow{{ID: "org/model", SafeID: "org--model", DisplayName: "Model", SizeLabel: "23.5 GB",
-					Quant: quantBadge{Method: "awq"}, Autoconfigurable: true, SearchText: "org/model"}},
+					Quant: quantBadge{Method: "awq"}, Autoconfigurable: true, SearchText: "org/model",
+					Bundled: []string{"model-speculator.eagle3 · eagle3 · 4.2 GB"}}},
 				Drafts: []modelRow{{ID: "org/drafter", SafeID: "org--drafter", DisplayName: "Drafter", SizeLabel: "2.0 GB",
 					Quant: quantBadge{Method: "fp8"}, Draft: true, DraftMethod: "dflash", UsedBy: []string{"Model"}, SearchText: "org/drafter draft"}},
 				Helpers: []modelRow{{ID: "Qwen/Qwen3-4B-Instruct-2507", SafeID: "Qwen--Qwen3-4B-Instruct-2507", DisplayName: "Qwen3-4B-Instruct-2507",
