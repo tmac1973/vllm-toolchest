@@ -121,15 +121,15 @@ type TPOption struct {
 	Configured  bool `json:"configured,omitempty"`
 	Recommended bool `json:"recommended,omitempty"`
 
-	WeightsGB    float64 `json:"weights_gb"`
-	KVGB         float64 `json:"kv_gb"`
-	OverheadGB   float64 `json:"overhead_gb"`
+	WeightsGB  float64 `json:"weights_gb"`
+	KVGB       float64 `json:"kv_gb"`
+	OverheadGB float64 `json:"overhead_gb"`
 	// ConsumedGB is what the engine sizes its KV pool against: the weights
 	// and what the ranks hold beyond them, but not the graph pool or the
 	// working set. vLLM 0.29 gives the pool utilization times the card less
 	// consumed memory -- exactly, on every start here -- and lets the graphs
 	// and activation sit on top. The planner sizes the context from it.
-	ConsumedGB float64 `json:"consumed_gb,omitempty"`
+	ConsumedGB   float64 `json:"consumed_gb,omitempty"`
 	RequiredGB   float64 `json:"required_gb"`
 	RequiredHigh float64 `json:"required_high_gb,omitempty"`
 
