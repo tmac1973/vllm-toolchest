@@ -66,38 +66,49 @@ const (
 	graphPoolHighPerRankGB = 4.0
 )
 
-// rankOverheadLowGB and rankOverheadHighGB bound what one rank of a split
-// holds beyond its weights before it serves anything: the memory the runtime
-// takes outside the allocator, and what the allocator reserves over what it
-// has handed out. The engine reports the two together with the weights as
-// "consumed memory", and the projection had no term for either.
+// rankOverheadFor bounds what one rank of a split holds beyond its projected
+// weights before it serves anything: the memory the runtime takes outside the
+// allocator, what the allocator reserves over what it has handed out, and
+// what the projection gets wrong about the weights themselves. The engine
+// reports it with the weights as "consumed memory".
 //
-// Consumed less weights, per rank, on the one host that has run a split:
+// Consumed less the projected weights, per rank, every start on vLLM 0.29 on
+// the rdna4-clav image:
 //
-//	27B hybrid     TP=4   4.62   of it non-torch 3.08
-//	MoE hybrid     TP=4   5.32   of it non-torch 2.63
-//	MoE hybrid     TP=4   5.50   an earlier engine build
-//	27B hybrid     TP=2   6.49   of it non-torch 2.65
-//	35B-A3B MoE    TP=4   2.30   Qwen3.5 FP8, vLLM 0.29
-//	24B dense      TP=4   0.78   Mistral Small 3.2 BF16, vLLM 0.29
+//	Mistral Small 3.2      BF16                  TP=4  -0.06
+//	Qwen3.5-35B-A3B        FP8                   TP=4   1.40
+//	Mistral Small 3.2      FP8 (compressed)      TP=4   2.03
+//	Qwen3.8 Flash-Next     MXFP4 (4-bit)         TP=4   5.10
+//	ThinkingCap 27B        PARO (size unknown)   TP=2   6.64
 //
-// Without it the 27B's projection was 12 to 15 GB under what the engine
-// needed, at its pessimistic end. It is a band across what was seen, because
-// a handful of models on one host cannot say what it depends on. The third
-// sat well under the first two, and was what took the low end from 4.5 to
-// 2.3: its projection had been saved from overstating its room only by the KV
-// cache being understated twice over. The fourth, the one dense model, sat
-// lower again, outside the band. The band was left: its projection erred
-// safe, and one dense model cannot say whether dense models as a class sit
-// there -- the first three are all hybrids.
+// One band across all of them, its middle used for every model, was wrong
+// both ways: twice the room it had for the first three, and too much for the
+// last -- narrowed, it would have planned the 27B a context its cards could
+// not hold. What divides them is the width of the weights: at 8 bits or more
+// the overhead is small, and under 8 bits, where the kernels keep workspaces
+// to unpack the weights, it is several gigabytes. The method name does not
+// divide them: the 4-bit MoE and the 8-bit Mistral are both compressed-tensors.
+// A width the checkpoint does not state is charged the top of the narrow band,
+// low end and high: the planner sizes the context from the band's middle, and
+// the PARO 27B, whose width is not stated, sat a gigabyte a rank above it --
+// with the 0.85 margin only just covering its context.
+//
+// Earlier starts of the two narrow hybrids on older engine builds, before this
+// was split, sat at 4.62 to 6.49 -- consumed less their actual weights -- and
+// the narrow band's low end is set to take them in.
 //
 // Charged from two ranks up, as the replication surcharge is. The one
 // single-rank start on record consumed barely more than its weights, on a
 // different host and image; whether a single rank here would is not known.
-const (
-	rankOverheadLowGB  = 2.3
-	rankOverheadHighGB = 6.5
-)
+func rankOverheadFor(bytesPerParam float64) (low, high float64) {
+	switch {
+	case bytesPerParam >= 1:
+		return 0, 2.1
+	case bytesPerParam > 0:
+		return 4.6, 6.7
+	}
+	return 6.7, 6.7
+}
 
 // TPOption is what this model costs at one tensor-parallel width, and whether
 // that many cards can supply it.
@@ -110,9 +121,15 @@ type TPOption struct {
 	Configured  bool `json:"configured,omitempty"`
 	Recommended bool `json:"recommended,omitempty"`
 
-	WeightsGB    float64 `json:"weights_gb"`
-	KVGB         float64 `json:"kv_gb"`
-	OverheadGB   float64 `json:"overhead_gb"`
+	WeightsGB  float64 `json:"weights_gb"`
+	KVGB       float64 `json:"kv_gb"`
+	OverheadGB float64 `json:"overhead_gb"`
+	// ConsumedGB is what the engine sizes its KV pool against: the weights
+	// and what the ranks hold beyond them, but not the graph pool or the
+	// working set. vLLM 0.29 gives the pool utilization times the card less
+	// consumed memory -- exactly, on every start here -- and lets the graphs
+	// and activation sit on top. The planner sizes the context from it.
+	ConsumedGB   float64 `json:"consumed_gb,omitempty"`
 	RequiredGB   float64 `json:"required_gb"`
 	RequiredHigh float64 `json:"required_high_gb,omitempty"`
 
@@ -276,11 +293,13 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		var low float64
 		if o.Measured {
 			o.WeightsGB = est.WeightsTotalGB
+			o.ConsumedGB = est.WeightsTotalGB
 			o.OverheadGB = est.TotalRequiredGB - est.WeightsTotalGB - est.KVAtContextGB
 			o.RequiredGB = est.TotalRequiredGB
 			low, o.RequiredHigh = o.RequiredGB, o.RequiredGB
 		} else {
 			o.WeightsGB = projectWeights(est.WeightsTotalGB, est.MeasuredTP, tp)
+			o.ConsumedGB = o.WeightsGB
 			// The graph ladder is captured per rank, so it grows with the
 			// width. How the working set moves with the width is the one thing
 			// a single run cannot say, so off the measured width it is a band
@@ -315,6 +334,7 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		(r.ActivationGB+r.ActivationHighGB)/2 + (r.RankOverheadGB+r.RankOverheadHighGB)/2
 	o.RequiredGB = (r.TotalGB + r.TotalHighGB) / 2
 	o.RequiredHigh = r.TotalHighGB
+	o.ConsumedGB = o.WeightsGB + (r.RankOverheadGB+r.RankOverheadHighGB)/2 + r.CacheGB + r.DraftGB
 
 	o.Fits = r.TotalHighGB <= o.AvailableGB
 	o.Uncertain = !o.Fits && r.TotalGB <= o.AvailableGB

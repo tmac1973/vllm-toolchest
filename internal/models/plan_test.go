@@ -89,8 +89,10 @@ func TestPlanAllCardsForAModelThatHasNotRun(t *testing.T) {
 	if !p.FirstGuess || p.All.Measured {
 		t.Error("a projection was not labelled a first guess")
 	}
-	// Two cards cannot hold 262,144 tokens at the default dtype, so there is
-	// no narrower option that gives what was asked for.
+	// Two cards do not reach 262,144 tokens at the default dtype within the
+	// projection's margin -- about 252,000 -- so there is no narrower option
+	// that gives what was asked for. The engine would find about 298,000:
+	// the margin is what keeps a first guess from promising that.
 	if p.Narrow != nil {
 		t.Errorf("narrow option at TP=%d with context %d; none should reach the target",
 			p.Narrow.TP, p.Narrow.ContextTokens)

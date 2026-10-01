@@ -71,8 +71,12 @@ func TestRefineToMoreContext(t *testing.T) {
 }
 
 func TestRefineToLessContext(t *testing.T) {
-	// At half the card, the measured pool holds less than the full context.
-	s, m := refineServer(t, models.ContextMax, 262144, 0.5)
+	// At 0.4 of the card, the measured pool holds less than the full context:
+	// 12.74 GiB a card less the 11.67 consumed leaves about 96,000 tokens.
+	// (At 0.5 it once did too, while the graphs and working set were charged
+	// against the pool; the engine charges only consumed memory, and at 0.5
+	// the full context fits.)
+	s, m := refineServer(t, models.ContextMax, 262144, 0.4)
 	ref := s.refinementFor(m)
 	if ref == nil || ref.More || ref.proposed >= 262144 {
 		t.Fatalf("refinement = %+v", ref)
