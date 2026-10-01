@@ -323,9 +323,13 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 	}
 
 	for _, r := range res.Rows {
+		reason := r.Reason
+		if cur := r.Current(res.Base); cur != "" && cur == r.Proposed() {
+			reason += " Unticked, it is removed."
+		}
 		v.CardRows = append(v.CardRows, cardRowView{
 			Key: r.Key, Label: r.Label(), Current: r.Current(res.Base), Proposed: r.Proposed(),
-			Reason: r.Reason, Quote: r.Quote, Warning: r.Warning, Ticked: r.Ticked,
+			Reason: reason, Quote: r.Quote, Warning: r.Warning, Ticked: r.Ticked,
 		})
 	}
 

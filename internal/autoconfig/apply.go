@@ -21,6 +21,12 @@ func DefaultTicks(rows []Row) map[string]bool {
 // Apply writes the ticked rows onto base. A nil ticked means each row's own
 // default.
 //
+// An unticked row leaves base as it is -- except when base already holds
+// exactly what the row proposes, as it does on a second run after the first
+// was applied. Then unticking removes the setting: "keep it as it is" would
+// keep the very thing being unticked. Found on Gemma 4, whose speculative
+// config could not be got rid of by unticking it on a re-run.
+//
 // Field rows set their field; flag rows go into the extra flags, replacing
 // the same flag if base had it and keeping the rest; env rows go into the env
 // block by name. Only the fields named here can be set, which is what keeps a
@@ -32,6 +38,9 @@ func Apply(base models.VLLMConfig, rows []Row, ticked map[string]bool) (models.V
 	c := base
 	for _, r := range rows {
 		if !ticked[r.Key] {
+			if cur := r.Current(base); cur != "" && cur == r.Proposed() {
+				clearRow(&c, r)
+			}
 			continue
 		}
 		switch r.Kind {
@@ -104,6 +113,43 @@ func setField(c *models.VLLMConfig, field, value string) error {
 		return fmt.Errorf("autoconfigure cannot set %q", field)
 	}
 	return nil
+}
+
+// clearRow takes what a row sets back out of a config: a field to its
+// default, a flag out of the extra flags, a variable out of the env block.
+func clearRow(c *models.VLLMConfig, r Row) {
+	switch r.Kind {
+	case RowFlag:
+		c.ExtraFlags = process.RemoveFlag(c.ExtraFlags, r.Flag[0])
+	case RowEnv:
+		key, _, _ := strings.Cut(r.Env, "=")
+		c.Env = removeEnvLine(c.Env, key)
+	case RowField:
+		switch r.Field {
+		case "dtype", "load_format":
+			setField(c, r.Field, "auto")
+		case "max_num_batched_tokens":
+			c.MaxNumBatchedTokens = 0
+		case "enforce_eager", "trust_remote_code", "enable_prefix_caching", "enable_chunked_prefill",
+			"enable_auto_tool_choice", "disable_async_scheduling", "language_model_only":
+			setField(c, r.Field, "false")
+		default:
+			setField(c, r.Field, "")
+		}
+	}
+}
+
+// removeEnvLine takes the line for key out of an env block.
+func removeEnvLine(block, key string) string {
+	var out []string
+	for _, l := range strings.Split(block, "\n") {
+		t := strings.TrimSpace(l)
+		if k, _, _ := strings.Cut(t, "="); t == "" || k == key {
+			continue
+		}
+		out = append(out, t)
+	}
+	return strings.Join(out, "\n")
 }
 
 // setEnvLine puts KEY=VALUE into an env block, replacing the line with the

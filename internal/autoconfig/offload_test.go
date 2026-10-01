@@ -45,3 +45,33 @@ func TestTheOffloadWidth(t *testing.T) {
 		t.Errorf("offload only: %+v", cfg)
 	}
 }
+
+// On a re-run after the first was applied, the live config already holds what
+// the rows propose. Unticking one then removes it -- Gemma 4's speculative
+// config could not otherwise be got rid of. A row proposing something other
+// than what is there still leaves it alone when unticked.
+func TestUntickingWhatIsAlreadySetRemovesIt(t *testing.T) {
+	spec := `{"method": "eagle3", "model": "/m/d", "num_speculative_tokens": 3}`
+	base := models.VLLMConfig{
+		SpeculativeConfig: spec, EnableAutoToolChoice: true, ToolCallParser: "gemma4",
+		ExtraFlags: process.SetFlag("--keep 1", []string{"--limit-mm-per-prompt", `{"image":10}`}), Env: "FOO=1\nBAR=2",
+	}
+	rows := []Row{
+		{Key: "field:speculative_config", Kind: RowField, Field: "speculative_config", Value: spec},
+		{Key: "field:enable_auto_tool_choice", Kind: RowField, Field: "enable_auto_tool_choice", Value: "true"},
+		{Key: "flag:--limit-mm-per-prompt", Kind: RowFlag, Flag: []string{"--limit-mm-per-prompt", `{"image":10}`}},
+		{Key: "env:FOO", Kind: RowEnv, Env: "FOO=1"},
+		{Key: "field:tool_call_parser", Kind: RowField, Field: "tool_call_parser", Value: "pythonic"},
+	}
+	c, err := Apply(base, rows, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SpeculativeConfig != "" || c.EnableAutoToolChoice || process.HasFlag(c.ExtraFlags, "--limit-mm-per-prompt") ||
+		!process.HasFlag(c.ExtraFlags, "--keep") || c.Env != "BAR=2" {
+		t.Errorf("unticked rows that were set: %+v", c)
+	}
+	if c.ToolCallParser != "gemma4" {
+		t.Errorf("an unticked change replaced what was there: %q", c.ToolCallParser)
+	}
+}
