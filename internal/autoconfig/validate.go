@@ -686,8 +686,17 @@ func (v *validator) unverified(what, value string) {
 
 var spaceRuns = regexp.MustCompile(`\s+`)
 
+// markdownMarks are the formatting characters a reader does not see and a
+// helper does not copy: code ticks, emphasis, blockquote markers.
+var markdownMarks = strings.NewReplacer("`", "", "**", "", "*", "", "> ", " ")
+
+// normalise is text as compared for a quote: lower case, markdown marks
+// dropped, whitespace collapsed. Found on compute: the MoE's card lists its
+// sampling values as `temperature=0.7`, `top_p=0.80`, and a helper quoting
+// that line without the ticks was told its sentence was not in the card.
 func normalise(s string) string {
-	return strings.TrimSpace(spaceRuns.ReplaceAllString(strings.ToLower(s), " "))
+	s = markdownMarks.Replace(strings.ToLower(s))
+	return strings.TrimSpace(spaceRuns.ReplaceAllString(s, " "))
 }
 
 // quoteInCard reports whether a quote is in the card, allowing for case and

@@ -369,3 +369,12 @@ func TestAQuoteMustStateItsValue(t *testing.T) {
 		t.Error("a parser the quote does not name was proposed")
 	}
 }
+
+func TestAQuoteWithoutTheCardsMarkdownStillMatches(t *testing.T) {
+	card := "> - Instruct (or non-thinking) mode: `temperature=0.7`, `top_p=0.80`, `top_k=20`, **recommended**\n"
+	in := Inputs{Model: &models.Model{ID: "org/m"}, Card: Card{Raw: card, Text: card}, HasAdvice: true,
+		Advice: Advice{Temperature: f64(0.7), SamplingQuote: "Instruct (or non-thinking) mode: temperature=0.7, top_p=0.80, top_k=20, recommended"}}
+	if rowByKey(Validate(in).Rows, "flag:--override-generation-config") == nil {
+		t.Error("a quote that differs from the card only in markdown was rejected")
+	}
+}
