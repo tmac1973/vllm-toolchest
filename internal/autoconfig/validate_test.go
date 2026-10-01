@@ -254,6 +254,16 @@ func TestTheHelpersReadingIsChecked(t *testing.T) {
 		t.Error("prose sampling overrode the model's generation_config.json")
 	}
 
+	// What the file does not set, the card fills: Qwen3.5's file sets the
+	// temperature, and its card adds a presence penalty.
+	presence := "# Model\n\nWe recommend temperature=0.6, presence_penalty=1.5 for general use.\n"
+	in = Inputs{Model: withDefaults, Card: Card{Raw: presence, Text: presence}, HasAdvice: true,
+		Advice: Advice{Temperature: f64(0.6), PresencePenalty: f64(1.5), SamplingQuote: "temperature=0.6, presence_penalty=1.5"}}
+	c = Validate(in)
+	if r := rowByKey(c.Rows, "flag:--override-generation-config"); r == nil || !r.Ticked || r.Flag[1] != `{"presence_penalty":1.5}` {
+		t.Errorf("the presence penalty the file leaves out: %+v", r)
+	}
+
 	// Parsers from prose, verified.
 	in = base
 	in.Advice = Advice{ReasoningParser: str("qwen3"), ParserQuote: "Use the qwen3 reasoning parser with vLLM"}
@@ -416,8 +426,14 @@ func TestWithoutTheHelperTheMostCompleteCommandIsUsed(t *testing.T) {
 	m := &models.Model{ID: "org/quant"}
 	in := Inputs{Model: m, Card: Card{Raw: raw, Text: raw}, Commands: ExtractCommands(raw), MachineEnv: machineEnv}
 	c := Validate(in)
-	if c.Command == nil || c.Command.Model != "org/quant" || c.Command.Settings().Start.SpeculativeConfig == "" {
+	if c.Command == nil || c.Command.Model != "org/quant" {
 		t.Fatalf("chosen command: %+v", c.Command)
+	}
+	if rowByKey(c.Rows, "field:speculative_config") == nil || rowByKey(c.Rows, "field:tool_call_parser") == nil {
+		t.Errorf("the fullest recipe was not proposed: %+v", c.Rows)
+	}
+	if rowByKey(c.Rows, "field:trust_remote_code") != nil {
+		t.Error("the base model's command was used")
 	}
 	if !noteFor(c.Notes, "", "the most settings") {
 		t.Error("no note of how the command was chosen")
@@ -428,5 +444,54 @@ func TestWithoutTheHelperTheMostCompleteCommandIsUsed(t *testing.T) {
 	in.Advice, in.HasAdvice = Advice{CommandIndex: &one}, true
 	if c := Validate(in); c.Command == nil || c.Command.Settings().Start.ToolCallParser != "" {
 		t.Errorf("the helper chose the first command, and got %+v", c.Command)
+	}
+}
+
+// Qwen3.5-35B-A3B-FP8's card: a base command, then one variant per feature.
+// What the variants add is proposed with the base: tool calling and the MTP
+// head ticked, --language-model-only (vision off) unticked.
+func TestTheVariantsOfTheChosenCommand(t *testing.T) {
+	cmd := "vllm serve Qwen/Qwen3.5-35B-A3B-FP8 --port 8000 --tensor-parallel-size 8 --max-model-len 262144 --reasoning-parser qwen3"
+	raw := "```\n" + cmd + "\n```\n\n```\n" + cmd + " --enable-auto-tool-choice --tool-call-parser qwen3_coder\n```\n\n" +
+		"```\n" + cmd + ` --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}'` + "\n```\n\n" +
+		"```\n" + cmd + " --language-model-only\n```\n\n" +
+		"```\nvllm serve Qwen/Qwen3.5-35B-A3B-FP8 --tensor-parallel-size 8 --enforce-eager\n```\n"
+	m := &models.Model{ID: "Qwen/Qwen3.5-35B-A3B-FP8"}
+	one := 1
+	in := Inputs{Model: m, Card: Card{Raw: raw, Text: raw}, Commands: ExtractCommands(raw), MachineEnv: machineEnv,
+		HasAdvice: true, Advice: Advice{CommandIndex: &one, ToolCallParser: str("qwen3_coder"), ParserQuote: "--tool-call-parser qwen3_coder"}}
+	c := Validate(in)
+
+	for key, ticked := range map[string]bool{
+		"field:reasoning_parser": true, "field:enable_auto_tool_choice": true, "field:tool_call_parser": true,
+		"field:speculative_config": true, "field:language_model_only": false,
+	} {
+		r := rowByKey(c.Rows, key)
+		if r == nil || r.Ticked != ticked {
+			t.Errorf("%s: %+v, want ticked=%v", key, r, ticked)
+		}
+	}
+	if r := rowByKey(c.Rows, "field:speculative_config"); r == nil || !strings.Contains(r.Value, "qwen3_next_mtp") {
+		t.Errorf("speculative config: %+v", r)
+	}
+	// The last command does not contain the chosen one: not a variant.
+	if rowByKey(c.Rows, "field:enforce_eager") != nil {
+		t.Error("a command that is not a variant added a row")
+	}
+	// Without the helper, the base is chosen: its variants bring everything,
+	// where the richest single variant would bring only its own.
+	in.HasAdvice, in.Advice = false, Advice{}
+	if c := Validate(in); c.Command == nil || c.Command.Settings().Start.ToolCallParser != "" || rowByKey(c.Rows, "field:speculative_config") == nil {
+		t.Errorf("without the helper: %+v", c.Command)
+	}
+
+	n := 0
+	for _, r := range Validate(in).Rows {
+		if r.Key == "field:tool_call_parser" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d tool-call parser rows", n)
 	}
 }
