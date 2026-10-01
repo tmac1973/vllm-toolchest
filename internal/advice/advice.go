@@ -643,6 +643,22 @@ var rules = []rule{
 		},
 	},
 	{
+		// The engine failed while building the speculative config, before any
+		// weights loaded: the draft is the problem, not the model. Seen with
+		// tcclaviger's Gemma 4 and its bundled EAGLE-3 drafter, where the
+		// check read the target's num_key_value_heads and Gemma 4's per-layer
+		// config refused. Whatever the exception, the traceback passes here.
+		hint: "create_speculative_config",
+		match: func(line string) *Item {
+			return &Item{
+				Severity: Error,
+				Message:  "The engine failed while setting up speculative decoding, before loading the model. The model itself may serve without it.",
+				Field:    "speculative_config",
+				Line:     line,
+			}
+		},
+	},
+	{
 		hint: "out of memory",
 		match: func(line string) *Item {
 			return &Item{

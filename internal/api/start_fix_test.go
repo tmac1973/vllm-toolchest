@@ -147,3 +147,23 @@ func TestAStartThatRanOutOfContextOnVLLM029(t *testing.T) {
 		t.Fatalf("fix = %+v", fix)
 	}
 }
+
+// tcclaviger's Gemma 4 with its bundled EAGLE-3 drafter stopped while the
+// engine built the speculative config, before the model loaded. The fix
+// offers to serve without it, and applying it removes it.
+func TestASpeculativeConfigThatFailsIsRemoved(t *testing.T) {
+	spec := `{"method": "eagle3", "model": "` + t.TempDir() + `", "num_speculative_tokens": 3}`
+	s, m := failingServer(t,
+		`  File "/opt/vllm/lib/python3.14/site-packages/vllm/engine/arg_utils.py", line 2086, in create_speculative_config`,
+		models.VLLMConfig{MaxModelLen: 262144, MaxNumSeqs: 16, SpeculativeConfig: spec})
+	fix := s.startFixFor(m)
+	if fix == nil || len(fix.Changes) != 1 || fix.Changes[0].Field != "speculative_config" || fix.Changes[0].Proposed != "removed" ||
+		!strings.Contains(fix.Why, "speculative decoding") {
+		t.Fatalf("fix = %+v", fix)
+	}
+	post(s, "/api/models/autoconfig/fix?id=org/failing", url.Values{})
+	m, _ = s.registry.Get("org/failing")
+	if m.VLLMConfig.SpeculativeConfig != "" || m.VLLMConfig.MaxModelLen != 262144 {
+		t.Errorf("config: %+v", m.VLLMConfig)
+	}
+}
