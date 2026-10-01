@@ -450,7 +450,7 @@ func (v *validator) speculative(chosen *Command, start process.VLLMStartConfig) 
 		return
 	}
 	if !v.verified(a.SpeculativeQuote) {
-		v.unverified("draft method", *a.DraftMethod)
+		v.unverified("draft method", *a.DraftMethod, a.SpeculativeQuote)
 		return
 	}
 	switch *a.DraftMethod {
@@ -538,7 +538,7 @@ func (v *validator) samplingFromProse(chosen *Command) {
 		return
 	}
 	if !v.verified(a.SamplingQuote) {
-		v.unverified("sampling values", "")
+		v.unverified("sampling values", "", a.SamplingQuote)
 		return
 	}
 	// The sentence has to state each value, not merely exist: a value the
@@ -622,7 +622,7 @@ func (v *validator) parsersFromProse(start process.VLLMStartConfig) {
 		return
 	}
 	if !v.verified(a.ParserQuote) {
-		v.unverified("parser", "")
+		v.unverified("a parser", "", a.ParserQuote)
 		return
 	}
 	quote := clip(a.ParserQuote, maxQuote)
@@ -676,12 +676,21 @@ func (v *validator) verified(quote string) bool {
 	return quoteInCard(v.plain, quote)
 }
 
-func (v *validator) unverified(what, value string) {
+// unverified reports a reading whose cited sentence is not in the card, and
+// shows the sentence, so the operator can see what the helper claimed and
+// judge for themselves -- and so a check that is too strict can be noticed.
+func (v *validator) unverified(what, value, quote string) {
 	msg := "The helper reported " + what
 	if value != "" {
 		msg += " " + value
 	}
-	v.note("", originCard, msg+", but the sentence it cited is not in the card, so it was not used.")
+	msg += ", but the sentence it cited is not in the card, so it was not used."
+	if q := strings.TrimSpace(quote); q != "" {
+		msg += " It cited: “" + clip(q, 200) + "”"
+	} else {
+		msg += " It cited nothing."
+	}
+	v.note("", originCard, msg)
 }
 
 var spaceRuns = regexp.MustCompile(`\s+`)

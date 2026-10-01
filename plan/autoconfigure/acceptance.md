@@ -5,6 +5,44 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Second run on compute, 2026-10-01
+
+Deployed after PR #47 (the PLE default, value-in-quote and markdown fixes).
+
+- **MoE, re-run from defaults: met.** Planned four cards, 262,144 tokens,
+  fp8, room for 2.6 full-context requests; saved, applied, and **started on
+  the first attempt** (4 min 11 s). The earlier reading of its card was
+  reused from the saved Autoconfig profile, so the helper was not loaded and
+  nothing was interrupted.
+- **Refinement: met on hardware.** With the autoconfigured 27B's context
+  lowered by hand to 65,536, Configure said "Measured on a real start ...
+  Context can be 262,144 tokens (now 65,536)"; the review showed the hardware
+  table from the measurement; Apply restored 262,144 and the notice cleared.
+- **Failed start, unknown flag: met on hardware.** Started with
+  `--definitely-not-a-flag`; Configure showed the engine's line and offered
+  to remove the flag; Apply removed only that flag and the notice cleared.
+- **Failed start, context too long: not met; fixed.** Started at two cards,
+  0.76 of each, and 262,144 tokens. vLLM 0.29 refused with "the estimated
+  maximum model length is 214240", a wording the advice rules did not know,
+  so the notice showed the line with nothing to apply. A rule for it now
+  proposes 214,016. Not re-run.
+- The MoE's sampling and parser readings were again rejected as "not in the
+  card". The likely quotes all match the card as normalised, so the helper
+  probably paraphrased; the rejection note now shows the cited sentence, so
+  the next run will say which.
+- Afterwards both models are on `Hand-tuned` again. The engine is left in
+  the error state of the last deliberate failure: Stop refuses from that
+  state, and the next Start clears it.
+
+| criterion (overview) | status |
+|---|---|
+| 27B starts first time after Save and apply | met (first run) |
+| MoE starts first time after Save and apply | **met** |
+| Same parsers, draft, offload flags, env; at least context and cap | met for the card half of both; the MoE's hand config also has prefix caching and three tunable-op variables the card does not name |
+| Single-card host | not yet run |
+| Interrupting a serving model and restoring it | met (first run) |
+| Failed-start and refinement notices | **met on hardware**, bar the 0.29 wording, now fixed |
+
 ## Run on compute, 2026-10-01
 
 Deployed build `816cfe2` (PR #45), image `rdna4-clav`, vLLM 0.29.0.dev0. Both
