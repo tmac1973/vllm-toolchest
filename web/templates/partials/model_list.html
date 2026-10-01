@@ -76,6 +76,16 @@
                     Configure
                 </button>
                 {{- end}}
+                {{- if .Autoconfigurable}}
+                <button type="button" class="outline"
+                        title="Propose a configuration from the model card and this machine's cards, to review before anything changes"
+                        hx-get="/api/models/autoconfig?id={{.ID}}"
+                        hx-target="#autoconfig-{{.SafeID}}"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="let t=document.getElementById('autoconfig-{{.SafeID}}'); if(t.innerHTML.trim()){t.innerHTML=''; event.preventDefault();}">
+                    Autoconfigure
+                </button>
+                {{- end}}
                 {{- if and .URL (not .Orphaned)}}
                 {{/* Asks the Hub what has changed since this was downloaded.
                      Nothing is fetched until the panel it opens is confirmed. */}}
@@ -137,6 +147,7 @@
     </div>
     <div class="model-card-config" id="config-{{.SafeID}}"></div>
     <div class="model-card-config" id="update-{{.SafeID}}"></div>
+    <div class="model-card-config" id="autoconfig-{{.SafeID}}"></div>
 </article>
 {{- end}}
 

@@ -158,6 +158,9 @@ func (s *Server) validateJobRequest(w http.ResponseWriter, r *http.Request, req 
 }
 
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	req, ok := s.parseJobRequest(w, r)
 	if !ok {
 		return

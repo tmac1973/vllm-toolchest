@@ -16,6 +16,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/internal/llmcall"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
@@ -49,6 +50,20 @@ type Server struct {
 	// render in the "no card inventory" state and the goldens would record
 	// nothing about fit at all.
 	gpuInvOverride *models.GPUInventory
+
+	// flagsState is which serve flags the installed vLLM accepts.
+	flagsState serveFlagsState
+
+	// lease marks the engine as borrowed for another model.
+	lease engineLease
+	// wantHelper is set while Settings is downloading the helper model.
+	wantHelper helperWanted
+
+	// autoconf is the autoconfigure run, llm the client it asks the helper
+	// with, and cards the model cards it has fetched recently.
+	autoconf autoconfigState
+	llm      *llmcall.Client
+	cards    cachedCards
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -64,7 +79,6 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 
 	reg := models.NewRegistry(cfg.DataDir, cfg.ModelsPath())
 	dl := huggingface.NewDownloader(cfg.DataDir, cfg.ModelsPath(), cfg.HFToken)
-	dl.SetOnComplete(recordTransfer(reg))
 
 	s := &Server{
 		cfg:        cfg,
@@ -82,6 +96,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 	if len(env.Launcher) > 0 {
 		s.process.SetLauncher(process.Launcher{Bin: env.Launcher[0], Args: env.Launcher[1:]})
 	}
+	dl.SetOnComplete(s.onTransferComplete)
 	s.bench = benchmark.NewStore(cfg.DataDir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
@@ -257,6 +272,15 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/profiles/apply", s.handleApplyModelProfile)
 			r.Post("/profiles/delete", s.handleDeleteModelProfile)
 			r.Delete("/delete", s.handleDeleteModel)
+			r.Get("/autoconfig", s.handleAutoconfigDialog)
+			r.Post("/autoconfig/start", s.handleAutoconfigStart)
+			r.Get("/autoconfig/status", s.handleAutoconfigStatus)
+			r.Post("/autoconfig/save", s.handleAutoconfigSave)
+			r.Post("/autoconfig/discard", s.handleAutoconfigDiscard)
+			r.Post("/autoconfig/draft", s.handleAutoconfigDraft)
+			r.Post("/autoconfig/fix", s.handleApplyStartFix)
+			r.Get("/autoconfig/refine", s.handleRefinementReview)
+			r.Post("/autoconfig/refine", s.handleApplyRefinement)
 		})
 		r.Route("/hf", func(r chi.Router) {
 			r.Get("/search", s.handleHFSearch)
@@ -317,6 +341,9 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/", s.handleGetSettings)
 			r.Put("/", s.handleUpdateSettings)
 			r.Post("/test-connection", s.handleTestConnection)
+			r.Get("/helper", s.handleHelperPanel)
+			r.Post("/helper/download", s.handleDownloadHelper)
+			r.Delete("/helper", s.handleRemoveHelper)
 		})
 		r.Get("/backup", s.handleBackupExport)
 		r.Post("/restore", s.handleRestore)

@@ -120,3 +120,23 @@ func TestARunningEngineDoesNotCompeteWithItself(t *testing.T) {
 		t.Errorf("with the engine down, free = %.2f; resident memory must still count", down.FreePerCardGB)
 	}
 }
+
+// The workstation that found this: a Ryzen 9800X3D's iGPU (2 GB) beside an
+// RX 9070 XT. Counted as a card it was the smallest one, and every fit on the
+// machine was judged against 2 GB.
+func TestAnIntegratedGPUBesideADiscreteOneIsNotACard(t *testing.T) {
+	gpus := []monitor.GPUInfo{
+		{Index: 0, Name: "AMD Radeon RX 9070 XT", Arch: "gfx1201", VRAMTotalMB: 16304},
+		{Index: 1, Name: "AMD Ryzen 7 9800X3D 8-Core Processor", Arch: "gfx1036", IsIGPU: true, VRAMTotalMB: 2048},
+	}
+	inv := gpuInventoryFrom(gpus, false)
+	if inv.Count != 1 || inv.PerCardGB < 15.9 {
+		t.Errorf("inventory = %+v; want the one 16 GB card", inv)
+	}
+
+	// A Strix Halo has nothing else: its iGPU is the card.
+	halo := []monitor.GPUInfo{{Index: 0, Name: "AMD Radeon 8060S", Arch: "gfx1151", IsIGPU: true, VRAMTotalMB: 98304}}
+	if inv := gpuInventoryFrom(halo, false); inv.Count != 1 || inv.PerCardGB < 95 {
+		t.Errorf("an APU-only host: %+v", inv)
+	}
+}

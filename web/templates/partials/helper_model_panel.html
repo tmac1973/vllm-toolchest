@@ -1,0 +1,23 @@
+{{define "helper_model_panel" -}}
+<div id="helper-model-panel">
+  <p>Autoconfigure uses a small model of its own, <code>{{.Repo}}</code>, to read a model's card: which of its
+     commands to use, and the advice it gives in prose. While it reads, whatever model is serving is stopped
+     and then restarted. Without it, autoconfigure still uses the card's own command and this machine's cards.</p>
+  {{- if .Message}}
+  <p class="ac-msg {{if eq .MessageKind "error"}}ac-error{{else}}ac-ok{{end}}">{{.Message}}</p>
+  {{- end}}
+  {{- if .TooLarge}}
+  <p class="ac-msg ac-warn">&#9888; {{.TooLarge}} Autoconfigure will work from this machine and the card's command alone.</p>
+  {{- end}}
+  {{- if .DownloadID}}
+  {{template "download_started" .DownloadID}}
+  {{- else if .Installed}}
+  <p><strong>Installed</strong>, {{.SizeLabel}} on disk.</p>
+  <button class="secondary outline" hx-delete="/api/settings/helper" hx-target="#helper-model-panel" hx-swap="outerHTML"
+          hx-confirm="Remove the helper model and delete its files?">Remove</button>
+  {{- else}}
+  <p>Not installed. It is about 8 GB.</p>
+  <button hx-post="/api/settings/helper/download" hx-target="#helper-model-panel" hx-swap="outerHTML">Download the helper model</button>
+  {{- end}}
+</div>
+{{- end}}

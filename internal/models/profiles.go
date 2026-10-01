@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -35,6 +36,62 @@ type ConfigProfile struct {
 	// another image is worth flagging before it is restored.
 	Variant        string `json:"variant,omitempty"`
 	VariantVersion string `json:"variant_version,omitempty"`
+
+	// Source says what wrote the profile: empty for one saved from the panel,
+	// ProfileSourceAutoconfig for one autoconfigure proposed. Notes explain
+	// its settings, and Autoconfig records what the proposal was built from.
+	//
+	// A profile saved from the panel carries none of these. Saving over the
+	// Autoconfig profile by hand therefore drops them, which is right: the
+	// config is no longer what autoconfigure proposed.
+	Source     string            `json:"source,omitempty"`
+	Notes      []ProfileNote     `json:"notes,omitempty"`
+	Autoconfig *AutoconfigRecord `json:"autoconfig,omitempty"`
+}
+
+const (
+	// ProfileSourceManual is a profile saved from the config panel.
+	ProfileSourceManual = ""
+	// ProfileSourceAutoconfig is one autoconfigure wrote.
+	ProfileSourceAutoconfig = "autoconfig"
+)
+
+// AutoconfigProfileName is the one profile autoconfigure writes. A second run
+// replaces it.
+const AutoconfigProfileName = "Autoconfig"
+
+// ProfileNote is one line of explanation attached to a profile.
+type ProfileNote struct {
+	// Field is the VLLMConfig JSON key the note is about, or "" for a note
+	// about the proposal as a whole.
+	Field  string `json:"field,omitempty"`
+	Reason string `json:"reason"`
+	// Origin is where the reason came from: "model card", "this machine",
+	// "default" or "helper summary".
+	Origin string `json:"origin"`
+}
+
+// AutoconfigRecord is what an Autoconfig profile was built from, kept so that
+// a later refinement knows what it is refining towards and a later run can
+// reuse a reading of a card that has not changed.
+//
+// These fields were added without a schema version bump, as VLLMConfig.Env
+// and Model.Measured were: they are optional and an older build loads the
+// file without them. The cost is that a build older than this one, rewriting
+// models.json, drops them -- the Autoconfig profile survives as a plain
+// profile with its config intact and its explanation gone.
+type AutoconfigRecord struct {
+	At    time.Time    `json:"at"`
+	Class ContextClass `json:"class"`
+	// Width is "all" or "narrow": which of the planner's two options was
+	// saved.
+	Width string `json:"width"`
+	// FirstGuess marks hardware settings made before any measurement applied.
+	FirstGuess  bool     `json:"first_guess,omitempty"`
+	CardSources []string `json:"card_sources,omitempty"`
+	CardHash    string   `json:"card_hash,omitempty"`
+	// Advice is the helper's reading of the card, kept raw.
+	Advice json.RawMessage `json:"advice,omitempty"`
 }
 
 // ProfileMeta is the provenance the registry cannot work out for itself.
@@ -76,12 +133,9 @@ func (r *Registry) findProfileLocked(modelID, name string) int {
 // model's active profile. An existing name is overwritten and reported by
 // replaced: the caller says so afterwards rather than asking first.
 func (r *Registry) SaveProfile(modelID, name string, meta ProfileMeta) (replaced bool, err error) {
-	name = NormalizeProfileName(name)
-	if name == "" {
-		return false, ErrProfileName
-	}
-	if n := len([]rune(name)); n > MaxProfileNameLen {
-		return false, fmt.Errorf("a profile name can be at most %d characters; this one is %d", MaxProfileNameLen, n)
+	name, err = checkProfileName(name)
+	if err != nil {
+		return false, err
 	}
 
 	r.mu.Lock()
@@ -102,21 +156,69 @@ func (r *Registry) SaveProfile(modelID, name string, meta ProfileMeta) (replaced
 		Variant:        meta.Variant,
 		VariantVersion: meta.VariantVersion,
 	}
-	if i := r.findProfileLocked(modelID, name); i >= 0 {
-		r.profiles[i] = p
-		replaced = true
-	} else {
-		r.profiles = append(r.profiles, p)
-		sort.Slice(r.profiles, func(i, j int) bool {
-			a, b := r.profiles[i], r.profiles[j]
-			if a.ModelID != b.ModelID {
-				return a.ModelID < b.ModelID
-			}
-			return profileKey(a.Name) < profileKey(b.Name)
-		})
-	}
+	replaced = r.putProfileLocked(p)
 	m.ActiveProfile = name
 	return replaced, r.save()
+}
+
+// SaveProfileFrom stores a profile whose config is not the live one -- what
+// autoconfigure proposes -- under a name. The model's ID, the name and the
+// time are set here, whatever p carried.
+//
+// Unlike SaveProfile it neither reads nor changes the live config, and it does
+// not make the profile active: saving a proposal must not change what will be
+// launched. ApplyProfile is what makes it live.
+func (r *Registry) SaveProfileFrom(modelID, name string, p ConfigProfile) (replaced bool, err error) {
+	name, err = checkProfileName(name)
+	if err != nil {
+		return false, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return false, err
+	}
+	if _, ok := r.models[modelID]; !ok {
+		return false, fmt.Errorf("model not found: %s", modelID)
+	}
+
+	p.ModelID = modelID
+	p.Name = name
+	p.SavedAt = time.Now().UTC()
+	replaced = r.putProfileLocked(p)
+	return replaced, r.save()
+}
+
+// checkProfileName normalises a name and refuses one that is empty or too
+// long.
+func checkProfileName(name string) (string, error) {
+	name = NormalizeProfileName(name)
+	if name == "" {
+		return "", ErrProfileName
+	}
+	if n := len([]rune(name)); n > MaxProfileNameLen {
+		return "", fmt.Errorf("a profile name can be at most %d characters; this one is %d", MaxProfileNameLen, n)
+	}
+	return name, nil
+}
+
+// putProfileLocked replaces the profile with p's model and folded name, or
+// inserts p in order, and reports whether it replaced one.
+func (r *Registry) putProfileLocked(p ConfigProfile) (replaced bool) {
+	if i := r.findProfileLocked(p.ModelID, p.Name); i >= 0 {
+		r.profiles[i] = p
+		return true
+	}
+	r.profiles = append(r.profiles, p)
+	sort.Slice(r.profiles, func(i, j int) bool {
+		a, b := r.profiles[i], r.profiles[j]
+		if a.ModelID != b.ModelID {
+			return a.ModelID < b.ModelID
+		}
+		return profileKey(a.Name) < profileKey(b.Name)
+	})
+	return false
 }
 
 // Profiles returns a copy of one model's profiles, ordered by name.

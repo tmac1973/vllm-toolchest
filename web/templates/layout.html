@@ -698,6 +698,32 @@
         .model-profiles .mp-ok { color: var(--pico-ins-color); }
         .model-profiles .mp-warn { color: var(--graphite-warn, var(--pico-primary)); }
         .model-profiles .mp-error { color: var(--pico-del-color); }
+        /* Autoconfigure's panel under a model card, and the Settings panel
+           for its helper model. */
+        .ac-msg { margin: 0 0 0.5rem; font-size: 0.8rem; font-weight: 600; }
+        .ac-ok { color: var(--pico-ins-color); }
+        .ac-warn { color: var(--graphite-warn, var(--pico-primary)); }
+        .ac-error { color: var(--pico-del-color); }
+        .autoconfig h6 { margin: 1rem 0 0.4rem; }
+        .autoconfig fieldset label { margin-bottom: 0.2rem; }
+        .autoconfig-width { margin-bottom: 0.5rem; }
+        .autoconfig-table { font-size: 0.8rem; margin-bottom: 0.5rem; }
+        .autoconfig-table td, .autoconfig-table th { padding: 0.3rem 0.4rem; vertical-align: top; }
+        .autoconfig-table .ac-value { word-break: break-all; }
+        .autoconfig-table details { margin: 0.2rem 0 0; }
+        .autoconfig-table details summary { font-size: 0.75rem; }
+        .autoconfig-warning td { background: color-mix(in srgb, var(--graphite-warn, var(--pico-primary)) 12%, transparent); }
+        .autoconfig .ac-notes { font-size: 0.8rem; }
+        .autoconfig .ac-buttons { margin-top: 0.75rem; width: auto; }
+        .ac-notice {
+            border: 1px solid var(--pico-muted-border-color); border-radius: 6px;
+            padding: 0.6rem 0.8rem; margin-bottom: 0.75rem;
+        }
+        .autoconfig-suggestion {
+            display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+            border: 1px solid var(--pico-muted-border-color); border-radius: 6px;
+            padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.8rem;
+        }
         .model-profiles .mp-from { color: var(--pico-muted-color); }
 
         /* Available Models card (on the Server page) — cap the list height so

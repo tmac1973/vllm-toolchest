@@ -75,6 +75,7 @@ func main() {
 	// and must not hold up the listener. Until it lands, the architecture
 	// -derived fallback stands.
 	go resolveDeviceName(cfg, env, srv)
+	go srv.RefreshServeFlags()
 
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,

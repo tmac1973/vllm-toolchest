@@ -1,0 +1,8 @@
+<div id="helper-model-panel">
+  <p>Autoconfigure uses a small model of its own, <code>Qwen/Qwen3-4B-Instruct-2507</code>, to read a model's card: which of its
+     commands to use, and the advice it gives in prose. While it reads, whatever model is serving is stopped
+     and then restarted. Without it, autoconfigure still uses the card's own command and this machine's cards.</p>
+  <p class="ac-msg ac-warn">&#9888; The helper model needs about 9.6 GB and the smallest card offers 7.2 GB. Autoconfigure will work from this machine and the card's command alone.</p>
+  <p>Not installed. It is about 8 GB.</p>
+  <button hx-post="/api/settings/helper/download" hx-target="#helper-model-panel" hx-swap="outerHTML">Download the helper model</button>
+</div>

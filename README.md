@@ -11,6 +11,7 @@ vllm-toolchest packages vLLM into a Docker/Podman container with a full web inte
 - **Model management** -- register, configure, and delete local models
 - **HuggingFace integration** -- search and download models directly from HF Hub
 - **Per-model vLLM config** -- dtype, context length, tensor parallelism, quantization, memory utilization
+- **Autoconfigure** -- one button proposes a whole config from the model card's own serve command and this machine's GPUs, read by a small helper model and reviewed setting by setting before anything is applied; a real start then refines it
 - **Process control** -- start, stop, restart vLLM with live log streaming
 - **GPU monitoring** -- real-time VRAM usage and GPU utilization (NVIDIA and AMD)
 - **Tool use support** -- auto tool choice with configurable tool call parsers

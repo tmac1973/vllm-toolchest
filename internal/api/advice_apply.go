@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // applyAdvice writes one suggested value into one model's config.
@@ -108,6 +109,15 @@ func applyToConfig(cfg models.VLLMConfig, field, value string) (models.VLLMConfi
 			return cfg, fmt.Errorf("%q is not a fraction between 0 and 1", value)
 		}
 		cfg.GPUMemoryUtilization = f
+
+	case "extra_flags_remove":
+		if !strings.HasPrefix(value, "--") {
+			return cfg, fmt.Errorf("%q is not a flag", value)
+		}
+		if !process.HasFlag(cfg.ExtraFlags, value) {
+			return cfg, fmt.Errorf("%s is not in the extra flags", value)
+		}
+		cfg.ExtraFlags = process.RemoveFlag(cfg.ExtraFlags, value)
 
 	default:
 		return cfg, fmt.Errorf("%s is not a setting this can change", field)

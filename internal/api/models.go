@@ -45,6 +45,9 @@ type modelRow struct {
 	// TunableShapes is how many distinct matmul shapes tuning would measure,
 	// shown in the button's tooltip so the cost is visible before clicking.
 	TunableShapes int
+	// Autoconfigurable is a model autoconfigure can propose a config for:
+	// not a draft, not missing its files.
+	Autoconfigurable bool
 
 	// Draft marks a drafter for speculative decoding. It is listed because
 	// it is on disk and can be updated or removed, and it is not something
@@ -67,6 +70,10 @@ func (s *Server) modelRows() []modelRow {
 
 	rows := make([]modelRow, 0, len(list))
 	for _, m := range list {
+		// The helper is the app's, managed from Settings; it has no card.
+		if m.Helper {
+			continue
+		}
 		row := modelRow{
 			ID:          m.ID,
 			SafeID:      safeID(m.ID),
@@ -79,6 +86,7 @@ func (s *Server) modelRows() []modelRow {
 			Active:      m.ID == s.cfg.ActiveModel,
 			Serving:     m.ID == servingID,
 		}
+		row.Autoconfigurable = !m.IsDraft() && !m.Orphaned
 		if m.IsDraft() {
 			// None of what follows describes a draft: it has no launch
 			// config of its own, so no VRAM figure, tools badge or tuning.
@@ -143,6 +151,10 @@ func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if m.IsDraft() {
 		http.Error(w, "a draft model cannot be served on its own", http.StatusConflict)
+		return
+	}
+	if m.Helper {
+		http.Error(w, "the helper model is not served on its own", http.StatusConflict)
 		return
 	}
 

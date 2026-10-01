@@ -1,6 +1,8 @@
 package models
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -227,5 +229,159 @@ func TestProfilesOnAReadOnlyRegistry(t *testing.T) {
 	}
 	if _, ok := reg.Profile("org/model", "kept"); !ok {
 		t.Error("profiles from a read-only file should still be listed")
+	}
+}
+
+// An autoconfigured proposal is saved before anyone chooses to use it, so
+// saving must not touch what will be launched.
+func TestSaveProfileFromLeavesTheLiveConfig(t *testing.T) {
+	live := VLLMConfig{MaxModelLen: 4096}
+	reg, _ := profileRegistry(t, live)
+	reg.SaveProfile("org/model", "mine", ProfileMeta{})
+
+	proposed := ConfigProfile{
+		ModelID: "someone/else", Name: "ignored", // overwritten by the registry
+		Config: VLLMConfig{MaxModelLen: 131072, TensorParallelSize: 4},
+		Source: ProfileSourceAutoconfig,
+		Notes:  []ProfileNote{{Field: "max_model_len", Reason: "fits", Origin: "this machine"}},
+		Autoconfig: &AutoconfigRecord{
+			Class: ContextLong, Width: "all", FirstGuess: true,
+			CardHash: "abc", Advice: []byte(`{"temperature":0.7}`),
+		},
+	}
+	replaced, err := reg.SaveProfileFrom("org/model", AutoconfigProfileName, proposed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced {
+		t.Error("a new name should not report a replacement")
+	}
+
+	m, _ := reg.Get("org/model")
+	if m.VLLMConfig != live {
+		t.Errorf("saving a proposal changed the live config: %+v", m.VLLMConfig)
+	}
+	if name, modified := reg.ActiveProfile("org/model"); name != "mine" || modified {
+		t.Errorf("ActiveProfile() = %q, %v; want mine, false", name, modified)
+	}
+
+	p, ok := reg.Profile("org/model", "autoconfig")
+	if !ok {
+		t.Fatal("the proposal was not stored")
+	}
+	if p.ModelID != "org/model" || p.Name != AutoconfigProfileName || p.SavedAt.IsZero() {
+		t.Errorf("identity not set by the registry: %+v", p)
+	}
+	if p.Config != proposed.Config || p.Source != ProfileSourceAutoconfig || len(p.Notes) != 1 || p.Autoconfig == nil {
+		t.Errorf("proposal not stored as given: %+v", p)
+	}
+
+	// Applying is what makes it live.
+	if _, err := reg.ApplyProfile("org/model", AutoconfigProfileName); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = reg.Get("org/model")
+	if m.VLLMConfig != proposed.Config {
+		t.Errorf("after apply, live config = %+v, want the proposal", m.VLLMConfig)
+	}
+	if name, modified := reg.ActiveProfile("org/model"); name != AutoconfigProfileName || modified {
+		t.Errorf("after apply, ActiveProfile() = %q, %v", name, modified)
+	}
+
+	// A second run replaces it.
+	replaced, err = reg.SaveProfileFrom("org/model", AutoconfigProfileName, proposed)
+	if err != nil || !replaced {
+		t.Errorf("second save: replaced=%v err=%v, want a replacement", replaced, err)
+	}
+	if n := len(reg.Profiles("org/model")); n != 2 {
+		t.Errorf("%d profiles, want mine and Autoconfig", n)
+	}
+}
+
+func TestSaveProfileFromRefuses(t *testing.T) {
+	reg, _ := profileRegistry(t, VLLMConfig{})
+	if _, err := reg.SaveProfileFrom("org/missing", "x", ConfigProfile{}); err == nil {
+		t.Error("saved a profile for a model that does not exist")
+	}
+	if _, err := reg.SaveProfileFrom("org/model", "  ", ConfigProfile{}); !errors.Is(err, ErrProfileName) {
+		t.Errorf("empty name: err = %v, want ErrProfileName", err)
+	}
+
+	dir := t.TempDir()
+	writeRegistryFile(t, dir, fmt.Sprintf(`{"schema_version": %d,
+		"models": {"org/model": {"id": "org/model"}}}`, schemaVersion+1))
+	ro := NewRegistry(dir, filepath.Join(dir, "models"))
+	if _, err := ro.SaveProfileFrom("org/model", "x", ConfigProfile{}); err == nil {
+		t.Error("SaveProfileFrom succeeded on a read-only registry")
+	}
+	if len(ro.Profiles("org/model")) != 0 {
+		t.Error("a refused save left a profile in memory")
+	}
+}
+
+// Saving over the Autoconfig profile by hand keeps the name and drops the
+// explanation: the config is no longer what autoconfigure proposed.
+func TestSavingOverAnAutoconfigProfileDropsItsRecord(t *testing.T) {
+	reg, _ := profileRegistry(t, VLLMConfig{MaxModelLen: 4096})
+	reg.SaveProfileFrom("org/model", AutoconfigProfileName, ConfigProfile{
+		Source: ProfileSourceAutoconfig, Autoconfig: &AutoconfigRecord{Class: ContextMax},
+	})
+	reg.SaveProfile("org/model", AutoconfigProfileName, ProfileMeta{})
+
+	p, _ := reg.Profile("org/model", AutoconfigProfileName)
+	if p.Source != ProfileSourceManual || p.Autoconfig != nil || p.Notes != nil {
+		t.Errorf("a hand-saved profile kept autoconfigure's provenance: %+v", p)
+	}
+}
+
+func TestProfileProvenanceSurvivesAReload(t *testing.T) {
+	reg, dir := profileRegistry(t, VLLMConfig{})
+	advice := `{"temperature":0.6,"top_p":0.95}`
+	reg.SaveProfileFrom("org/model", AutoconfigProfileName, ConfigProfile{
+		Config: VLLMConfig{MaxModelLen: 32768},
+		Source: ProfileSourceAutoconfig,
+		Notes: []ProfileNote{
+			{Field: "reasoning_parser", Reason: "the card's command", Origin: "model card"},
+			{Reason: "first guess", Origin: "this machine"},
+		},
+		Autoconfig: &AutoconfigRecord{
+			Class: ContextMedium, Width: "narrow", FirstGuess: true,
+			CardSources: []string{"org/model", "org/base"}, CardHash: "0123456789abcdef",
+			Advice: []byte(advice),
+		},
+	})
+
+	reloaded := NewRegistry(dir, filepath.Join(dir, "models"))
+	p, ok := reloaded.Profile("org/model", AutoconfigProfileName)
+	if !ok {
+		t.Fatal("profile lost on reload")
+	}
+	r := p.Autoconfig
+	if r == nil || r.Class != ContextMedium || r.Width != "narrow" || !r.FirstGuess ||
+		len(r.CardSources) != 2 || r.CardHash != "0123456789abcdef" {
+		t.Fatalf("record did not round-trip: %+v", r)
+	}
+	// The registry writes indented JSON, which re-indents the raw advice; the
+	// content is what has to survive.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, r.Advice); err != nil || compact.String() != advice {
+		t.Errorf("advice = %s, want %s (%v)", r.Advice, advice, err)
+	}
+	if len(p.Notes) != 2 || p.Notes[0].Field != "reasoning_parser" || p.Notes[1].Origin != "this machine" {
+		t.Errorf("notes did not round-trip: %+v", p.Notes)
+	}
+}
+
+func TestContextClass(t *testing.T) {
+	for in, want := range map[string]ContextClass{
+		"short": ContextShort, "medium": ContextMedium, "long": ContextLong, "max": ContextMax,
+		"": ContextMedium, "bogus": ContextMedium,
+	} {
+		if got := ParseContextClass(in); got != want {
+			t.Errorf("ParseContextClass(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if ContextMax.Tokens() != 0 || ContextShort.Tokens() != 8192 || ContextLong.Tokens() != 131072 {
+		t.Error("class token targets are wrong")
 	}
 }

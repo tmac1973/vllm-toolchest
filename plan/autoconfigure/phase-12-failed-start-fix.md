@@ -150,7 +150,7 @@ With a `fakevllm` script that prints canned failure output and exits
 non-zero, as `measurement_test.go` does for successes:
 
 - The engine's "is larger than the maximum number of tokens" line with a
-  ceiling of 187,432: the fix proposes `max_model_len` 186,368 and nothing
+  ceiling of 187,432: the fix proposes `max_model_len` 187,392 and nothing
   else. Applying it sets the live config, and the notice is gone on the next
   render.
 - "unrecognized arguments: --enable-reasoning": the fix removes that flag and

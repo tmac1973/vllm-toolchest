@@ -41,8 +41,16 @@ things that turned out to be wrong.
   the profile line that makes a wrong recommendation traceable, the four
   intent chips, and the verified and unverified lists.
 - [`phase-19-fit-handoff.md`](phase-19-fit-handoff.md) — seed a downloaded
-  model's config from the fit that ranked it. §"What seeding is not" records
-  why measurement does not supersede it, which an earlier draft assumed.
+  model's hardware settings through autoconfigure's planner. §"What seeding
+  is, and what comes after" says how a measurement may later lead to a
+  proposal, by way of autoconfigure.
+- [`autoconfigure/`](autoconfigure/overview.md) — one action that configures a
+  model from its card and this machine: a helper model reads the card, a
+  planner fits the hardware, a review shows every setting before it is
+  applied, and a measured start refines it. Its own phase numbering, 01-14.
+  Phases 01-13 built on the `autoconfigure` branch, 2026-09-30; phase 14's
+  hardware runs are outstanding -- see
+  [`autoconfigure/acceptance.md`](autoconfigure/acceptance.md).
 - [`todo.md`](todo.md) — everything with no phase of its own.
 
 ## Archive

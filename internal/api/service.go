@@ -36,6 +36,9 @@ type serviceStatusView struct {
 }
 
 func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	var req struct {
 		ModelID string `json:"model_id"`
 	}
@@ -83,6 +86,9 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	if err := s.process.Stop(); err != nil {
 		if isHTMX(r) {
 			respondHTML(w)
@@ -102,6 +108,9 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
+	if s.refuseWhileBorrowed(w, r) {
+		return
+	}
 	status := s.process.GetStatus()
 	if status.ModelID == "" {
 		http.Error(w, "no model was running", http.StatusBadRequest)

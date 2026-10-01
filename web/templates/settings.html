@@ -320,6 +320,15 @@
 
 </form>
 
+{{/* Outside the settings form, like Backup below: its buttons act at once
+     and must not autosave the settings with them. */}}
+<article>
+    <header>Helper model</header>
+    <div hx-get="/api/settings/helper" hx-trigger="load" hx-swap="outerHTML">
+        <p><small style="color:var(--pico-muted-color);">Loading&hellip;</small></p>
+    </div>
+</article>
+
 {{/* Outside the settings form: restore is a multipart upload to its own
      endpoint, and a form cannot be nested inside another. */}}
 <article>

@@ -21,7 +21,7 @@ func (s *Server) servable() []*models.Model {
 	all := s.registry.List()
 	out := make([]*models.Model, 0, len(all))
 	for _, m := range all {
-		if !m.IsDraft() {
+		if !m.IsDraft() && !m.Helper {
 			out = append(out, m)
 		}
 	}
@@ -61,6 +61,9 @@ func (s *Server) draftUsers(draft *models.Model) []*models.Model {
 func (s *Server) launchBlocker(m *models.Model) error {
 	if m.IsDraft() {
 		return fmt.Errorf("%s is a draft model: it drafts for another model and cannot be served on its own", displayNameOf(m))
+	}
+	if m.Helper {
+		return fmt.Errorf("%s is the helper model: autoconfigure runs it, and it is not served on its own", displayNameOf(m))
 	}
 	return missingDraft(m.VLLMConfig.SpeculativeConfig)
 }

@@ -50,9 +50,19 @@ func (s *Server) gpuInventory() models.GPUInventory {
 // card counts as empty. With the engine down, anything resident is somebody
 // else's -- a leaked worker from a cancelled job, most often -- and does count.
 func gpuInventoryFrom(gpus []monitor.GPUInfo, engineUp bool) models.GPUInventory {
+	// An integrated GPU beside a discrete one is not somewhere a model runs:
+	// it is a sliver of system memory, and counted as a card it became the
+	// smallest one, so every fit on a desktop with a Ryzen iGPU was judged
+	// against 2 GB. Kept when it is all there is -- a Strix Halo has nothing
+	// else.
+	discrete := false
+	for _, g := range gpus {
+		discrete = discrete || (g.VRAMTotalMB > 0 && !g.IsIGPU)
+	}
+
 	var inv models.GPUInventory
 	for _, g := range gpus {
-		if g.VRAMTotalMB <= 0 {
+		if g.VRAMTotalMB <= 0 || (discrete && g.IsIGPU) {
 			continue
 		}
 		gb := float64(g.VRAMTotalMB) / 1024

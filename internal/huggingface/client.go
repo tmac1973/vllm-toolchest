@@ -526,6 +526,61 @@ func (c *Client) getJSON(ctx context.Context, u string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
+// ModelCard returns a repository's model card, its README.md, as written.
+// A repository with no card returns "" and no error: most of what reads a card
+// can proceed without one.
+func (c *Client) ModelCard(ctx context.Context, modelID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/%s/raw/main/README.md", c.base, modelID), nil)
+	if err != nil {
+		return "", err
+	}
+	c.setAuth(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("model card for %s: HTTP %d", modelID, resp.StatusCode)
+	}
+	// A card is text; a few hundred kilobytes is already an unusually long one.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// BaseModel returns the repository a model says it was made from -- the
+// base_model in its card's metadata -- or "" when it names none or the Hub
+// cannot be asked. The field is a string in some repositories and a list in
+// others; the first entry of a list is taken.
+func (c *Client) BaseModel(ctx context.Context, modelID string) string {
+	var meta struct {
+		CardData struct {
+			BaseModel json.RawMessage `json:"base_model"`
+		} `json:"cardData"`
+	}
+	u := fmt.Sprintf("%s/models/%s?expand[]=cardData", c.apiURL(), modelID)
+	if err := c.getJSON(ctx, u, &meta); err != nil {
+		return ""
+	}
+	raw := meta.CardData.BaseModel
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return one
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) == nil && len(many) > 0 {
+		return many[0]
+	}
+	return ""
+}
+
 func (c *Client) setAuth(req *http.Request) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)

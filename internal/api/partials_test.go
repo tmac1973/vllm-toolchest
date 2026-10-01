@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tmac1973/vllm-toolchest/internal/autoconfig"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
@@ -550,6 +552,116 @@ func TestGoldenPartials(t *testing.T) {
 			partial: "timings_list",
 			data:    timingsView{MinSamples: 10},
 		},
+		{
+			name:    "autoconfig_dialog_nothing_serving",
+			partial: "autoconfig_dialog",
+			data: autoconfigDialogView{ModelID: "org/m", SafeID: "org--m", ModelName: "M",
+				Classes: contextClassOptions(262144), HelperUsable: true},
+		},
+		{
+			name:    "autoconfig_dialog_serving_with_reading",
+			partial: "autoconfig_dialog",
+			data: autoconfigDialogView{ModelID: "org/m", SafeID: "org--m", ModelName: "M",
+				Classes: contextClassOptions(262144), HelperUsable: true, Serving: "Qwen3.8-Flash-Next", HasReading: true},
+		},
+		{
+			name:    "autoconfig_dialog_no_helper",
+			partial: "autoconfig_dialog",
+			data: autoconfigDialogView{ModelID: "org/m", SafeID: "org--m", ModelName: "M",
+				Classes: contextClassOptions(0), HelperMissing: true},
+		},
+		{
+			name:    "autoconfig_dialog_helper_too_large",
+			partial: "autoconfig_dialog",
+			data: autoconfigDialogView{ModelID: "org/m", SafeID: "org--m", ModelName: "M",
+				Classes: contextClassOptions(32768), TooLarge: "The helper model needs about 9.6 GB and the smallest card offers 7.2 GB."},
+		},
+		{
+			name:    "autoconfig_dialog_busy",
+			partial: "autoconfig_dialog",
+			data: autoconfigDialogView{ModelID: "org/m", SafeID: "org--m", ModelName: "M",
+				Classes: contextClassOptions(32768), HelperUsable: true, Busy: "A benchmark is running and using the GPUs."},
+		},
+		{
+			name:    "autoconfig_progress",
+			partial: "autoconfig_progress",
+			data:    autoconfigProgressView{ModelID: "org/m", SafeID: "org--m", ModelName: "M", Progress: "Starting the helper model"},
+		},
+		{
+			name:    "autoconfig_review_two_widths",
+			partial: "autoconfig_review",
+			data:    goldenReview(true),
+		},
+		{
+			name:    "autoconfig_review_with_drafts",
+			partial: "autoconfig_review",
+			data: func() autoconfigReviewView {
+				v := goldenReview(true)
+				v.Suggestions = []autoconfig.DraftSuggestion{
+					{Repo: "org/drafter", SizeLabel: "2.0 GB", Method: "dflash",
+						Why: "The card recommends it for speculative decoding. Download it, then run Autoconfigure again to pair it."},
+					{Repo: "org/old-drafter", Method: "dflash", Installed: true,
+						Why: "it was made for a 48-layer model and this one has 64"},
+				}
+				return v
+			}(),
+		},
+		{
+			name:    "autoconfig_review_unknown_plan",
+			partial: "autoconfig_review",
+			data:    goldenReview(false),
+		},
+		{
+			name:    "autoconfig_hardware_table_pinned_pool",
+			partial: "autoconfig_hardware_table",
+			data: hardwareTable("org--m", models.VLLMConfig{TensorParallelSize: 1, MaxModelLen: 8192, KVCacheMemory: 6 << 30},
+				goldenPlan(), nil),
+		},
+		{
+			name:    "autoconfig_refine",
+			partial: "autoconfig_refine",
+			data: autoconfigRefineView{ModelID: "org/m", SafeID: "org--m",
+				Refinement: &refinement{MeasuredWhen: "30 Sep 15:12", CurrentContext: "131,072", ProposedContext: "262,144",
+					FullContextRequests: 3, More: true},
+				Hardware: hardwareTable("org--m", models.VLLMConfig{TensorParallelSize: 4, MaxModelLen: 131072, KVCacheDtype: "fp8", GPUMemoryUtilization: 0.92, MaxNumSeqs: 8},
+					models.FitPlan{Known: true, All: models.WidthPlan{TP: 4, ContextTokens: 262144, Measured: true,
+						Config: models.VLLMConfig{TensorParallelSize: 4, MaxModelLen: 262144, KVCacheDtype: "fp8", GPUMemoryUtilization: 0.92, MaxNumSeqs: 8}}}, nil)},
+		},
+		{
+			name:    "autoconfig_refine_nothing",
+			partial: "autoconfig_refine",
+			data:    autoconfigRefineView{ModelID: "org/m", SafeID: "org--m"},
+		},
+		{
+			name:    "autoconfig_message",
+			partial: "autoconfig_message",
+			data: autoconfigMessageView{ModelID: "org/m", SafeID: "org--m", Banner: panelBanner{
+				OK:      "Saved as the Autoconfig profile and now in use. It takes effect the next time this model starts.",
+				Warning: "HIP_VISIBLE_DEVICES: hides GPUs from vLLM"}},
+		},
+		{
+			name:    "helper_model_panel_absent",
+			partial: "helper_model_panel",
+			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507"},
+		},
+		{
+			name:    "helper_model_panel_downloading",
+			partial: "helper_model_panel",
+			data:    helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507", DownloadID: "Qwen--Qwen3-4B-Instruct-2507"},
+		},
+		{
+			name:    "helper_model_panel_installed",
+			partial: "helper_model_panel",
+			data: helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507", Installed: true, SizeLabel: "7.5 GB",
+				Message: "The copy already installed is now the helper model.", MessageKind: "ok"},
+		},
+		{
+			// A card too small for it: autoconfigure still works, and says how.
+			name:    "helper_model_panel_too_large",
+			partial: "helper_model_panel",
+			data: helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507",
+				TooLarge: "The helper model needs about 9.6 GB and the smallest card offers 7.2 GB."},
+		},
 	}
 
 	for _, tc := range cases {
@@ -566,4 +678,49 @@ func TestGoldenPartials(t *testing.T) {
 			assertGolden(t, "partial_"+tc.name, buf.String())
 		})
 	}
+}
+
+// goldenPlan is a two-width plan for a model that has not run.
+func goldenPlan() models.FitPlan {
+	all := models.VLLMConfig{TensorParallelSize: 4, MaxModelLen: 262144, KVCacheDtype: "fp8", GPUMemoryUtilization: 0.9, MaxNumSeqs: 16}
+	narrow := all
+	narrow.TensorParallelSize = 2
+	return models.FitPlan{
+		Known: true, FirstGuess: true,
+		All: models.WidthPlan{TP: 4, ContextTokens: 262144, FullContextRequests: 6, Config: all,
+			Notes: []models.ProfileNote{{Field: "tensor_parallel_size", Reason: "Split across 4 cards.", Origin: "this machine"}}},
+		Narrow: &models.WidthPlan{TP: 2, ContextTokens: 262144, FullContextRequests: 1, Config: narrow,
+			Notes: []models.ProfileNote{{Field: "tensor_parallel_size", Reason: "Split across 2 cards.", Origin: "this machine"}}},
+	}
+}
+
+// goldenReview is a review with a warning row, an unticked row and notes of
+// every kind.
+func goldenReview(known bool) autoconfigReviewView {
+	plan := goldenPlan()
+	if !known {
+		plan = models.FitPlan{Why: "no GPU has been read yet"}
+	}
+	base := models.VLLMConfig{TensorParallelSize: 1, MaxModelLen: 8192, MaxNumSeqs: 16, ToolCallParser: "qwen3_xml", EnableAutoToolChoice: true}
+	res := &autoconfig.Result{
+		ModelID: "org/m", Base: base, Plan: plan, AdviceFrom: "helper",
+		CardSources: []string{"org/m", "org/base"},
+		Rows: []autoconfig.Row{
+			{Key: "field:tool_call_parser", Kind: autoconfig.RowField, Field: "tool_call_parser", Value: "qwen3_coder",
+				Origin: "model card", Reason: "From the card's command.", Quote: "--tool-call-parser qwen3_coder", Ticked: true},
+			{Key: "field:trust_remote_code", Kind: autoconfig.RowField, Field: "trust_remote_code", Value: "true",
+				Origin: "model card", Reason: "From the card's command.", Quote: "--trust-remote-code", Ticked: true,
+				Warning: "Lets the engine run Python code shipped in the model repository. Untick it if you do not trust the publisher."},
+			{Key: "env:ROCR_VISIBLE_DEVICES", Kind: autoconfig.RowEnv, Env: "ROCR_VISIBLE_DEVICES=0,1,2,3",
+				Origin: "model card", Reason: "ROCR_VISIBLE_DEVICES: hides GPUs from vLLM.", Quote: "-e ROCR_VISIBLE_DEVICES=0,1,2,3"},
+		},
+		Notes: []models.ProfileNote{
+			{Field: "max_model_len", Reason: "The card's command used 262144. This is chosen for this machine instead.", Origin: "this machine"},
+			{Field: "chat_template", Reason: "The card's command names a chat template file on the author's machine.", Origin: "model card"},
+			{Reason: "The card shows 2 complete commands; the first is used.", Origin: "model card"},
+			{Reason: "Use the image's latest tag.", Origin: "helper summary"},
+		},
+	}
+	s := &Server{}
+	return s.autoconfigReview(&models.Model{ID: "org/m", DisplayName: "M"}, res)
 }
