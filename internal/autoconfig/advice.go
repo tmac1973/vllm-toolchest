@@ -113,7 +113,10 @@ type CallFunc func(ctx context.Context, schemaName string, schema map[string]any
 
 // Ask has the helper read the card and fill in the form. An empty card is
 // not sent: there is nothing to read.
-func Ask(ctx context.Context, call CallFunc, m *models.Model, card Card, cmds []Command) (Advice, error) {
+//
+// maxPrompt bounds the whole prompt, instructions included, in characters;
+// the card is cut to whatever the commands leave. Zero means no bound.
+func Ask(ctx context.Context, call CallFunc, m *models.Model, card Card, cmds []Command, maxPrompt int) (Advice, error) {
 	var adv Advice
 	if strings.TrimSpace(card.Text) == "" || call == nil {
 		return adv, nil
@@ -130,7 +133,15 @@ func Ask(ctx context.Context, call CallFunc, m *models.Model, card Card, cmds []
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "Model card:\n<<<\n%s\n>>>", card.Text)
+	text := card.Text
+	if maxPrompt > 0 {
+		// The commands come first and are kept whole: they are what the
+		// helper is choosing between. The card gets what is left.
+		// 128 covers the card's wrapper and capText's note that it was cut.
+		room := maxPrompt - len(adviceInstructions) - b.Len() - 128
+		text = capText(text, max(2000, room))
+	}
+	fmt.Fprintf(&b, "Model card:\n<<<\n%s\n>>>", text)
 	err := call(ctx, "model_card_advice", adviceSchema(), adviceInstructions, b.String(), &adv)
 	return adv, err
 }

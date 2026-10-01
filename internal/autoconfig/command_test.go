@@ -176,3 +176,19 @@ func TestInlineFlagsIgnoresTheUnknown(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A quantized repository's card and its base model's often give the same
+// recipes, differing only in the repository named. Each is listed once, as
+// the model's own card gives it.
+func TestExtractCommandsListsARecipeOnce(t *testing.T) {
+	raw := "# Quant\n\n```\nvllm serve org/quant --tensor-parallel-size 4 --reasoning-parser qwen3\n```\n\n" +
+		"# Base\n\n```\nvllm serve org/base --tensor-parallel-size 4 --reasoning-parser qwen3\n```\n\n" +
+		"```\nvllm serve org/base --tensor-parallel-size 8\n```\n"
+	cmds := ExtractCommands(raw)
+	if len(cmds) != 2 {
+		t.Fatalf("got %d commands, want 2: %+v", len(cmds), cmds)
+	}
+	if cmds[0].Model != "org/quant" {
+		t.Errorf("the base card's copy was kept, not the model's own: %s", cmds[0].Model)
+	}
+}
