@@ -3,6 +3,28 @@
 **Depends on:** nothing · **Enables:** phase 17's coarse filter, and every size
 figure the recommendation feed states. Ships user-visible value on its own.
 
+## As built, 2026-10-01
+
+Two of this plan's premises did not survive the live API, and the phase was
+built around them:
+
+- **With any `expand[]`, the Hub returns only what was expanded**:
+  `config=true` is then ignored, and tags and downloads go too. The search
+  and the single-model fetch name every field they read
+  (`huggingface.searchExpand`, and the meta URL in `GetModel`).
+- **The per-dtype counts are not storage for packed formats.** For a format
+  the Hub recognises they are parameters labelled with the packing dtype --
+  GPTQ-Int4's `I32: 32.2B` is about 16 GB, and the plan's arithmetic made it
+  129 -- and for one it does not they are bytes. So the detail view's
+  **Weights** come from the file tree, the weight files a download takes, by
+  size: exact for every format. `Safetensors` stays on search results for
+  phase 17, documented as a ranking signal, and `WeightBytes()` was not kept.
+  Phase 17's steps 7 and 12 are amended to match.
+
+Also fixed on the way: the download size summed the whole tree, counting
+both copies of a repository that holds its weights twice (Mistral's: 96 GB
+for a 48 GB download); it now goes through the download's own filter.
+
 ## Goal
 
 Replace the parameter-count formula in `internal/huggingface` with the exact
