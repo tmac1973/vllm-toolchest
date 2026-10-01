@@ -464,10 +464,22 @@ no bytes-variant to keep in step.
       `config unavailable — could not fetch config.json`;
       `config unreadable — config.json is missing the fields the fit needs`;
       `architecture <Name> is not in this image's model registry`.
-    - **Dropped** — a finalist for which no valid `TPOption` fits. Candidates
-      the coarse filter removed at step 7, and those below step 9's cut, are
-      not `Candidate` values at all and carry no verdict; they were never in
-      the running rather than judged and rejected.
+    - **Verified, with offload** — a finalist for which no valid `TPOption`
+      fits, on an image whose variant declares `expert_offload`, for which
+      `models.PlanFit` (with `PlanInput.ExpertOffload` and the host's RAM in
+      `HostRAMGB`) returns a plan whose `All.Offload` is set. It is the same
+      planner autoconfigure uses (`plan/autoconfigure/phase-15-expert-offload.md`),
+      so the feed and the review agree on which models run this way. The fit
+      sentence says "experts in system RAM — slower generation"; the
+      context objective uses that plan's `ContextTokens`; **Fastest**
+      subtracts 0.40, as it does for weight-only formats. Amended 2026-10-01:
+      before it, the feed would have dropped exactly the large MoEs the
+      rdna4-clav image is built to serve.
+    - **Dropped** — a finalist for which no valid `TPOption` fits and no
+      offload plan exists. Candidates the coarse filter removed at step 7,
+      and those below step 9's cut, are not `Candidate` values at all and
+      carry no verdict; they were never in the running rather than judged
+      and rejected.
 
 15. **The four objectives** in `score.go`. Each takes an already-scored
     candidate and returns `[0,1]`; no objective reads the network or refetches

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // refinementContextStep is the least change worth proposing: a refinement
@@ -42,6 +43,12 @@ func (s *Server) refinementFor(m *models.Model) *refinement {
 		return nil
 	}
 	if s.startFixFor(m) != nil {
+		return nil
+	}
+	// With expert offload the engine caps the KV pool at one request by
+	// design and gives the rest to the expert cache, so the measured pool is
+	// not room the context could grow into.
+	if process.HasFlag(m.VLLMConfig.ExtraFlags, models.ExpertOffloadFlag) {
 		return nil
 	}
 

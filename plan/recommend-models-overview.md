@@ -44,6 +44,11 @@ already requests `config=true` for every result and then discards all but the
   registry, except when the registry has not been read — in which case the
   card says nothing about architecture rather than implying a check that did
   not happen.
+- On an image that can hold a mixture-of-experts model's experts in system
+  RAM (`expert_offload`, the rdna4-clav image), a model that fits only that
+  way is shown, labelled as slower, rather than dropped. It is planned by the
+  same function autoconfigure uses; see
+  `plan/autoconfigure/phase-15-expert-offload.md`. Added 2026-10-01.
 - Exact weight sizes from the Hub's `safetensors` metadata rather than a
   formula, replacing the MoE-blind estimate for candidate models.
 - Fit output survives the download: the new model's starting `VLLMConfig`

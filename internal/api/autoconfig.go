@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/autoconfig"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -95,12 +96,14 @@ type autoconfigMessageView struct {
 
 // hwRow is one line of the hardware table.
 type hwRow struct {
-	Label, Field   string
-	Current        string
-	Proposed       string
-	ProposedNarrow string
-	Why, WhyNarrow string
-	CardUsed       string
+	Label, Field    string
+	Current         string
+	Proposed        string
+	ProposedNarrow  string
+	ProposedOffload string
+	Why, WhyNarrow  string
+	WhyOffload      string
+	CardUsed        string
 }
 
 // hardwareTableView is the "This machine" table, shared with refinement.
@@ -139,6 +142,11 @@ func hardwareValue(c models.VLLMConfig, field string) string {
 		return fmt.Sprintf("%.2f", c.GPUMemoryUtilization)
 	case "max_num_seqs":
 		return strconv.Itoa(c.MaxNumSeqs)
+	case "expert_offload":
+		if process.HasFlag(c.ExtraFlags, models.ExpertOffloadFlag) {
+			return "on"
+		}
+		return "off"
 	case "kv_cache_memory":
 		if c.KVCacheMemory == 0 {
 			return "sized by the engine"
@@ -165,24 +173,40 @@ func notesFor(notes []models.ProfileNote, field string) string {
 // notes about what the card used.
 func hardwareTable(safe string, current models.VLLMConfig, plan models.FitPlan, cardNotes []models.ProfileNote) hardwareTableView {
 	v := hardwareTableView{SafeID: safe, HasNarrow: plan.Narrow != nil}
+	fields := hardwareFieldsShown
+	if plan.All.Offload || plan.Offload != nil {
+		fields = append(append([]struct{ field, label string }{}, fields...), struct{ field, label string }{"expert_offload", "Expert offload"})
+	}
 	var machineNotes []models.ProfileNote
 	for _, n := range cardNotes {
 		if n.Origin == "this machine" {
 			machineNotes = append(machineNotes, n)
 		}
 	}
-	for _, f := range hardwareFieldsShown {
+	widthWhy := func(w models.WidthPlan, field string) string {
+		notes := append(append([]models.ProfileNote{}, w.Notes...), plan.Notes...)
+		if field == "expert_offload" {
+			return strings.TrimSpace(notesFor(notes, "extra_flags") + " " + notesFor(notes, "speculative_config"))
+		}
+		return notesFor(notes, field)
+	}
+	for _, f := range fields {
 		r := hwRow{
 			Label: f.label, Field: f.field,
 			Current:  hardwareValue(current, f.field),
 			Proposed: hardwareValue(plan.All.Config, f.field),
-			Why:      notesFor(append(append([]models.ProfileNote{}, plan.All.Notes...), plan.Notes...), f.field),
+			Why:      widthWhy(plan.All, f.field),
 			CardUsed: notesFor(machineNotes, f.field),
 		}
 		r.ProposedNarrow, r.WhyNarrow = r.Proposed, r.Why
+		r.ProposedOffload, r.WhyOffload = r.Proposed, r.Why
 		if plan.Narrow != nil {
 			r.ProposedNarrow = hardwareValue(plan.Narrow.Config, f.field)
-			r.WhyNarrow = notesFor(append(append([]models.ProfileNote{}, plan.Narrow.Notes...), plan.Notes...), f.field)
+			r.WhyNarrow = widthWhy(*plan.Narrow, f.field)
+		}
+		if plan.Offload != nil {
+			r.ProposedOffload = hardwareValue(plan.Offload.Config, f.field)
+			r.WhyOffload = widthWhy(*plan.Offload, f.field)
 		}
 		v.Rows = append(v.Rows, r)
 	}
@@ -190,9 +214,10 @@ func hardwareTable(safe string, current models.VLLMConfig, plan models.FitPlan, 
 		v.Rows = append(v.Rows, hwRow{
 			Label: "KV cache memory (pinned)", Field: "kv_cache_memory",
 			Current: hardwareValue(current, "kv_cache_memory"), Proposed: "sized by the engine",
-			ProposedNarrow: "sized by the engine",
-			Why:            "A pinned pool would override the engine's own sizing, which the context is planned against.",
-			WhyNarrow:      "A pinned pool would override the engine's own sizing, which the context is planned against.",
+			ProposedNarrow: "sized by the engine", ProposedOffload: "sized by the engine",
+			Why:        "A pinned pool would override the engine's own sizing, which the context is planned against.",
+			WhyNarrow:  "A pinned pool would override the engine's own sizing, which the context is planned against.",
+			WhyOffload: "A pinned pool would override the engine's own sizing, which the context is planned against.",
 		})
 	}
 	return v
@@ -283,10 +308,17 @@ func (s *Server) autoconfigReview(m *models.Model, res *autoconfig.Result) autoc
 		if all.TP == 1 {
 			label = "One card — " + requestsLabel(all.FullContextRequests)
 		}
+		if all.Offload {
+			label = fmt.Sprintf("All %d cards, experts in system RAM — one request at a time, slower", all.TP)
+		}
 		v.Widths = append(v.Widths, widthOption{Value: "all", Checked: true, Label: label})
 		if n := res.Plan.Narrow; n != nil {
 			v.Widths = append(v.Widths, widthOption{Value: "narrow",
 				Label: fmt.Sprintf("%d %s — %s, leaves %d free", n.TP, cardsWord(n.TP), requestsLabel(n.FullContextRequests), all.TP-n.TP)})
+		}
+		if o := res.Plan.Offload; o != nil {
+			v.Widths = append(v.Widths, widthOption{Value: "offload",
+				Label: fmt.Sprintf("All %d cards, experts in system RAM — %s tokens, one request at a time, slower", o.TP, groupThousands(o.ContextTokens))})
 		}
 	}
 

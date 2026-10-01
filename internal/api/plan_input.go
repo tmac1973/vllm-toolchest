@@ -1,6 +1,9 @@
 package api
 
-import "github.com/tmac1973/vllm-toolchest/internal/models"
+import (
+	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/variants"
+)
 
 // planInput is what the hardware planner needs for one model on this host.
 //
@@ -15,7 +18,7 @@ import "github.com/tmac1973/vllm-toolchest/internal/models"
 func (s *Server) planInput(m *models.Model, base models.VLLMConfig, class models.ContextClass, cardKVDtype string) models.PlanInput {
 	inv := s.gpuInventory()
 	inv.FreePerCardGB = 0
-	return models.PlanInput{
+	in := models.PlanInput{
 		Model:     m,
 		Base:      base,
 		Inventory: inv,
@@ -27,6 +30,13 @@ func (s *Server) planInput(m *models.Model, base models.VLLMConfig, class models
 		CardKVDtype: cardKVDtype,
 		Estimate:    s.estimateFor(m),
 	}
+	if d, ok := variants.Get(s.vllmEnv.Variant); ok && d.Has("expert_offload") {
+		in.ExpertOffload = true
+	}
+	if s.monitor != nil {
+		in.HostRAMGB = float64(s.monitor.Current().Memory.TotalMB) / 1024
+	}
+	return in
 }
 
 // estimateFor returns what m needs under a candidate config, by the rule

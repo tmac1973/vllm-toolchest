@@ -177,3 +177,39 @@ func TestDraftDownloadOnlyForASuggestion(t *testing.T) {
 		t.Errorf("a model with no held result: %s", rec.Body.String())
 	}
 }
+
+// A plan whose context is cut, with offload holding more: the review offers
+// the experts-in-RAM width beside it, unchosen, with an Expert offload row
+// that says on for it and off for the others.
+func TestTheReviewOffersOffload(t *testing.T) {
+	s := finishedRun(t)
+	run, _ := s.autoconfigSnapshot()
+	res := *run.result
+	off := res.Plan.All
+	off.Offload, off.ContextTokens, off.FullContextRequests = true, 262144, 1
+	off.Config.MaxModelLen = 262144
+	off.Config.ExtraFlags = models.ExpertOffloadFlag
+	off.Notes = append(off.Notes, models.ProfileNote{Field: "extra_flags", Reason: "Expert offload: experts in RAM."})
+	res.Plan.Offload = &off
+	m, _ := s.registry.Get("org/model")
+
+	v := s.autoconfigReview(m, &res)
+	var opt *widthOption
+	for i := range v.Widths {
+		if v.Widths[i].Value == "offload" {
+			opt = &v.Widths[i]
+		}
+	}
+	if opt == nil || opt.Checked || !strings.Contains(opt.Label, "experts in system RAM") || !strings.Contains(opt.Label, "262,144") {
+		t.Fatalf("widths: %+v", v.Widths)
+	}
+	var row *hwRow
+	for i := range v.Hardware.Rows {
+		if v.Hardware.Rows[i].Field == "expert_offload" {
+			row = &v.Hardware.Rows[i]
+		}
+	}
+	if row == nil || row.Proposed != "off" || row.ProposedOffload != "on" || !strings.Contains(row.WhyOffload, "experts in RAM") {
+		t.Errorf("offload row: %+v", row)
+	}
+}
