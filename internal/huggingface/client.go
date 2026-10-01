@@ -432,24 +432,40 @@ func (c *Client) listFiles(ctx context.Context, modelID, revision string) ([]Mod
 
 // DownloadableFiles is the subset of a repo's files a download fetches: no
 // GGUF, which vLLM does not serve; no .bin weights when the same weights are
-// there as safetensors; and no Mistral-format consolidated weights when the
-// same weights are there as Hugging Face shards.
+// there as safetensors; and, for a repo with its weights in both Mistral's
+// consolidated layout and Hugging Face shards, only one of the two.
 //
-// mistralai/Mistral-Small-3.2-24B-Instruct-2506 carries both layouts, 48 GB
-// each. The shards are the standard format, what vLLM's default loader and
-// the estimator read; the consolidated copy is only for --load_format
-// mistral, which autoconfigure leaves unticked when the copy is not on disk.
+// Which one depends on which layout is complete. mistralai/Mistral-Small-3.2-
+// 24B-Instruct-2506 carries both, 48 GB each, but its shards come with no
+// tokenizer and no image processor config: loaded as Hugging Face weights it
+// failed to start, "Can't load image processor". Its Mistral layout --
+// consolidated.safetensors, params.json, tekken.json -- is the one it is
+// served from, with --config_format and --load_format mistral. So the
+// consolidated copy is kept when the repo has params.json and no Hugging Face
+// tokenizer, and the shards otherwise.
 func DownloadableFiles(files []ModelFile) []ModelFile {
-	hasSafetensors, hasShardIndex := false, false
+	hasSafetensors, hasShardIndex, hasConsolidated := false, false, false
+	hasParams, hasHFTokenizer := false, false
 	for _, f := range files {
 		lower := strings.ToLower(f.Filename)
+		base := path.Base(lower)
 		if strings.HasSuffix(lower, ".safetensors") {
 			hasSafetensors = true
 		}
-		if path.Base(lower) == "model.safetensors.index.json" {
+		switch base {
+		case "model.safetensors.index.json":
 			hasShardIndex = true
+		case "params.json":
+			hasParams = true
+		case "tokenizer.json", "tokenizer.model":
+			hasHFTokenizer = true
+		}
+		if IsConsolidatedWeights(f.Filename) {
+			hasConsolidated = true
 		}
 	}
+	bothLayouts := hasShardIndex && hasConsolidated
+	mistralLayout := bothLayouts && hasParams && !hasHFTokenizer
 
 	var out []ModelFile
 	for _, f := range files {
@@ -463,12 +479,21 @@ func DownloadableFiles(files []ModelFile) []ModelFile {
 		if strings.HasSuffix(lower, ".gguf") {
 			continue
 		}
-		if hasShardIndex && IsConsolidatedWeights(f.Filename) {
+		switch {
+		case bothLayouts && !mistralLayout && IsConsolidatedWeights(f.Filename):
+			continue
+		case mistralLayout && (isShard(f.Filename) || path.Base(lower) == "model.safetensors.index.json"):
 			continue
 		}
 		out = append(out, f)
 	}
 	return out
+}
+
+// isShard reports a Hugging Face weight shard: a .safetensors file that is not
+// Mistral's consolidated layout.
+func isShard(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".safetensors") && !IsConsolidatedWeights(name)
 }
 
 // IsConsolidatedWeights reports Mistral's single-file weight layout,
