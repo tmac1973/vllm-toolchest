@@ -86,6 +86,16 @@ func (s *Server) startFixFor(m *models.Model) *startFix {
 					note:   fmt.Sprintf("GPU memory utilization lowered from %.2f to %.2f after a start failed: the engine reported only %.2f of the card free.", c.GPUMemoryUtilization, f, f),
 				}
 			}
+		case "speculative_config":
+			if c.SpeculativeConfig == "" {
+				continue
+			}
+			fix.Why = it.Message
+			byField["speculative_config"] = startFixChange{
+				Field: "speculative_config", Label: "Speculative config", Current: c.SpeculativeConfig, Proposed: "removed", value: "",
+				Reason: "The engine failed building it, before the model loaded.",
+				note:   "Speculative decoding removed after a start failed while the engine was setting it up.",
+			}
 		case "extra_flags":
 			flag := strings.TrimSpace(it.Suggested)
 			if !strings.HasPrefix(flag, "--") {
@@ -151,6 +161,11 @@ func (s *Server) handleApplyStartFix(w http.ResponseWriter, r *http.Request) {
 		field := ch.Field
 		if field == "extra_flags" {
 			field = "extra_flags_remove"
+		}
+		if field == "speculative_config" {
+			cfg.SpeculativeConfig = "" // removed, not set to a value
+			notes = append(notes, models.ProfileNote{Field: ch.Field, Reason: ch.note, Origin: "this machine"})
+			continue
 		}
 		if cfg, err = applyToConfig(cfg, field, ch.value); err != nil {
 			s.renderConfigPanel(w, m, panelBanner{Error: "Not applied: " + err.Error()})
