@@ -83,7 +83,13 @@ const recommendTimeout = 3 * time.Minute
 func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), recommendTimeout)
 	defer cancel()
-	respondJSON(w, s.recommendEngine().Result(ctx, s.recommendProfile(), r.URL.Query().Get("intent")))
+	res := s.recommendEngine().Result(ctx, s.recommendProfile(), r.URL.Query().Get("intent"))
+	if !isHTMX(r) {
+		respondJSON(w, res)
+		return
+	}
+	respondHTML(w)
+	s.renderPartial(w, "recommend_feed", newRecommendFeedView(res, time.Now()))
 }
 
 // handleRecommendRefresh builds the pool again.

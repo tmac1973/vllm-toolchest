@@ -1,0 +1,15 @@
+<header class="recommend-head">
+  <div>
+    <strong>Recommended for this machine</strong>
+    <br><small class="recommend-profile" title="What these recommendations were worked out for. If one looks wrong, check this first.">4× AMD Radeon AI PRO R9700 · 128 GB · gfx1201 · rdna4-clav</small>
+  </div>
+  <div class="recommend-refresh"><small>updated 3 minutes ago</small>
+    <button type="button" class="outline secondary"
+            hx-post="/api/recommend/refresh" hx-swap="none"
+            hx-indicator="#recommend-busy"
+            hx-on::after-request="var c=document.querySelector('.recommend-chip[aria-pressed=\'true\']'); if(c){c.click()}"
+            title="Ask Hugging Face again. The list is otherwise kept for six hours.">Refresh</button>
+    <span id="recommend-busy" class="htmx-indicator" aria-busy="true"></span>
+  </div>
+</header>
+<p class="recommend-empty"><small>No recommendations right now: Hugging Face could not be reached: dial tcp: i/o timeout. Search below still works.</small></p>

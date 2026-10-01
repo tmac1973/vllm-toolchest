@@ -188,6 +188,16 @@
         <dt>Gated models</dt><dd>Llama, Gemma, Mistral and others need a HuggingFace token, set in <a href="/settings">Settings</a>, plus acceptance of the licence on the model's own page.</dd>
     </dl>
 
+    <h3 id="recommended">Recommended for this machine</h3>
+    <p>Above the search box, a list of models that should run on this machine, worked out from the Hub's most used and newest models in the formats your GPUs run well, at 4 bits, and unquantized. Each one is planned the way Autoconfigure would plan it: how many cards, how much context, and how many full-length requests at once. The line under the heading says which cards, image and architecture it was worked out for, so a recommendation that looks wrong can be traced to what it was given.</p>
+    <dl>
+        <dt>The four orders</dt><dd><strong>Best quality</strong> favours larger models with room to spare; <strong>Fastest</strong> favours fewer cards and formats your GPUs accelerate, and never leads with a 4-bit weight-only model, which saves memory but not time; <strong>Longest context</strong> is the context each model holds here, not what it advertises; <strong>Newest</strong> is by last update. Switching between them asks the Hub nothing.</dd>
+        <dt>Accelerated</dt><dd>Whether this GPU runs the format natively. FP8 is on RDNA4; AWQ and GPTQ unpack to bf16 before every matrix multiply on any card.</dd>
+        <dt>Could not be fully checked</dt><dd>A model whose size, config or architecture could not be confirmed. It is not judged bad, only unverified: the reason says which input was missing. A model is also listed there when the image's vLLM does not know its architecture, which means it would fail to start here.</dd>
+        <dt>Estimates</dt><dd>Every figure is worked out before the model has ever run here, from its config and file sizes. After a real start, the engine's own measurements refine them, and Autoconfigure offers the refined settings.</dd>
+        <dt>Freshness</dt><dd>The list is kept for six hours, then marked old rather than rebuilt unasked; <strong>Refresh</strong> asks the Hub again. It is rebuilt at once if the machine changes.</dd>
+    </dl>
+
     <h2 id="benchmarks">Benchmarks</h2>
     <p>Four things live here: ad-hoc runs, batch jobs, the context probe, and the comparison and visualization views.</p>
 

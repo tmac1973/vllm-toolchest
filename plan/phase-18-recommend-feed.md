@@ -3,6 +3,21 @@
 **Depends on:** phase 17 (the engine and its endpoint) · **Enables:** phase 19,
 which needs a Download button on a card that knows its fit.
 
+## As built, 2026-10-01
+
+- **Step 7's button opens the existing detail panel** under the card
+  ("Details") instead of posting to `/api/hf/download` itself. That panel
+  already checks disk space, an existing copy, a partial download to resume
+  and a gated repository, and its own Download button is the one path. A
+  direct post would have skipped all four.
+- **The first eight cards show; the rest fold** under "Show N more". The
+  live pool against compute's profile verified 35, which pushed the search
+  box a page and a half down -- the feed is above search, not instead of it.
+- Each card has a second line: the context it holds here and how many
+  full-length requests at once, or that its experts would be in system RAM.
+- Checked rendered in headless Firefox with the live pool at 1280 and 800
+  px: no horizontal scroll, cards stack at the narrow width.
+
 ## Goal
 
 Render the ranked result on the Download Models page: a "Recommended for this
