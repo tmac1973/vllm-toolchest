@@ -400,14 +400,23 @@ func (c *Client) listFiles(ctx context.Context, modelID, revision string) ([]Mod
 }
 
 // DownloadableFiles is the subset of a repo's files a download fetches: no
-// GGUF, which vLLM does not serve, and no .bin weights when the same weights
-// are there as safetensors.
+// GGUF, which vLLM does not serve; no .bin weights when the same weights are
+// there as safetensors; and no Mistral-format consolidated weights when the
+// same weights are there as Hugging Face shards.
+//
+// mistralai/Mistral-Small-3.2-24B-Instruct-2506 carries both layouts, 48 GB
+// each. The shards are the standard format, what vLLM's default loader and
+// the estimator read; the consolidated copy is only for --load_format
+// mistral, which autoconfigure leaves unticked when the copy is not on disk.
 func DownloadableFiles(files []ModelFile) []ModelFile {
-	hasSafetensors := false
+	hasSafetensors, hasShardIndex := false, false
 	for _, f := range files {
-		if strings.HasSuffix(strings.ToLower(f.Filename), ".safetensors") {
+		lower := strings.ToLower(f.Filename)
+		if strings.HasSuffix(lower, ".safetensors") {
 			hasSafetensors = true
-			break
+		}
+		if path.Base(lower) == "model.safetensors.index.json" {
+			hasShardIndex = true
 		}
 	}
 
@@ -423,9 +432,19 @@ func DownloadableFiles(files []ModelFile) []ModelFile {
 		if strings.HasSuffix(lower, ".gguf") {
 			continue
 		}
+		if hasShardIndex && IsConsolidatedWeights(f.Filename) {
+			continue
+		}
 		out = append(out, f)
 	}
 	return out
+}
+
+// IsConsolidatedWeights reports Mistral's single-file weight layout,
+// consolidated.safetensors or its numbered parts.
+func IsConsolidatedWeights(name string) bool {
+	base := path.Base(strings.ToLower(name))
+	return strings.HasPrefix(base, "consolidated") && strings.HasSuffix(base, ".safetensors")
 }
 
 type treeEntry struct {

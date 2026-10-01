@@ -1,6 +1,8 @@
 package autoconfig
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -525,5 +527,32 @@ func TestSamplingSetsReadFromTheQuote(t *testing.T) {
 	in.Advice.SamplingQuote = "temperature=0.3, top_p=0.5 is what we use"
 	if rowByKey(Validate(in).Rows, "flag:--override-generation-config") != nil {
 		t.Error("values were read from a quote not in the card")
+	}
+}
+
+// Mistral's card serves with --load_format mistral, which reads the
+// consolidated weights a download leaves out when the repo also has
+// Hugging Face shards. Without them on disk the row starts unticked.
+func TestMistralLoadFormatNeedsItsWeights(t *testing.T) {
+	cmd := "```\nvllm serve mistralai/Mistral-Small-3.2-24B-Instruct-2506 --tokenizer_mode mistral --config_format mistral --load_format mistral --tool-call-parser mistral --enable-auto-tool-choice\n```\n"
+	dir := t.TempDir()
+	m := &models.Model{ID: "mistralai/Mistral-Small-3.2-24B-Instruct-2506", LocalPath: dir}
+	in := Inputs{Model: m, Card: Card{Raw: cmd, Text: cmd}, Commands: ExtractCommands(cmd), MachineEnv: machineEnv}
+	if r := rowByKey(Validate(in).Rows, "field:load_format"); r == nil || r.Ticked || r.Reason != mistralWeightsReason {
+		t.Errorf("without the consolidated weights: %+v", r)
+	}
+	if r := rowByKey(Validate(in).Rows, "flag:--config-format"); r == nil || r.Ticked {
+		t.Errorf("the config format that goes with it: %+v", r)
+	}
+	for _, key := range []string{"field:tool_call_parser", "flag:--tokenizer-mode"} {
+		if r := rowByKey(Validate(in).Rows, key); r == nil || !r.Ticked {
+			t.Errorf("%s: %+v", key, r)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, "consolidated.safetensors"), nil, 0o644)
+	for _, key := range []string{"field:load_format", "flag:--config-format"} {
+		if r := rowByKey(Validate(in).Rows, key); r == nil || !r.Ticked {
+			t.Errorf("with them, %s: %+v", key, r)
+		}
 	}
 }

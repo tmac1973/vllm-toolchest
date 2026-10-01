@@ -82,6 +82,7 @@ func ParseArgs(args []string) (cfg VLLMStartConfig, rest []string) {
 			continue
 		}
 		name, value, inline := strings.Cut(a, "=")
+		name = dashed(name)
 		takeValue := func() (string, bool) {
 			if inline {
 				return value, true
@@ -116,6 +117,17 @@ func ParseArgs(args []string) (cfg VLLMStartConfig, rest []string) {
 		}
 	}
 	return cfg, rest
+}
+
+// dashed is a long flag as vLLM lists it. vLLM's parser takes --load_format
+// for --load-format, and cards write both: Mistral's serves with
+// --tokenizer_mode mistral --config_format mistral --load_format mistral,
+// and read as written those were three flags with no field here.
+func dashed(name string) string {
+	if !strings.HasPrefix(name, "--") {
+		return name
+	}
+	return "--" + strings.ReplaceAll(name[2:], "_", "-")
 }
 
 // KnownServeFlags is every flag ParseArgs recognises, mapped or owned. A run

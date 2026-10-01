@@ -3,6 +3,7 @@ package autoconfig
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
@@ -115,17 +117,18 @@ var hardwareFields = map[string]string{
 }
 
 const (
-	overrideFlag        = "--override-generation-config"
-	trustWarning        = "Lets the engine run Python code shipped in the model repository. Untick it if you do not trust the publisher."
-	notListedReason     = "This image's vLLM does not list this flag, so it starts unticked: an unrecognised flag stops the engine starting."
-	contextExtendReason = "It extends the context past the model's native length, which the context chosen here does not exceed."
-	containerPathReason = "Its value is a path inside the author's container, which does not exist here."
-	mentionedReason     = "Mentioned in the card's text rather than in its command, so it starts unticked."
-	originCard          = "model card"
-	originMachine       = "this machine"
-	originHelperSummary = "helper summary"
-	maxQuote            = 240
-	minVerifiableQuote  = 12
+	overrideFlag         = "--override-generation-config"
+	trustWarning         = "Lets the engine run Python code shipped in the model repository. Untick it if you do not trust the publisher."
+	notListedReason      = "This image's vLLM does not list this flag, so it starts unticked: an unrecognised flag stops the engine starting."
+	contextExtendReason  = "It extends the context past the model's native length, which the context chosen here does not exceed."
+	containerPathReason  = "Its value is a path inside the author's container, which does not exist here."
+	mistralWeightsReason = "It is for Mistral's consolidated weights, which were not downloaded: the same weights are here as Hugging Face shards, which load without it."
+	mentionedReason      = "Mentioned in the card's text rather than in its command, so it starts unticked."
+	originCard           = "model card"
+	originMachine        = "this machine"
+	originHelperSummary  = "helper summary"
+	maxQuote             = 240
+	minVerifiableQuote   = 12
 )
 
 type validator struct {
@@ -342,6 +345,9 @@ func (v *validator) fieldRow(field, value, quote, reason string, prescribed bool
 	switch {
 	case field == "trust_remote_code":
 		r.Warning = trustWarning
+	case field == "load_format" && value == "mistral" && !hasConsolidatedWeights(v.in.Model):
+		r.Ticked = false
+		r.Reason = mistralWeightsReason
 	case field == "attention_backend" && v.in.Backends != nil && !slices.Contains(v.in.Backends, value):
 		r.Ticked = false
 		r.Reason = "This image does not offer the " + value + " attention backend, so it starts unticked."
@@ -350,6 +356,25 @@ func (v *validator) fieldRow(field, value, quote, reason string, prescribed bool
 		r.Reason = notListedReason
 	}
 	v.row(r)
+}
+
+// hasConsolidatedWeights reports Mistral's single-file weights in the model's
+// directory, which --load_format mistral reads. A download leaves them out
+// when the repo has the same weights as Hugging Face shards.
+func hasConsolidatedWeights(m *models.Model) bool {
+	if m == nil || m.LocalPath == "" {
+		return false
+	}
+	entries, err := os.ReadDir(m.LocalPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if huggingface.IsConsolidatedWeights(e.Name()) {
+			return true
+		}
+	}
+	return false
 }
 
 // contextExtending reports a flag or variable whose job is to serve past the
@@ -378,6 +403,11 @@ func (v *validator) flagRow(g []string, quote string, prescribed bool) {
 	switch {
 	case !prescribed:
 		r.Reason = mentionedReason
+	case name == "--config-format" && value == "mistral" && !hasConsolidatedWeights(v.in.Model):
+		// It goes with --load_format mistral: the model it builds expects
+		// the consolidated weights' names, not the shards'.
+		r.Ticked = false
+		r.Reason = mistralWeightsReason
 	case contextExtending(name, value):
 		r.Ticked = false
 		r.Reason = contextExtendReason

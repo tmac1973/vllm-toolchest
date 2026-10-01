@@ -2,6 +2,7 @@ package process
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,17 @@ func TestParseArgsKeepsWhatItDoesNotKnow(t *testing.T) {
 	want := []string{"--enable-expert-offload", "--expert-offload-mem", "46", "--enable-reasoning", "--max-num-seqs", "lots"}
 	if !reflect.DeepEqual(rest, want) {
 		t.Errorf("rest = %q\nwant  %q", rest, want)
+	}
+}
+
+// vLLM takes a flag written with underscores as the dashed one, and cards
+// write both.
+func TestParseArgsTakesUnderscoredFlags(t *testing.T) {
+	cfg, rest := ParseArgs([]string{"--load_format", "mistral", "--tokenizer_mode", "mistral", "--max_model_len=8192", "-tp", "2"})
+	if cfg.LoadFormat != "mistral" || cfg.MaxModelLen != 8192 {
+		t.Errorf("cfg = %+v", cfg)
+	}
+	if !strings.Contains(strings.Join(rest, " "), "--tokenizer-mode mistral") {
+		t.Errorf("rest = %v", rest)
 	}
 }
