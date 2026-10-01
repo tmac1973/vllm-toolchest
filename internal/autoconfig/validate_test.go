@@ -378,3 +378,29 @@ func TestAQuoteWithoutTheCardsMarkdownStillMatches(t *testing.T) {
 		t.Error("a quote that differs from the card only in markdown was rejected")
 	}
 }
+
+// Found on compute: the MoE's base card lists its sampling sets under a
+// numbered item, with a blank line and indentation between them. A quote of
+// those lines without the blank line, or with a line of its own invention,
+// has to be told apart.
+func TestAMultiLineQuote(t *testing.T) {
+	card := normalise("1. **Sampling Parameters**: We suggest using the following sets of sampling parameters:\n    \n    - Thinking Mode: `temperature=1.0`, `top_p=0.95`\n    - Instruct (or non-thinking) mode: `temperature=0.7`, `top_p=0.80`\n\n2. **Adequate Output Length**: use 32,768 tokens.")
+	if !quoteInCard(card, "We suggest using the following sets of sampling parameters:\n- Thinking Mode: temperature=1.0, top_p=0.95\n\n2. Adequate Output Length: use 32,768 tokens.") {
+		t.Error("a quote of real lines with the list's spacing changed was rejected")
+	}
+	if quoteInCard(card, "We suggest using the following sets of sampling parameters:\n- Coding Mode: temperature=0.2, top_p=0.9") {
+		t.Error("a quote with an invented line was accepted")
+	}
+}
+
+// A reading that could not have been used is not worth a note: the command
+// already sets the sampling defaults and both parsers.
+func TestNoNoteForAReadingThatCouldNotMatter(t *testing.T) {
+	card := "```\nvllm serve org/m --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --override-generation-config '{\"temperature\": 0.8}'\n```\n"
+	in := Inputs{Model: &models.Model{ID: "org/m"}, Card: Card{Raw: card}, Commands: ExtractCommands(card), HasAdvice: true,
+		Advice: Advice{Temperature: f64(0.7), SamplingQuote: "a sentence the card does not contain",
+			ToolCallParser: str("hermes"), ParserQuote: "another sentence the card does not contain"}}
+	if noteFor(Validate(in).Notes, "", "not in the card") {
+		t.Error("a rejected reading the command overrides anyway was reported")
+	}
+}

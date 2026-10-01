@@ -538,7 +538,11 @@ func (v *validator) samplingFromProse(chosen *Command) {
 		return
 	}
 	if !v.verified(a.SamplingQuote) {
-		v.unverified("sampling values", "", a.SamplingQuote)
+		// Only worth saying when the reading could have been used: with the
+		// command's own override, or a generation_config.json, it could not.
+		if !commandOverrides(chosen) && !genDefaultsSet(v.in.Model) {
+			v.unverified("sampling values", "", a.SamplingQuote)
+		}
 		return
 	}
 	// The sentence has to state each value, not merely exist: a value the
@@ -621,6 +625,9 @@ func (v *validator) parsersFromProse(start process.VLLMStartConfig) {
 	if !v.in.HasAdvice || (a.ReasoningParser == nil && a.ToolCallParser == nil) {
 		return
 	}
+	if start.ReasoningParser != "" && start.ToolCallParser != "" {
+		return // the command names both; prose cannot add anything
+	}
 	if !v.verified(a.ParserQuote) {
 		v.unverified("a parser", "", a.ParserQuote)
 		return
@@ -686,7 +693,7 @@ func (v *validator) unverified(what, value, quote string) {
 	}
 	msg += ", but the sentence it cited is not in the card, so it was not used."
 	if q := strings.TrimSpace(quote); q != "" {
-		msg += " It cited: “" + clip(q, 200) + "”"
+		msg += " It cited: “" + clip(q, 400) + "”"
 	} else {
 		msg += " It cited nothing."
 	}
@@ -715,8 +722,27 @@ func quoteInCard(normalisedCard, quote string) bool {
 	if len(q) < minVerifiableQuote {
 		return false
 	}
-	return strings.Contains(normalisedCard, q)
+	if strings.Contains(normalisedCard, q) {
+		return true
+	}
+	// A quote of several lines -- a list, say -- may skip a blank line or a
+	// marker the card has between them. Each line must still be in the card.
+	found := 0
+	for _, line := range strings.Split(quote, "\n") {
+		l := normalise(listMarker.ReplaceAllString(strings.TrimSpace(line), ""))
+		if len(l) < minVerifiableQuote {
+			continue
+		}
+		if !strings.Contains(normalisedCard, l) {
+			return false
+		}
+		found++
+	}
+	return found > 1
 }
+
+// listMarker is a list bullet or number at the start of a line.
+var listMarker = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
 
 // snippet is up to maxQuote characters of text with needle in view.
 func snippet(text, needle string) string {
@@ -830,4 +856,17 @@ func groupDigits(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// commandOverrides reports a chosen command that sets the sampling defaults.
+func commandOverrides(chosen *Command) bool {
+	if chosen == nil {
+		return false
+	}
+	for _, g := range chosen.Settings().Rest {
+		if g[0] == overrideFlag {
+			return true
+		}
+	}
+	return false
 }
