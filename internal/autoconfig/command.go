@@ -184,9 +184,14 @@ func ExtractCommands(raw string) []Command {
 	return out
 }
 
+// containsCommand reports a command with the same arguments and environment.
+// The model is not compared: a quantized repository's card and its base
+// model's often give the same recipes, differing only in the repository
+// named, and listing each twice doubled what the helper had to choose
+// between -- eight commands where there were four.
 func containsCommand(cmds []Command, c Command) bool {
 	for _, x := range cmds {
-		if slices.Equal(x.Args, c.Args) && slices.Equal(x.Env, c.Env) && x.Model == c.Model {
+		if slices.Equal(x.Args, c.Args) && slices.Equal(x.Env, c.Env) {
 			return true
 		}
 	}

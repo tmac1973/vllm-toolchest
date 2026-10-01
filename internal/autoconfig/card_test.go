@@ -85,7 +85,7 @@ func TestCapTextAndBudget(t *testing.T) {
 	if len(cut) > 200 || !strings.HasSuffix(cut, "left out for length.]") {
 		t.Errorf("cut = %q", cut)
 	}
-	if CardCharsForContext(16384) != (16384-3048)*3 || CardCharsForContext(1000) != 4000 || CardCharsForContext(1<<20) != 48000 {
+	if CardCharsForContext(16384) != int(float64(16384-2648)*2.5) || CardCharsForContext(1000) != 4000 || CardCharsForContext(1<<20) != 48000 {
 		t.Error("card budget")
 	}
 }

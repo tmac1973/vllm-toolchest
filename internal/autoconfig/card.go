@@ -175,12 +175,19 @@ func capText(text string, max int) string {
 	return cut + "\n\n[The rest of the model card was left out for length.]"
 }
 
-// CardCharsForContext is the card budget for a helper model with a context of
-// ctx tokens: what is left after the answer and the instructions, at a
-// conservative three characters per token.
+// CardCharsForContext is the prompt budget for a helper model with a context
+// of ctx tokens: what is left after the answer and a margin, at two and a half
+// characters per token.
+//
+// It was three, and counted the card alone. On compute a card with eight
+// commands came to 14,337 tokens against a 16,384-token context with 2,048
+// reserved for the answer, and the engine refused it: model cards run nearer
+// three characters a token than four, and the commands and instructions came
+// on top. The budget now covers the whole prompt, which Ask fits the card
+// into, at a rate with room to spare.
 func CardCharsForContext(ctx int) int {
-	const answerTokens, instructionTokens, charsPerToken = 2048, 1000, 3
-	n := (ctx - answerTokens - instructionTokens) * charsPerToken
+	const answerTokens, marginTokens = 2048, 600
+	n := int(float64(ctx-answerTokens-marginTokens) * 2.5)
 	if n < 4000 {
 		return 4000
 	}

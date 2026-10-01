@@ -404,3 +404,29 @@ func TestNoNoteForAReadingThatCouldNotMatter(t *testing.T) {
 		t.Error("a rejected reading the command overrides anyway was reported")
 	}
 }
+
+// Without the helper's reading, the command that sets the most for the model
+// is used, not the first: cards open with the plainest recipe. A richer one
+// for the base model does not win over this repository's own.
+func TestWithoutTheHelperTheMostCompleteCommandIsUsed(t *testing.T) {
+	raw := "```\nvllm serve org/quant --tensor-parallel-size 4\n```\n\n" +
+		"```\nvllm serve org/quant --tensor-parallel-size 4 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder\n```\n\n" +
+		"```\nvllm serve org/quant --tensor-parallel-size 4 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":2}'\n```\n\n" +
+		"```\nvllm serve org/base --tensor-parallel-size 8 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\"}' --enable-prefix-caching --trust-remote-code\n```\n"
+	m := &models.Model{ID: "org/quant"}
+	in := Inputs{Model: m, Card: Card{Raw: raw, Text: raw}, Commands: ExtractCommands(raw), MachineEnv: machineEnv}
+	c := Validate(in)
+	if c.Command == nil || c.Command.Model != "org/quant" || c.Command.Settings().Start.SpeculativeConfig == "" {
+		t.Fatalf("chosen command: %+v", c.Command)
+	}
+	if !noteFor(c.Notes, "", "the most settings") {
+		t.Error("no note of how the command was chosen")
+	}
+
+	// The helper's choice still stands when it makes one.
+	one := 1
+	in.Advice, in.HasAdvice = Advice{CommandIndex: &one}, true
+	if c := Validate(in); c.Command == nil || c.Command.Settings().Start.ToolCallParser != "" {
+		t.Errorf("the helper chose the first command, and got %+v", c.Command)
+	}
+}

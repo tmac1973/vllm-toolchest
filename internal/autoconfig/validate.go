@@ -189,12 +189,41 @@ func (v *validator) chooseCommand() *Command {
 			c := full[i-1]
 			return &c
 		}
-		v.note("", originCard, fmt.Sprintf("The helper chose command %d of %d, which does not exist; the first is used.", *a.CommandIndex, len(full)))
-	} else if len(full) > 1 {
-		v.note("", originCard, fmt.Sprintf("The card shows %d complete commands; the first, from this repository's own card where it has one, is used.", len(full)))
+		v.note("", originCard, fmt.Sprintf("The helper chose command %d of %d, which does not exist; the one with the most settings for the model is used.", *a.CommandIndex, len(full)))
 	}
-	c := full[0]
+	c := mostComplete(full, v.in.Model)
+	if len(full) > 1 && !(v.in.HasAdvice && a.CommandIndex != nil) {
+		v.note("", originCard, fmt.Sprintf("The card shows %d complete commands; the one with the most settings for the model, from this repository's own card where it has one, is used.", len(full)))
+	}
 	return &c
+}
+
+// mostComplete picks, without the helper's reading, the command that sets the
+// most model settings -- parsers, tool calling, a speculative config -- ties
+// going to the first. Cards tend to open with the plainest recipe and build
+// up: Qwen3.5-35B-A3B-FP8's first command had neither tool calling nor its MTP
+// head, which the later ones added. Commands for this repository are preferred
+// over the base model's when there are any.
+func mostComplete(full []Command, m *models.Model) Command {
+	pool := full
+	if m != nil {
+		var own []Command
+		for _, c := range full {
+			if strings.EqualFold(c.Model, m.ID) {
+				own = append(own, c)
+			}
+		}
+		if len(own) > 0 {
+			pool = own
+		}
+	}
+	best, bestN := pool[0], -1
+	for _, c := range pool {
+		if n := len(knownFieldValues(c.Settings().Start)); n > bestN {
+			best, bestN = c, n
+		}
+	}
+	return best
 }
 
 // fromCommand turns the chosen command's flags and variables into rows and

@@ -114,7 +114,7 @@ func Run(ctx context.Context, d Deps, class models.ContextClass) (*Result, error
 		} else if d.Helper != nil {
 			// The helper call reports its own progress: stopping, starting,
 			// asking, restoring, in the order the engine work happens.
-			a, err := Ask(ctx, d.Helper, d.Model, card, commands)
+			a, err := Ask(ctx, d.Helper, d.Model, card, commands, d.CardChars)
 			switch {
 			case err != nil && ctx.Err() != nil:
 				return nil, ctx.Err()
