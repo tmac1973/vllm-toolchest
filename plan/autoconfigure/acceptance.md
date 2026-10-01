@@ -5,6 +5,26 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Third run on compute, 2026-10-01
+
+Deployed after PR #48.
+
+- **Failed start, context too long: met on hardware.** At two cards, 0.76 and
+  262,144 tokens, vLLM 0.29 reported room for 196,112 tokens; Configure
+  proposed 195,584, and Apply set it.
+- **The MoE's rejected readings, explained** by the cited sentence the note
+  now shows. Sampling: the helper quoted the base card's sampling list
+  accurately but without the blank line and indentation between its lines --
+  the check was too strict, and now accepts a quote whose every line is in
+  the card. Parser: the helper cited its own summary sentence, which is not
+  in the card -- the rejection was right. Neither could have changed the
+  proposal, since the command sets both, and such rejections are no longer
+  reported.
+- Compute left with both models on `Hand-tuned` and the engine stopped.
+
+Every success criterion is now met on compute except the single-card host,
+which needs the workstation deployed.
+
 ## Second run on compute, 2026-10-01
 
 Deployed after PR #47 (the PLE default, value-in-quote and markdown fixes).
