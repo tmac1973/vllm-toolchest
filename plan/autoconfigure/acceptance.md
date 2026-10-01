@@ -5,6 +5,45 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
+## Fourth run on compute: a new model, 2026-10-01
+
+A model never configured here, run through the UI by the operator:
+`Qwen/Qwen3.5-35B-A3B-FP8`, from a fresh download with the default config
+(one card, 8,192 tokens). Four rounds, each fixing what the last one showed:
+
+- **#50.** The helper refused the card: 14,337 prompt tokens and 2,048 for
+  the answer, over its 16,384. The budget now covers the whole prompt at
+  2.5 characters a token. The base model's card repeated the quant card's
+  four commands; a recipe is now listed once. Without the helper, the
+  fullest command is used.
+- **#51.** The card gives a base command and one variant per feature (tool
+  calling, MTP, `--language-model-only`); the helper rightly chose the base,
+  and the features were lost. What a chosen command's variants add is now
+  proposed: features ticked, vision-off unticked. The card's presence
+  penalty was dropped silently because a `generation_config.json` existed;
+  values the file does not set are now proposed.
+- **#52.** Still no sampling, and no note. The review now shows the helper's
+  answer as it gave it.
+- **#53.** That answer showed the helper quoted all four sampling sets and
+  gave null for every value. The general set is now read from its quote.
+
+The final review proposed 4 cards and 262,144 tokens, with room for 7
+full-length requests; reasoning `qwen3`, tool calling with `qwen3_coder`,
+MTP (`qwen3_next_mtp`, 2 tokens) and `{"presence_penalty": 1.5}`, ticked;
+`--language-model-only`, unticked. Save and apply, then Start:
+
+- **Started on the first attempt.** About 7 minutes, 4m19s of it engine init
+  (88 s compiling). vLLM maps `qwen3_next_mtp` to `mtp` with a deprecation
+  warning.
+- KV cache 1,666,259 tokens: 6.36 full-length requests at once, against the
+  7 planned -- the projection was about 10% high, but the context fit, and
+  the refinement found nothing to change.
+- A tool-calling request answered with reasoning separated and a correct
+  `get_weather` call.
+
+This is the first model taken from download to serving by Autoconfigure
+alone, with nothing hand-tuned to match.
+
 ## Third run on compute, 2026-10-01
 
 Deployed after PR #48.
