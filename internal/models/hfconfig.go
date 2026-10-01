@@ -22,7 +22,8 @@ import (
 // 2: Draft -- whether the checkpoint is a speculative-decoding drafter.
 // 3: PLELayers.
 // 4: MTPLayers.
-const hfMetaVersion = 4
+// 5: SlidingLayers, SlidingWindow, GlobalKVHeads, GlobalHeadDim.
+const hfMetaVersion = 5
 
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {
@@ -78,7 +79,10 @@ func ParseHFConfig(modelDir string) HFConfig {
 	// Hybrid models list a type per layer. Only the full-attention ones carry
 	// a KV cache; linear-attention / mamba / GDN layers keep a fixed-size
 	// recurrent state instead, which does not scale with context.
-	cfg.AttentionLayers = countAttentionLayers(src, cfg.NumHiddenLayers)
+	jsonFieldFrom(src, &cfg.SlidingWindow, "sliding_window")
+	cfg.AttentionLayers, cfg.SlidingLayers = countAttentionLayers(src, cfg.NumHiddenLayers, cfg.SlidingWindow > 0)
+	jsonFieldFrom(src, &cfg.GlobalKVHeads, "num_global_key_value_heads")
+	jsonFieldFrom(src, &cfg.GlobalHeadDim, "global_head_dim")
 
 	// Intermediate size
 	if !jsonFieldFrom(src, &cfg.IntermediateSize, "intermediate_size") {
@@ -675,7 +679,8 @@ func jsonFieldFrom[T any](raw map[string]json.RawMessage, dst *T, key string) bo
 	return json.Unmarshal(v, dst) == nil
 }
 
-// countAttentionLayers works out how many layers hold a KV cache.
+// countAttentionLayers works out how many layers hold a KV cache that grows
+// with the context, and how many hold one capped at a sliding window.
 //
 // Three shapes appear in the wild, in decreasing order of reliability:
 //
@@ -683,16 +688,17 @@ func jsonFieldFrom[T any](raw map[string]json.RawMessage, dst *T, key string) bo
 //	full_attention_interval: 4                                 every Nth layer
 //	(neither)                                                  assume dense
 //
-// Returns 0 when the layer count itself is unknown, so callers can tell
-// "no information" from "genuinely zero".
-func countAttentionLayers(src map[string]json.RawMessage, totalLayers int) int {
+// A "sliding" layer is counted apart only when the config gives a window
+// (windowed); without one there is nothing to cap it at, and it is counted
+// as full. Returns 0 full layers when the layer count itself is unknown, so
+// callers can tell "no information" from "genuinely zero".
+func countAttentionLayers(src map[string]json.RawMessage, totalLayers int, windowed bool) (full, sliding int) {
 	if totalLayers <= 0 {
-		return 0
+		return 0, 0
 	}
 
 	var types []string
 	if jsonFieldFrom(src, &types, "layer_types") && len(types) > 0 {
-		n := 0
 		for _, t := range types {
 			// Match on the absence of a linear/recurrent marker rather than a
 			// fixed list of attention spellings: new hybrids keep inventing
@@ -705,20 +711,22 @@ func countAttentionLayers(src map[string]json.RawMessage, totalLayers int) int {
 				strings.Contains(t, "gdn"),
 				strings.Contains(t, "conv"):
 				// recurrent layer: no KV cache
+			case windowed && strings.Contains(t, "sliding"):
+				sliding++
 			default:
-				n++
+				full++
 			}
 		}
-		return n
+		return full, sliding
 	}
 
 	// Some configs give only the stride between full-attention layers.
 	var interval int
 	if jsonFieldFrom(src, &interval, "full_attention_interval") && interval > 1 {
-		return totalLayers / interval
+		return totalLayers / interval, 0
 	}
 
-	return totalLayers
+	return totalLayers, 0
 }
 
 // countDenseLayers works out how many layers of an MoE model keep an ordinary

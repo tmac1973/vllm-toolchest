@@ -197,6 +197,6 @@ func mtpKVPerToken(cfg HFConfig, c VLLMConfig) int64 {
 		return 0
 	}
 	layer := cfg
-	layer.AttentionLayers = cfg.MTPLayers
+	layer.AttentionLayers, layer.SlidingLayers = cfg.MTPLayers, 0
 	return kvCachePerToken(layer, c)
 }
