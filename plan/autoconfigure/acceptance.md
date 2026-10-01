@@ -20,7 +20,7 @@ Deployed after PR #48.
   in the card -- the rejection was right. Neither could have changed the
   proposal, since the command sets both, and such rejections are no longer
   reported.
-- Compute left with both models on `Hand-tuned` and the engine stopped.
+- Compute left with both models on `Hand-tuned`; the engine shows the error of the deliberate failure until the next Start, since Stop refuses from that state.
 
 Every success criterion is now met on compute except the single-card host,
 which needs the workstation deployed.
