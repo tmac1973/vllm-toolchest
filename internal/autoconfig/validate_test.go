@@ -495,3 +495,35 @@ func TestTheVariantsOfTheChosenCommand(t *testing.T) {
 		t.Errorf("%d tool-call parser rows", n)
 	}
 }
+
+// Qwen3.5-35B-A3B-FP8's card gives four sampling sets. The helper quoted all
+// four and gave no values; the general set is read from its quote. The
+// model's generation_config.json sets the temperature, top_p and top_k, and
+// min_p 0 and repetition 1 are vLLM's own defaults, so the override carries
+// the presence penalty alone.
+func TestSamplingSetsReadFromTheQuote(t *testing.T) {
+	quote := "We recommend using the following set of sampling parameters for generation\n" +
+		"- Thinking mode for precise coding tasks (e.g. WebDev): `temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0`\n" +
+		"- Thinking mode for general tasks: `temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0`\n" +
+		"- Instruct (or non-thinking) mode for general tasks: `temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0`"
+	card := "# Model\n\n## Best Practices\n\n> " + strings.ReplaceAll(quote, "\n", "\n> ") + "\n"
+	m := &models.Model{ID: "org/m", GenDefaults: models.GenDefaults{Temperature: f64(1.0), TopP: f64(0.95), TopK: intp(20)}}
+	in := Inputs{Model: m, Card: Card{Raw: card, Text: card}, HasAdvice: true, Advice: Advice{SamplingQuote: quote}}
+	c := Validate(in)
+	if r := rowByKey(c.Rows, "flag:--override-generation-config"); r == nil || !r.Ticked || r.Flag[1] != `{"presence_penalty":1.5}` {
+		t.Errorf("override: %+v notes: %+v", r, c.Notes)
+	}
+
+	// Without a generation_config.json, the whole general set.
+	in.Model = &models.Model{ID: "org/m"}
+	r := rowByKey(Validate(in).Rows, "flag:--override-generation-config")
+	if r == nil || !strings.Contains(r.Flag[1], `"temperature":1`) || !strings.Contains(r.Flag[1], `"top_k":20`) {
+		t.Errorf("without the file: %+v", r)
+	}
+
+	// A quote that is not in the card gives nothing.
+	in.Advice.SamplingQuote = "temperature=0.3, top_p=0.5 is what we use"
+	if rowByKey(Validate(in).Rows, "flag:--override-generation-config") != nil {
+		t.Error("values were read from a quote not in the card")
+	}
+}

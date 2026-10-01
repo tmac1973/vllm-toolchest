@@ -557,6 +557,9 @@ func (v *validator) samplingFromProse(chosen *Command) {
 	if !v.in.HasAdvice {
 		return
 	}
+	if noSampling(a) && v.verified(a.SamplingQuote) {
+		a = fillSampling(a)
+	}
 	values := map[string]float64{}
 	var rejected []string
 	check := func(key string, val *float64, lo, hi float64) {
@@ -629,7 +632,7 @@ func (v *validator) samplingFromProse(chosen *Command) {
 		// penalty of 1.5 that was dropped without a word.
 		missing := map[string]float64{}
 		for k, val := range values {
-			if _, set := file[k]; !set {
+			if _, set := file[k]; !set && !neutralSampling(k, val) {
 				missing[k] = val
 			}
 		}
@@ -660,6 +663,19 @@ func fileSetsAll(m *models.Model, values map[string]float64) bool {
 		}
 	}
 	return true
+}
+
+// neutralSampling reports a value that is vLLM's own default, which an
+// override need not repeat: a min_p of 0, a presence penalty of 0, a
+// repetition penalty of 1.
+func neutralSampling(key string, val float64) bool {
+	switch key {
+	case "min_p", "presence_penalty":
+		return val == 0
+	case "repetition_penalty":
+		return val == 1
+	}
+	return false
 }
 
 func genDefaultsSet(m *models.Model) bool {
