@@ -20,7 +20,9 @@ import (
 // 1: MoE shape -- NumExperts, NumExpertsPerTok, MoEIntermediate,
 // SharedExpertInter, DenseLayers.
 // 2: Draft -- whether the checkpoint is a speculative-decoding drafter.
-const hfMetaVersion = 3
+// 3: PLELayers.
+// 4: MTPLayers.
+const hfMetaVersion = 4
 
 // ParseHFConfig reads config.json and extracts key architecture fields.
 func ParseHFConfig(modelDir string) HFConfig {
@@ -154,6 +156,12 @@ func ParseHFConfig(modelDir string) HFConfig {
 	var pleLayers []int
 	if jsonFieldFrom(src, &pleLayers, "ple_layer_ids") {
 		cfg.PLELayers = len(pleLayers)
+	}
+
+	// Qwen3.5 names its MTP layers mtp_num_hidden_layers; DeepSeek and GLM,
+	// num_nextn_predict_layers.
+	if !jsonFieldFrom(src, &cfg.MTPLayers, "mtp_num_hidden_layers") {
+		jsonFieldFrom(src, &cfg.MTPLayers, "num_nextn_predict_layers")
 	}
 
 	// Stamped only on the success path: a config.json we could not read or

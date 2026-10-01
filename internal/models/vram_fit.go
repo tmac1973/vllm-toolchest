@@ -78,18 +78,20 @@ const (
 //	MoE hybrid     TP=4   5.32   of it non-torch 2.63
 //	MoE hybrid     TP=4   5.50   an earlier engine build
 //	27B hybrid     TP=2   6.49   of it non-torch 2.65
+//	35B-A3B MoE    TP=4   2.30   Qwen3.5 FP8, vLLM 0.29
 //
 // Without it the 27B's projection was 12 to 15 GB under what the engine
 // needed, at its pessimistic end. It is a band across what was seen and no
-// wider, because two models on one host cannot say what it depends on -- the
-// allocator's share looks to grow with the weights a rank holds, and that is
-// one model's worth of evidence.
+// wider, because three models on one host cannot say what it depends on. The
+// third sat well under the first two, and was what took the low end from 4.5
+// to 2.3: its projection had been saved from overstating its room only by the
+// KV cache being understated twice over.
 //
 // Charged from two ranks up, as the replication surcharge is. The one
 // single-rank start on record consumed barely more than its weights, on a
 // different host and image; whether a single rank here would is not known.
 const (
-	rankOverheadLowGB  = 4.5
+	rankOverheadLowGB  = 2.3
 	rankOverheadHighGB = 6.5
 )
 
@@ -265,7 +267,7 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 	// than four: 123.6 GB against 113.9.
 	if est.Source == SourceMeasured && est.MeasuredTP > 0 && est.TotalRequiredGB > 0 {
 		o.Measured = tp == est.MeasuredTP
-		o.KVGB = est.KVAtContextGB
+		o.KVGB = est.KVAtContextGB * est.KVScale(tp)
 
 		var low float64
 		if o.Measured {
@@ -295,8 +297,8 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 		o.Uncertain = !o.Fits && low <= o.AvailableGB
 		if spare := o.AvailableGB - o.RequiredHigh; spare > 0 {
 			o.SpareGB = spare
-			if est.KVAtContextGB > 0 {
-				o.ConcurrentSeqs = 1 + int(spare/est.KVAtContextGB)
+			if o.KVGB > 0 {
+				o.ConcurrentSeqs = 1 + int(spare/o.KVGB)
 			}
 		}
 		return o
@@ -317,8 +319,8 @@ func evaluateTP(est VRAMEstimate, c VLLMConfig, inv GPUInventory, tp int, util f
 	// context. The requirement already includes one, so the spare adds to it.
 	if spare := o.AvailableGB - r.TotalHighGB; spare > 0 {
 		o.SpareGB = spare
-		if est.KVAtContextGB > 0 {
-			o.ConcurrentSeqs = 1 + int(spare/est.KVAtContextGB)
+		if r.KVGB > 0 {
+			o.ConcurrentSeqs = 1 + int(spare/r.KVGB)
 		}
 	}
 	return o

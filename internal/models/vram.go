@@ -67,8 +67,15 @@ type VRAMEstimate struct {
 	DeviceWeightsHighGB float64 `json:"device_weights_high_gb,omitempty"`
 
 	// KVCachePerTokenB is for the whole model, across every attention layer,
-	// and for the draft model beside it when there is one.
+	// and for the draft model beside it when there is one, totalled across
+	// the ranks of KVWidth.
 	KVCachePerTokenB int64 `json:"kv_cache_per_token_bytes"`
+	// KVWidth is the tensor-parallel width the KV figures describe: the
+	// configured width for a projection, the measured one for a measurement.
+	// KVHeads is the model's KV head count. KVScale carries the figures to
+	// another width.
+	KVWidth int `json:"kv_width,omitempty"`
+	KVHeads int `json:"kv_heads,omitempty"`
 
 	// Source says where these figures came from, and it is the most important
 	// field here. "measured" is what a real start reported; "projected" is
@@ -186,7 +193,11 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 
 	cfg := m.HFConfig
 	est.Offload = DetectOffload(envPairs, m.VLLMConfig.ExtraFlags)
-	est.KVCachePerTokenB = kvCachePerToken(cfg, m.VLLMConfig) + draftKVPerToken(m.VLLMConfig)
+	// At the configured width, heads copied past their count included.
+	tp := max(1, m.VLLMConfig.TensorParallelSize)
+	target := float64(kvCachePerToken(cfg, m.VLLMConfig) + mtpKVPerToken(cfg, m.VLLMConfig))
+	est.KVHeads, est.KVWidth = cfg.NumKeyValueHeads, tp
+	est.KVCachePerTokenB = int64(target*kvReplication(cfg.NumKeyValueHeads, tp)) + draftKVPerTokenAt(m.VLLMConfig, tp)
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 	est.DraftGB = draftWeightsGB(m.VLLMConfig)
 
@@ -305,6 +316,29 @@ type Requirement struct {
 	TotalHighGB float64
 }
 
+// kvReplication is how many copies of the KV cache's heads a width holds,
+// relative to the model's own count. Every rank holds at least one KV head,
+// so past the head count they are copied: Qwen3.5-35B-A3B has two, and at
+// four cards each is held twice. Planned as if they were split, its context
+// was projected at 7 full-length requests and the engine found room for 6.36.
+func kvReplication(kvHeads, tp int) float64 {
+	if kvHeads <= 0 || tp <= 1 {
+		return 1
+	}
+	perRank := (kvHeads + tp - 1) / tp
+	return float64(perRank*tp) / float64(kvHeads)
+}
+
+// KVScale is what the KV figures are multiplied by to describe width tp
+// instead of KVWidth. One for an estimate that predates the fields.
+func (e VRAMEstimate) KVScale(tp int) float64 {
+	if e.KVHeads <= 0 {
+		return 1
+	}
+	from := max(1, e.KVWidth)
+	return kvReplication(e.KVHeads, tp) / kvReplication(e.KVHeads, from)
+}
+
 // RequiredAt works out what this model needs at a given tensor-parallel width.
 //
 // Everything here scales with something the operator can change, which is the
@@ -319,7 +353,7 @@ func RequiredAt(est VRAMEstimate, c VLLMConfig, tp int) Requirement {
 		TP:            tp,
 		WeightsGB:     weightsTotalGB(est.DeviceWeightsGB, tp),
 		WeightsHighGB: weightsTotalGB(est.DeviceWeightsHighGB, tp),
-		KVGB:          est.KVAtContextGB,
+		KVGB:          est.KVAtContextGB * est.KVScale(tp),
 		// Every rank captures its own graph ladder and stages its own expert
 		// cache, so both scale with the width.
 		CacheGB: est.DeviceCacheGB * float64(tp),

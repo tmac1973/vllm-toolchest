@@ -95,6 +95,10 @@ type HFConfig struct {
 	// PLELayers is how many layers carry a per-layer embedding table, the
 	// table PLE offload keeps in host RAM. Zero for most models.
 	PLELayers int `json:"ple_layers,omitempty"`
+	// MTPLayers is how many multi-token-prediction layers the checkpoint
+	// carries for drafting with its own head. Each is a full transformer
+	// layer, attention included, so serving with MTP adds its KV cache.
+	MTPLayers int `json:"mtp_layers,omitempty"`
 
 	// MetaVersion is the parser revision that wrote this record, so a field
 	// added later can be backfilled even when its zero value is legitimate.

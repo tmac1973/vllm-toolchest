@@ -170,9 +170,33 @@ func draftWeightsGB(c VLLMConfig) float64 {
 // third as much again: 32,768 bytes a token for the target, 10,240 for a
 // five-layer DFlash drafter, and the engine allocating 47,836.
 func draftKVPerToken(c VLLMConfig) int64 {
+	return draftKVPerTokenAt(c, 1)
+}
+
+// draftKVPerTokenAt is draftKVPerToken at width tp, the drafter's own KV
+// heads copied past their count as the target's are.
+func draftKVPerTokenAt(c VLLMConfig, tp int) int64 {
 	ref, ok := ParseSpeculative(c.SpeculativeConfig)
 	if !ok || ref.LocalDraft() == "" {
 		return 0
 	}
-	return kvCachePerToken(ParseHFConfig(ref.LocalDraft()), c)
+	cfg := ParseHFConfig(ref.LocalDraft())
+	return int64(float64(kvCachePerToken(cfg, c)) * kvReplication(cfg.NumKeyValueHeads, tp))
+}
+
+// mtpKVPerToken is what drafting with the model's own MTP head adds to the
+// KV cache, per token: each MTP layer is a full layer with its own
+// attention. Zero without an MTP speculative config, or for a checkpoint
+// that does not say how many MTP layers it has.
+//
+// Qwen3.5-35B-A3B has one beside its ten full-attention layers -- a tenth
+// more cache per token, which the estimate had counted as nothing.
+func mtpKVPerToken(cfg HFConfig, c VLLMConfig) int64 {
+	ref, ok := ParseSpeculative(c.SpeculativeConfig)
+	if !ok || ref.LocalDraft() != "" || !strings.Contains(strings.ToLower(ref.Method), "mtp") || cfg.MTPLayers <= 0 {
+		return 0
+	}
+	layer := cfg
+	layer.AttentionLayers = cfg.MTPLayers
+	return kvCachePerToken(layer, c)
 }
