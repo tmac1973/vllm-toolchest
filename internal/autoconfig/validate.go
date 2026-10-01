@@ -146,11 +146,13 @@ func Validate(in Inputs) Checked {
 
 	chosen := v.chooseCommand()
 	var start process.VLLMStartConfig
+	var variantSpec, variantSpecQuote string
 	if chosen != nil {
 		v.out.Command = chosen
 		s := chosen.Settings()
 		start = s.Start
 		v.fromCommand(chosen, s)
+		variantSpec, variantSpecQuote = v.fromVariants(chosen, &start)
 	}
 	for _, c := range in.Commands {
 		if c.Partial {
@@ -158,7 +160,7 @@ func Validate(in Inputs) Checked {
 		}
 	}
 	v.fromInline(chosen)
-	v.speculative(chosen, start)
+	v.speculative(chosen, start, variantSpec, variantSpecQuote)
 	v.samplingFromProse(chosen)
 	v.parsersFromProse(start)
 	v.otherAdvice()
@@ -173,6 +175,9 @@ func (v *validator) row(r Row) {
 	r.Origin = originCard
 	if r.Quote == "" {
 		return // no words from the card, no row
+	}
+	if slices.ContainsFunc(v.out.Rows, func(x Row) bool { return x.Key == r.Key }) {
+		return // the first source to propose a setting decides it
 	}
 	v.out.Rows = append(v.out.Rows, r)
 }
@@ -217,9 +222,17 @@ func mostComplete(full []Command, m *models.Model) Command {
 			pool = own
 		}
 	}
+	// A command counts what its variants add too: a base recipe with one
+	// variant per feature brings them all, where the richest single variant
+	// would bring only its own.
 	best, bestN := pool[0], -1
 	for _, c := range pool {
-		if n := len(knownFieldValues(c.Settings().Start)); n > bestN {
+		n := len(knownFieldValues(c.Settings().Start))
+		for _, vr := range variantsOf(&c, full) {
+			st, _ := process.ParseArgs(slices.Concat(vr.adds...))
+			n += len(knownFieldValues(st))
+		}
+		if n > bestN {
 			best, bestN = c, n
 		}
 	}
@@ -438,7 +451,10 @@ func (v *validator) fromInline(chosen *Command) {
 
 // speculative proposes speculative decoding, pairing an installed draft
 // when the card's recommendation needs one.
-func (v *validator) speculative(chosen *Command, start process.VLLMStartConfig) {
+//
+// variantSpec is a speculative config one of the chosen command's variants
+// adds, with its quote: used, ticked, when the command itself has none.
+func (v *validator) speculative(chosen *Command, start process.VLLMStartConfig, variantSpec, variantQuote string) {
 	type source struct {
 		raw, quote string
 		prescribed bool
@@ -446,6 +462,8 @@ func (v *validator) speculative(chosen *Command, start process.VLLMStartConfig) 
 	var src *source
 	if start.SpeculativeConfig != "" {
 		src = &source{start.SpeculativeConfig, snippet(chosen.Raw, "--speculative-config"), true}
+	} else if variantSpec != "" {
+		src = &source{variantSpec, variantQuote, true}
 	} else {
 		for _, g := range v.in.Inline {
 			if g[0] == "--speculative-config" && len(g) > 1 {
@@ -600,8 +618,25 @@ func (v *validator) samplingFromProse(chosen *Command) {
 			v.note("extra_flags", originCard, "The card's text gives different sampling values from its command; the command's are used.")
 		}
 	case genDefaultsSet(v.in.Model):
-		if differs(values, genDefaultsMap(v.in.Model.GenDefaults)) {
+		file := genDefaultsMap(v.in.Model.GenDefaults)
+		if differs(values, file) {
 			v.note("extra_flags", originCard, "The card's text gives different sampling values from the model's generation_config.json; that file's are used.")
+		}
+		// What the file does not set, the card's value fills: vLLM merges the
+		// override into the file's values. Found on compute: Qwen3.5's file
+		// sets temperature, top_p and top_k, and its card adds a presence
+		// penalty of 1.5 that was dropped without a word.
+		missing := map[string]float64{}
+		for k, val := range values {
+			if _, set := file[k]; !set {
+				missing[k] = val
+			}
+		}
+		if len(missing) > 0 {
+			data, _ := json.Marshal(missing)
+			v.row(Row{Key: "flag:" + overrideFlag, Kind: RowFlag, Flag: []string{overrideFlag, string(data)},
+				Quote: clip(a.SamplingQuote, maxQuote), Ticked: true,
+				Reason: "Sampling settings the card recommends that the model's generation_config.json does not set. vLLM adds them to that file's."})
 		}
 	default:
 		data, _ := json.Marshal(values)
