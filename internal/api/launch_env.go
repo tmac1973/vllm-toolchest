@@ -55,7 +55,17 @@ func (s *Server) launchEnv(m *models.Model) []string {
 // A nil model means the machine-wide environment alone — what the Settings
 // page shows, where no model is in view.
 func (s *Server) configuredEnvPairs(m *models.Model) []string {
-	pairs := append(s.variantImageEnv(), s.cfg.RuntimeEnvPairs()...)
+	pairs := s.variantImageEnv()
+	// An image that offloads a PLE table by default does so whether or not
+	// the variable is set, so a checkpoint with one is given it explicitly,
+	// as the lowest layer: the estimate then counts the offload the engine
+	// will do, and any layer above can still turn it off.
+	if m != nil && m.HFConfig.PLELayers > 0 {
+		if d, ok := variants.Get(s.vllmEnv.Variant); ok && d.Has("ple_offload_default") {
+			pairs = append(pairs, "VLLM_PLE_CPU_OFFLOAD=1")
+		}
+	}
+	pairs = append(pairs, s.cfg.RuntimeEnvPairs()...)
 	pairs = append(pairs, s.cfg.KnobEnv(s.vllmEnv.Variant)...)
 	if m != nil {
 		// Parsed by the same code as the machine-wide block, so a malformed

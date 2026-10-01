@@ -210,3 +210,16 @@ func TestAnExistingRecordIsReclassifiedOnTheNextScan(t *testing.T) {
 		t.Error("a draft registered by an older build is still an ordinary model after a scan")
 	}
 }
+
+// The n-gram table some Qwen-Next checkpoints carry is listed by layer in
+// text_config, and is what PLE offload moves to host RAM.
+func TestAPLETableIsRead(t *testing.T) {
+	cfg := ParseHFConfig(writeModelDir(t, `{"architectures": ["Qwen3_5MoeForConditionalGeneration"],
+		"text_config": {"hidden_size": 2560, "num_hidden_layers": 48, "ple_layer_ids": [2], "ngram_size": 3}}`, 0))
+	if cfg.PLELayers != 1 {
+		t.Errorf("PLELayers = %d, want 1", cfg.PLELayers)
+	}
+	if plain := ParseHFConfig(writeModelDir(t, `{"hidden_size": 2560, "num_hidden_layers": 48}`, 0)); plain.PLELayers != 0 {
+		t.Errorf("a plain checkpoint has %d PLE layers", plain.PLELayers)
+	}
+}

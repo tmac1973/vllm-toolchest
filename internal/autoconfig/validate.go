@@ -541,6 +541,17 @@ func (v *validator) samplingFromProse(chosen *Command) {
 		v.unverified("sampling values", "")
 		return
 	}
+	// The sentence has to state each value, not merely exist: a value the
+	// quote does not contain was not read from it.
+	for k, val := range values {
+		if !numberInQuote(a.SamplingQuote, val) {
+			delete(values, k)
+			v.note("extra_flags", originCard, fmt.Sprintf("The helper read a %s of %g, but the sentence it cited does not give that value, so it was not used.", k, val))
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
 
 	var override map[string]any
 	if chosen != nil {
@@ -615,6 +626,22 @@ func (v *validator) parsersFromProse(start process.VLLMStartConfig) {
 		return
 	}
 	quote := clip(a.ParserQuote, maxQuote)
+	named := func(p *string) bool {
+		if p == nil || *p == "" {
+			return false
+		}
+		if !strings.Contains(strings.ToLower(a.ParserQuote), strings.ToLower(*p)) {
+			v.note("", originCard, "The helper read a parser named "+*p+", but the sentence it cited does not name it, so it was not used.")
+			return false
+		}
+		return true
+	}
+	if !named(a.ReasoningParser) {
+		a.ReasoningParser = nil
+	}
+	if !named(a.ToolCallParser) {
+		a.ToolCallParser = nil
+	}
 	if a.ReasoningParser != nil && start.ReasoningParser == "" && *a.ReasoningParser != "" {
 		v.fieldRow("reasoning_parser", *a.ReasoningParser, quote, "The reasoning parser the card names.", true)
 	}
@@ -631,7 +658,7 @@ func (v *validator) otherAdvice() {
 		return
 	}
 	if a.RecommendedContext != nil {
-		if v.verified(a.ContextQuote) {
+		if v.verified(a.ContextQuote) && contextInQuote(a.ContextQuote, *a.RecommendedContext) {
 			v.note("max_model_len", originCard, fmt.Sprintf("The card recommends a context of %d tokens. The context is chosen for this machine from the size you asked for. The card says: “%s”",
 				*a.RecommendedContext, clip(a.ContextQuote, maxQuote)))
 		}
@@ -659,8 +686,17 @@ func (v *validator) unverified(what, value string) {
 
 var spaceRuns = regexp.MustCompile(`\s+`)
 
+// markdownMarks are the formatting characters a reader does not see and a
+// helper does not copy: code ticks, emphasis, blockquote markers.
+var markdownMarks = strings.NewReplacer("`", "", "**", "", "*", "", "> ", " ")
+
+// normalise is text as compared for a quote: lower case, markdown marks
+// dropped, whitespace collapsed. Found on compute: the MoE's card lists its
+// sampling values as `temperature=0.7`, `top_p=0.80`, and a helper quoting
+// that line without the ticks was told its sentence was not in the card.
 func normalise(s string) string {
-	return strings.TrimSpace(spaceRuns.ReplaceAllString(strings.ToLower(s), " "))
+	s = markdownMarks.Replace(strings.ToLower(s))
+	return strings.TrimSpace(spaceRuns.ReplaceAllString(s, " "))
 }
 
 // quoteInCard reports whether a quote is in the card, allowing for case and
@@ -746,4 +782,43 @@ func fieldText(c models.VLLMConfig, field string) (string, bool) {
 		return c.Tokenizer, true
 	}
 	return "", false
+}
+
+// numberInQuote reports whether a quote states a value: 0.6 as "0.6" or
+// ".6", 20 as "20".
+func numberInQuote(quote string, val float64) bool {
+	q := strings.ToLower(quote)
+	for _, form := range []string{strconv.FormatFloat(val, 'f', -1, 64), strconv.FormatFloat(val, 'g', -1, 64)} {
+		if strings.Contains(q, form) || strings.Contains(q, strings.TrimPrefix(form, "0")) && strings.HasPrefix(form, "0.") {
+			return true
+		}
+	}
+	return false
+}
+
+// contextInQuote reports whether a quote states a context length, in any of
+// the ways cards write one: 262144, 262,144, 256K or 256k.
+func contextInQuote(quote string, tokens int) bool {
+	q := strings.ToLower(strings.ReplaceAll(quote, "\u00a0", " "))
+	forms := []string{strconv.Itoa(tokens), groupDigits(tokens)}
+	if tokens%1024 == 0 {
+		forms = append(forms, strconv.Itoa(tokens/1024)+"k", strconv.Itoa(tokens/1024)+" k")
+	}
+	if tokens%1000 == 0 {
+		forms = append(forms, strconv.Itoa(tokens/1000)+"k")
+	}
+	for _, f := range forms {
+		if strings.Contains(q, f) {
+			return true
+		}
+	}
+	return false
+}
+
+func groupDigits(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }

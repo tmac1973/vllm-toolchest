@@ -334,3 +334,47 @@ func TestApply(t *testing.T) {
 		t.Error("an unparseable value was applied")
 	}
 }
+
+// Found on compute: the helper cited a real sentence from the card for a
+// recommended context, but the sentence said nothing about context. A quote
+// has to state the value it is cited for.
+func TestAQuoteMustStateItsValue(t *testing.T) {
+	card := "# Model\n\nNOTICE: This checkpoint runs only on the tcclaviger/vllm image.\n\nWe serve it with a 256K context and a temperature of 0.6, top_p 0.95.\n\nUse the qwen3 reasoning parser.\n"
+	base := Inputs{Model: &models.Model{ID: "org/m"}, Card: Card{Raw: card, Text: card}, HasAdvice: true}
+
+	in := base
+	in.Advice = Advice{RecommendedContext: intp(262144), ContextQuote: "NOTICE: This checkpoint runs only on the tcclaviger/vllm image."}
+	if noteFor(Validate(in).Notes, "max_model_len", "recommends a context") {
+		t.Error("a context was attributed to a sentence that does not state it")
+	}
+	in.Advice.ContextQuote = "We serve it with a 256K context"
+	if !noteFor(Validate(in).Notes, "max_model_len", "recommends a context of 262144") {
+		t.Error("256K was not recognised as 262,144 tokens")
+	}
+
+	in = base
+	in.Advice = Advice{Temperature: f64(0.6), TopK: intp(20), SamplingQuote: "a temperature of 0.6, top_p 0.95"}
+	c := Validate(in)
+	r := rowByKey(c.Rows, "flag:--override-generation-config")
+	if r == nil || !strings.Contains(r.Flag[1], `"temperature":0.6`) || strings.Contains(r.Flag[1], "top_k") {
+		t.Errorf("sampling row: %+v", r)
+	}
+	if !noteFor(c.Notes, "extra_flags", "top_k of 20") {
+		t.Error("a value the quote does not give was not reported")
+	}
+
+	in = base
+	in.Advice = Advice{ReasoningParser: str("deepseek_r1"), ParserQuote: "Use the qwen3 reasoning parser."}
+	if rowByKey(Validate(in).Rows, "field:reasoning_parser") != nil {
+		t.Error("a parser the quote does not name was proposed")
+	}
+}
+
+func TestAQuoteWithoutTheCardsMarkdownStillMatches(t *testing.T) {
+	card := "> - Instruct (or non-thinking) mode: `temperature=0.7`, `top_p=0.80`, `top_k=20`, **recommended**\n"
+	in := Inputs{Model: &models.Model{ID: "org/m"}, Card: Card{Raw: card, Text: card}, HasAdvice: true,
+		Advice: Advice{Temperature: f64(0.7), SamplingQuote: "Instruct (or non-thinking) mode: temperature=0.7, top_p=0.80, top_k=20, recommended"}}
+	if rowByKey(Validate(in).Rows, "flag:--override-generation-config") == nil {
+		t.Error("a quote that differs from the card only in markdown was rejected")
+	}
+}

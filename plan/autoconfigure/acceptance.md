@@ -5,7 +5,99 @@ Phase 14's record. Phases 01-13 are built on the `autoconfigure` branch with
 cards and real hardware, and what has not yet, criterion by criterion. Nothing
 here is summarised from memory: each line says how it was checked.
 
-## Status on 2026-09-30
+## Run on compute, 2026-10-01
+
+Deployed build `816cfe2` (PR #45), image `rdna4-clav`, vLLM 0.29.0.dev0. Both
+reference models' configs were saved as `Hand-tuned` first and restored
+afterwards; the engine was left stopped, as it was found.
+
+### Helper model
+
+Downloaded from Settings in about 90 s. Loaded on `rdna4-clav` in 3 min 01 s
+the first time and 1 min 10 s the second; answered in 18 s and 15 s.
+`response_format` with `json_schema` was accepted -- no fallback needed.
+
+### 27B (`tcclaviger/ThinkingCap-3.8-27B-PARO5`)
+
+Reset to defaults, then Autoconfigure with **Maximum** and nothing serving:
+3 min 22 s end to end. Saved and applied with the default ticks.
+
+- **First start: succeeded**, ready in 4 min 21 s, serving requests with
+  reasoning separated. **Met.**
+- Plan: four cards, 262,144 tokens, fp8 from the card's command, room for 4
+  full-context requests (5.74 measured); two cards offered as the narrow
+  option.
+- **Against `Hand-tuned`:** tool and reasoning parsers, chunked prefill,
+  8,192 batched tokens, the sampling override, compilation config, the
+  DFlash draft at 7 tokens and all five environment lines **identical** --
+  the measurement fingerprint is the same as the hand-built config's. Context
+  equal (262,144); sequence cap 16 against 8. **Met.** Differences allowed by
+  the criterion: memory fraction 0.90 against 0.92, and `trust_remote_code`
+  on (the registration default; the card does not set it).
+- No refinement was offered, correctly: the context was already the class's
+  full 262,144.
+- The container cache paths and `ROCR_VISIBLE_DEVICES` were proposed
+  unticked, as intended.
+
+### MoE (`tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ`)
+
+Reset to defaults, then Autoconfigure with **Maximum** while the 27B served.
+
+- **Interrupting and restoring:** the 27B was stopped at 22:49:03 and was
+  serving again at 22:53:33 -- **4 min 30 s of downtime**, most of it its own
+  reload. **Met.**
+- Card half: parsers, chunked prefill, batching, sampling override,
+  compilation config, the MTP speculative config and the five environment
+  lines matched `Hand-tuned`. The `--hf-overrides` rope scaling for 524k
+  context was proposed unticked, as intended.
+- **Hardware half: failed.** The planner said "does not fit on this machine at
+  any width" and left one card at 8,192 tokens, which cannot start. Cause:
+  the card's command sets no offload variable, so the estimate counted the
+  whole checkpoint on the cards. Started by hand at four cards and 262,144
+  tokens *without* the variable, the model logged
+  `EngramConfig(cpu_offload=True)`, pinned its 38.74 GiB n-gram table in host
+  RAM and served -- the image offloads it by default. **Fixed** on
+  `autoconfigure-acceptance-fixes` (rdna4-clav declares the default; a
+  checkpoint with a PLE table is estimated as offloading). Not yet re-run on
+  compute with the fix.
+- Against `Hand-tuned`, beyond the hardware: the hand config also enables
+  prefix caching and three `PYTORCH_TUNABLEOP_*` variables, none of which the
+  card names; the memory fraction is 0.97 there.
+- The helper's sampling and parser readings were rejected as "not in the
+  card": the card writes them as `` `temperature=0.7` `` and the helper quoted
+  them without the ticks. **Fixed** (quotes are compared without markdown).
+  Harmless here, since the command already carried both.
+
+### Also found
+
+- The helper cited a real sentence for a "recommended context" that did not
+  mention one. **Fixed:** a quote must now state the value it is cited for.
+- The MoE's measurement was recorded for the autoconfigured config, which
+  differs from `Hand-tuned`; it applies again after the next hand-tuned start.
+
+## Criteria
+
+| criterion (overview) | status | how |
+|---|---|---|
+| 27B starts on the first attempt after Save and apply | **met** | compute, above |
+| MoE starts on the first attempt after Save and apply | **not met; fixed, not re-run** | the PLE default, above |
+| Same parsers, draft, offload flags, env; at least context and sequence cap | **met for the 27B**; MoE met but for the hardware | compute, above |
+| The same on a single-card host | **not yet run** | needs the workstation deployed |
+| Every row names its source and quotes the card | met | tests; both reviews on compute |
+| No helper, or nothing usable: machine and command, with a note | met in tests | |
+| A run while a model serves ends with it serving again | **met** | compute: 4 min 30 s |
+| Failed-start and refinement notices | met in tests; not exercised on hardware | |
+| The feed's phase 19 seeds through the same planner | met | phase 03 |
+| `go test ./...` passes | met | |
+
+## Images
+
+Helper loaded and answered on `rdna4-clav` (vLLM 0.29). Unverified:
+`radiance`, `rocm`, `rocm-source`, `rocm-cdna`, `gfx906`, `strix-halo`,
+`cuda`, `cuda-source`, `gb10`, `xpu`; the two 0.23 images are where the
+`guided_json` fallback would matter.
+
+## Earlier status, 2026-09-30
 
 The hardware runs of phase 14 steps 1-9 have **not been done**. They need the
 branch deployed to compute and to the workstation (`./setup.sh quick`), the
