@@ -201,9 +201,16 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	// At the configured width, heads copied past their count included.
 	tp := max(1, m.VLLMConfig.TensorParallelSize)
 	target := float64(kvCachePerToken(cfg, m.VLLMConfig) + mtpKVPerToken(cfg, m.VLLMConfig))
+	heads := cfg.NumKeyValueHeads
+	if cfg.GlobalKVHeads > 0 {
+		heads = cfg.GlobalKVHeads
+	}
 	est.KVHeads, est.KVWidth = cfg.NumKeyValueHeads, tp
 	est.WeightBytesPerParam = m.Quantization.BytesPerParam
-	est.KVCachePerTokenB = int64(target*kvReplication(cfg.NumKeyValueHeads, tp)) + draftKVPerTokenAt(m.VLLMConfig, tp)
+	if cfg.GlobalKVHeads > 0 {
+		est.KVHeads = cfg.GlobalKVHeads // the layers whose cache grows
+	}
+	est.KVCachePerTokenB = int64(target*kvReplication(heads, tp)) + draftKVPerTokenAt(m.VLLMConfig, tp)
 	est.ActivationBaseGB = activationBaseGB(cfg, m.VLLMConfig)
 	est.DraftGB = draftWeightsGB(m.VLLMConfig)
 
@@ -581,12 +588,24 @@ func isMoE(cfg HFConfig) bool {
 	return false
 }
 
-// kvCachePerToken is the KV cache one token costs across the whole model.
+// kvCachePerToken is the KV cache one token costs across the whole model, at
+// the context the config serves.
 //
-// Only full-attention layers hold a KV cache. On a hybrid the rest keep a
-// fixed-size recurrent state that does not grow with context, so counting
-// every layer overstates this badly -- fourfold on a model that is 16
-// attention layers out of 64.
+// Only full-attention layers hold a cache that grows with the context. On a
+// hybrid the rest keep a fixed-size recurrent state that does not grow with
+// context, so counting every layer overstates this badly -- fourfold on a
+// model that is 16 attention layers out of 64.
+//
+// Sliding-window layers keep at most the window, per request. Their cost is
+// spread over the context served, so that the figure times the context is
+// still what one full-length request costs. Gemma 4 31B, counted as sixty
+// full layers, came to 983,040 bytes a token and was planned at a third of
+// its context with an fp8 cache; its ten global layers at 4 heads of 512 and
+// fifty sliding ones at a 1,024-token window come to 85,120 at 262,144.
+//
+// Keys and values are both counted even where the config says they are one
+// tensor (Gemma 4's attention_k_eq_v): whether the engine stores it once has
+// not been seen, and if it does, a start's measurement says so.
 func kvCachePerToken(cfg HFConfig, c VLLMConfig) int64 {
 	headDim := cfg.HeadDim
 	if headDim == 0 && cfg.HiddenSize > 0 && cfg.NumAttentionHeads > 0 {
@@ -612,7 +631,26 @@ func kvCachePerToken(cfg HFConfig, c VLLMConfig) int64 {
 	if kvLayers <= 0 || kvHeads <= 0 || headDim <= 0 {
 		return 0
 	}
-	return int64(2 * kvLayers * kvHeads * headDim * kvDtypeBytes)
+	globalHeads, globalDim := kvHeads, headDim
+	if cfg.GlobalKVHeads > 0 {
+		globalHeads = cfg.GlobalKVHeads
+	}
+	if cfg.GlobalHeadDim > 0 {
+		globalDim = cfg.GlobalHeadDim
+	}
+	perToken := float64(2 * kvLayers * globalHeads * globalDim * kvDtypeBytes)
+
+	if cfg.SlidingLayers > 0 && cfg.SlidingWindow > 0 {
+		ctx := c.MaxModelLen
+		if ctx <= 0 {
+			ctx = cfg.MaxPositionEmbeddings
+		}
+		if ctx > 0 {
+			sliding := float64(2 * cfg.SlidingLayers * kvHeads * headDim * kvDtypeBytes)
+			perToken += sliding * float64(min(cfg.SlidingWindow, ctx)) / float64(ctx)
+		}
+	}
+	return int64(perToken)
 }
 
 // activationBaseGB is the working memory the model needs beyond its weights: a

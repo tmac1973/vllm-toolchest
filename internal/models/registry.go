@@ -72,6 +72,17 @@ type HFConfig struct {
 	// Zero means "unknown", and callers fall back to NumHiddenLayers.
 	AttentionLayers int `json:"attention_layers,omitempty"`
 
+	// SlidingLayers attend only to the last SlidingWindow tokens, so their
+	// cache stops growing there; they are not counted in AttentionLayers.
+	// Gemma 4 31B is 50 sliding layers and 10 global. GlobalKVHeads and
+	// GlobalHeadDim are the global layers' shape where it differs from the
+	// sliding layers' -- Gemma 4's are 4 heads of 512 against 16 of 256.
+	// Zero for each means none, or the same as the rest.
+	SlidingLayers int `json:"sliding_layers,omitempty"`
+	SlidingWindow int `json:"sliding_window,omitempty"`
+	GlobalKVHeads int `json:"global_kv_heads,omitempty"`
+	GlobalHeadDim int `json:"global_head_dim,omitempty"`
+
 	// Mixture-of-experts shape. Without these the parameter count models one
 	// dense MLP per layer and undercounts an MoE several-fold, which used to
 	// be masked by falling back to the checkpoint size on disk -- and that

@@ -68,7 +68,7 @@ func TestCountAttentionLayers(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := countAttentionLayers(raw(tc.config), tc.total); got != tc.want {
+			if got, _ := countAttentionLayers(raw(tc.config), tc.total, false); got != tc.want {
 				t.Errorf("countAttentionLayers() = %d, want %d", got, tc.want)
 			}
 		})
