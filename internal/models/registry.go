@@ -49,7 +49,20 @@ type Model struct {
 	// read a model card. It is not the operator's: it has fixed settings,
 	// cannot be served, and is managed only from Settings.
 	Helper bool `json:"helper,omitempty"`
+
+	// ConfigSource says where the launch config came from: "" when a person
+	// set it or registration defaulted it, "seeded" when the recommendation
+	// feed chose its hardware settings at download. A provenance note, not a
+	// precedence rule: a seeded config is ordinary configuration, and the
+	// first change to it makes it the operator's.
+	//
+	// Additive and omitempty, and schemaVersion is left alone for it: a
+	// models.json written with it must still load if this is reverted.
+	ConfigSource string `json:"config_source,omitempty"`
 }
+
+// ConfigSeeded is ConfigSource for a config the feed chose.
+const ConfigSeeded = "seeded"
 
 // HFConfig holds key fields from the model's config.json.
 type HFConfig struct {
@@ -465,7 +478,26 @@ func (r *Registry) UpdateConfig(id string, cfg VLLMConfig) error {
 	if !ok {
 		return fmt.Errorf("model not found: %s", id)
 	}
+	if m.VLLMConfig != cfg {
+		m.ConfigSource = "" // changed, so no longer what was suggested
+	}
 	m.VLLMConfig = cfg
+	return r.save()
+}
+
+// SetSeededConfig gives a model the config the feed chose for it, marked as
+// seeded.
+func (r *Registry) SetSeededConfig(id string, cfg VLLMConfig) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writableLocked(); err != nil {
+		return err
+	}
+	m, ok := r.models[id]
+	if !ok {
+		return fmt.Errorf("model not found: %s", id)
+	}
+	m.VLLMConfig, m.ConfigSource = cfg, ConfigSeeded
 	return r.save()
 }
 

@@ -140,3 +140,30 @@ func TestHeadsSplit(t *testing.T) {
 		}
 	}
 }
+
+// A seeded config is marked so, until a change makes it the operator's; an
+// autosave of the same values does not clear the mark. Entries written before
+// the field read as unmarked.
+func TestConfigSource(t *testing.T) {
+	r := NewRegistry(t.TempDir(), t.TempDir())
+	r.Register(&Model{ID: "org/m", LocalPath: t.TempDir()})
+	m, _ := r.Get("org/m")
+	if m.ConfigSource != "" {
+		t.Errorf("a new entry is %q", m.ConfigSource)
+	}
+	cfg := m.VLLMConfig
+	cfg.TensorParallelSize = 4
+	r.SetSeededConfig("org/m", cfg)
+	if m, _ := r.Get("org/m"); m.ConfigSource != ConfigSeeded || m.VLLMConfig.TensorParallelSize != 4 {
+		t.Errorf("seeded: %q %d", m.ConfigSource, m.VLLMConfig.TensorParallelSize)
+	}
+	r.UpdateConfig("org/m", cfg)
+	if m, _ := r.Get("org/m"); m.ConfigSource != ConfigSeeded {
+		t.Error("an unchanged save cleared the mark")
+	}
+	cfg.MaxModelLen = 4096
+	r.UpdateConfig("org/m", cfg)
+	if m, _ := r.Get("org/m"); m.ConfigSource != "" {
+		t.Error("a change kept the mark")
+	}
+}

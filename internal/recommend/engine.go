@@ -5,8 +5,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
 // staleAfter is how old a pool is served before it says so. It is still
@@ -68,10 +66,22 @@ func (e *Engine) Refresh(ctx context.Context, p Profile) Result {
 	return e.view(IntentQuality)
 }
 
-// SeedFor is the plan the feed made for a model, for phase 19 to seed a
-// download with; it reports nothing until then.
-func (e *Engine) SeedFor(modelID string) (models.VLLMConfig, bool) {
-	return models.VLLMConfig{}, false
+// Recommended reports a repository the current pool verified: a download of
+// it is seeded at completion. Looked up then rather than carried on the
+// request, because a download outlives the request that started it. A pool
+// rebuilt since, without it, means no seed -- a lesser outcome, not an error.
+func (e *Engine) Recommended(modelID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pool == nil {
+		return false
+	}
+	for _, i := range e.pool.orders[IntentQuality] {
+		if e.pool.candidates[i].ID == modelID {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) view(intent string) Result {

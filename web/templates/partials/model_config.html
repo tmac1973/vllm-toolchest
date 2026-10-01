@@ -4,6 +4,9 @@
     <span>Configure <span class="mc-owner">&mdash; {{.DisplayName}}</span></span>
     <span class="mc-restart">Restart required</span>
   </div>
+  {{- if .Seeded}}
+  <p class="mc-seeded"><small>The GPUs, context, KV cache dtype, memory fraction and concurrent sequences were suggested for this machine when the model was downloaded from the recommendations. Change them freely; nothing will set them back.</small></p>
+  {{- end}}
   {{- with .Refinement}}
   <div class="autoconfig ac-notice">
     <p class="ac-msg ac-ok">Measured on a real start, {{.MeasuredWhen}}. Context can be {{.ProposedContext}} tokens (now {{.CurrentContext}}).</p>

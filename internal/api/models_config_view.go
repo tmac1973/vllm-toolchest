@@ -52,6 +52,10 @@ type modelConfigView struct {
 	ProfileDirty   bool
 	ProfileNameMax int
 
+	// Seeded marks hardware settings the recommendation feed chose when the
+	// model was downloaded, until the first change makes them the operator's.
+	Seeded bool
+
 	// Core
 	DtypeOptions []selectOption
 	MaxCtx       int
@@ -169,6 +173,7 @@ func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 
 	v.ReadOnly = s.registry.ReadOnly()
 	v.ActiveProfile, v.ProfileDirty = s.registry.ActiveProfile(m.ID)
+	v.Seeded = m.ConfigSource == models.ConfigSeeded
 	v.ProfileNameMax = models.MaxProfileNameLen
 	for _, p := range s.registry.Profiles(m.ID) {
 		v.Profiles = append(v.Profiles, selectOption{p.Name, profileLabel(p), p.Name == v.ActiveProfile})
