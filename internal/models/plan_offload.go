@@ -147,6 +147,10 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 		Field: "extra_flags", Origin: "this machine",
 		Reason: offloadReason(hostExperts, table, cache*float64(tp), nvme),
 	})
+	p.Notes = append(p.Notes, ProfileNote{
+		Field: "kv_cache_dtype", Origin: "this machine",
+		Reason: "fp8, because with expert offload this image reserves the KV cache for an fp8 cache: with the engine's default, a start falls short of it.",
+	})
 	if droppedMTP {
 		p.Notes = append(p.Notes, ProfileNote{
 			Field: "speculative_config", Origin: "this machine",

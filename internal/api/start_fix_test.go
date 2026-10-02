@@ -35,7 +35,9 @@ func failingServer(t *testing.T, output string, cfg models.VLLMConfig) (*Server,
 	for i := 0; i < 200 && s.process.GetStatus().State != process.StateError; i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
-	for i := 0; i < 100 && len(s.process.Advice()) == 0; i++ {
+	// Five seconds, not one: under the full suite's parallel load the advice
+	// sometimes took just over a second to appear, and a test read none.
+	for i := 0; i < 500 && len(s.process.Advice()) == 0; i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return s, m

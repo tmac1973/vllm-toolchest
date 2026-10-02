@@ -233,3 +233,14 @@ func TestCarryOffloadFlags(t *testing.T) {
 		t.Errorf("a flag that is not offload's was carried: %q", got)
 	}
 }
+
+// An offload plan's KV cache is fp8: the image reserves for one, and with
+// the default cache Flash-Next's two-card start fell short at 262,144.
+func TestOffloadPlansAnFP8Cache(t *testing.T) {
+	in := offloadInput(flashNext(), 2, 31.86)
+	in.Base.KVCacheDtype = "auto"
+	p := PlanFit(in)
+	if !p.Known || !p.All.Offload || p.All.Config.KVCacheDtype != "fp8" || !hasNote(p.All.Notes, "kv_cache_dtype") {
+		t.Errorf("offload plan: known=%v dtype=%q", p.Known, p.All.Config.KVCacheDtype)
+	}
+}
