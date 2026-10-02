@@ -51,6 +51,8 @@ type Candidate struct {
 	FullContextRequests int     `json:"full_context_requests,omitempty"`
 	// Offload is a model that runs only with its experts in system RAM.
 	Offload bool `json:"offload,omitempty"`
+	// Featured is a model by one of the image's own publishers.
+	Featured bool `json:"featured,omitempty"`
 
 	Reason        string `json:"reason,omitempty"`
 	Accelerated   bool   `json:"accelerated"`
@@ -282,6 +284,32 @@ func servable(r huggingface.ModelSearchResult) bool {
 	}
 	author, _, _ := strings.Cut(r.ID, "/")
 	return r.Downloads >= minDownloads || trustedPublishers[strings.ToLower(author)]
+}
+
+// fetchFeatured is the image's own publishers' repositories, by downloads.
+// Their downloads are not held against them, nor their formats: they are
+// the image's own. Only what is not generative, a test fixture, or beyond the
+// cards and the RAM together is left out before the fit.
+func fetchFeatured(ctx context.Context, hub Hub, p Profile) []huggingface.ModelSearchResult {
+	var out []huggingface.ModelSearchResult
+	ram := max(0, 0.9*p.HostRAMGB-7*float64(p.Inventory.Count)-5)
+	bound := float64(p.Inventory.Count)*p.Inventory.PerCardGB + ram
+	for _, author := range p.Featured {
+		batch, err := hub.Candidates(ctx, huggingface.CandidateQuery{Author: author, Sort: "downloads", Limit: 100})
+		if err != nil {
+			continue
+		}
+		for _, r := range batch {
+			if notGenerative[r.PipelineTag] {
+				continue
+			}
+			if gb, ok := leastWeightGB(r.Safetensors); ok && (gb < minWeightGB || gb > bound) {
+				continue
+			}
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // toCandidate is a search result as a candidate, from the cheap tier.

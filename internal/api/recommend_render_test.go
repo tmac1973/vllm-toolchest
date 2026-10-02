@@ -124,3 +124,28 @@ func TestTheFeedFoldsALongList(t *testing.T) {
 		t.Error("the fold did not render")
 	}
 }
+
+// The image's own publisher's models are a section above the orders; their
+// own formats are made for this image's kernels, not "not accelerated".
+func TestTheFeaturedSection(t *testing.T) {
+	r := feedResult(true)
+	r.FeaturedBy = []string{"tcclaviger"}
+	for i := 0; i < 5; i++ {
+		r.Featured = append(r.Featured, recommend.Candidate{ID: fmt.Sprintf("tcclaviger/M%d-MXFP416", i), Format: "Other", WeightGB: 16, TP: 2,
+			Required: 30, Available: 57, AffordableTokens: 262144, FullContextRequests: 3, Featured: true, Arch: "Qwen3_5ForConditionalGeneration"})
+	}
+	out := renderFeed(t, r)
+	if !strings.Contains(out, "Made for this image") || !strings.Contains(out, "by tcclaviger") ||
+		!strings.Contains(out, "made for this image&#39;s kernels") || strings.Contains(out, "M0-MXFP416</strong>\n      <a href=\"https://huggingface.co/tcclaviger/M0-MXFP416\" target=\"_blank\" rel=\"noopener\" class=\"recommend-hub\" title=\"View on HuggingFace\">&#8599;</a>\n      <br><small>fits at TP=2 · 30 GB of 57 · not accelerated") {
+		t.Errorf("featured section:\n%s", out)
+	}
+	if strings.Index(out, "Made for this image") > strings.Index(out, `class="recommend-chip"`) {
+		t.Error("the featured section is not above the orders")
+	}
+	if !strings.Contains(out, "Show 1 more") {
+		t.Error("the fifth featured model did not fold")
+	}
+	if out := renderFeed(t, feedResult(true)); strings.Contains(out, "Made for this image") {
+		t.Error("a section with nothing in it")
+	}
+}

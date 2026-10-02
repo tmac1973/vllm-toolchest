@@ -19,6 +19,7 @@ import (
 type fakeHub struct {
 	mu        sync.Mutex
 	byTag     map[string][]huggingface.ModelSearchResult
+	byAuthor  map[string][]huggingface.ModelSearchResult
 	configs   map[string]string
 	files     map[string][]huggingface.ModelFile
 	err       error
@@ -31,7 +32,11 @@ func (h *fakeHub) Candidates(_ context.Context, q huggingface.CandidateQuery) ([
 		return nil, h.err
 	}
 	var out []huggingface.ModelSearchResult
-	for _, r := range h.byTag[q.Tag] {
+	results := h.byTag[q.Tag]
+	if q.Author != "" {
+		results = h.byAuthor[q.Author]
+	}
+	for _, r := range results {
 		r.QuantFormat = huggingface.DetectQuantFormat(r.ID, r.Tags, r.Config)
 		out = append(out, r)
 	}
@@ -358,5 +363,59 @@ func TestUnavailable(t *testing.T) {
 	p.Inventory.Known = false
 	if r := NewEngine(market(), t.TempDir()).Result(context.Background(), p, ""); r.Unavailable != "the GPUs have not been read yet" {
 		t.Errorf("no inventory: %q", r.Unavailable)
+	}
+}
+
+// On an image naming its own publisher, that publisher's models that fit are
+// shown apart from the orders and only there, whatever their downloads or
+// format; what is not generative, or beyond even the RAM, is not.
+func TestFeaturedPublishers(t *testing.T) {
+	hub := market()
+	mxfp := &huggingface.ModelConfigMeta{QuantizationConfig: &huggingface.QuantConfig{QuantMethod: "mxfp4_16"}}
+	own := result("tcclaviger/Qwen3.6-27B-MXFP416-MTP", mxfp, 64, map[string]int64{"U8": 14e9, "BF16": 2e9}, "2026-09-10T00:00:00Z")
+	emb := result("tcclaviger/Embed", mxfp, 9, map[string]int64{"BF16": 1e9}, "2026-09-10T00:00:00Z")
+	emb.PipelineTag = "feature-extraction"
+	huge := result("tcclaviger/Huge", mxfp, 9, map[string]int64{"BF16": 400e9}, "2026-09-10T00:00:00Z")
+	hub.byAuthor = map[string][]huggingface.ModelSearchResult{"tcclaviger": {own, emb, huge}}
+	hub.byTag[""] = append(hub.byTag[""], own) // also in the ranked pool's queries
+	hub.configs[own.ID] = dense("Qwen3_5ForConditionalGeneration", 64, 5120, 24, 4, 262144)
+	hub.files[own.ID] = weights(16)
+
+	p := fourCards(nil)
+	if !slices.Equal(p.Featured, []string{"tcclaviger"}) {
+		t.Fatalf("featured %v", p.Featured)
+	}
+	r := NewEngine(hub, t.TempDir()).Result(context.Background(), p, "quality")
+	if len(r.Featured) != 1 || r.Featured[0].ID != own.ID || !r.Featured[0].Featured || r.Featured[0].TP == 0 {
+		t.Fatalf("featured %+v", r.Featured)
+	}
+	for _, c := range append(r.Verified, r.Unverified...) {
+		if strings.HasPrefix(c.ID, "tcclaviger/") {
+			t.Errorf("%s is in the orders too", c.ID)
+		}
+	}
+	if !slices.Equal(r.FeaturedBy, []string{"tcclaviger"}) {
+		t.Errorf("featured by %v", r.FeaturedBy)
+	}
+}
+
+// A drafter is not served on its own, and the estimate uses the launch
+// environment the profile supplies -- the image's defaults included.
+func TestDraftersAndTheLaunchEnvironment(t *testing.T) {
+	hub := market()
+	drafter := result("tcclaviger/Qwen3.8-27B-DFlash2-FP8", fp8Cfg, 4822, map[string]int64{"F8_E4M3": 2e9}, "2026-09-10T00:00:00Z")
+	hub.byAuthor = map[string][]huggingface.ModelSearchResult{"tcclaviger": {drafter}}
+	hub.configs[drafter.ID] = `{"architectures":["DFlashDraftModel"],"hidden_size":5120,"num_hidden_layers":5,"num_attention_heads":32,"num_key_value_heads":8,"dflash_config":{"block_size":8},"num_target_layers":64}`
+	hub.files[drafter.ID] = weights(2)
+
+	p := fourCards(nil)
+	calls := 0
+	p.Env = func(m *models.Model) []string { calls++; return []string{"VLLM_PLE_CPU_OFFLOAD=1"} }
+	r := NewEngine(hub, t.TempDir()).Result(context.Background(), p, "quality")
+	if len(r.Featured) != 0 {
+		t.Errorf("a drafter was recommended: %+v", r.Featured)
+	}
+	if calls == 0 {
+		t.Error("the launch environment was not used for the estimate")
 	}
 }

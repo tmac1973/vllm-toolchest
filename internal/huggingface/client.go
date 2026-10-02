@@ -214,6 +214,9 @@ const searchExpand = "&expand[]=author&expand[]=downloads&expand[]=likes&expand[
 // CandidateQuery is one query for the recommendation feed's pool: one
 // library, one quantization tag or none, one order.
 type CandidateQuery struct {
+	// Author, when set, asks for one publisher's repositories in any library,
+	// in place of a library and tag.
+	Author  string
 	Library string // "transformers" or "vllm"
 	Tag     string // a Hub quant tag; empty for the unquantized bucket
 	Sort    string // "downloads" or "lastModified"
@@ -235,6 +238,10 @@ func (c *Client) Candidates(ctx context.Context, q CandidateQuery) ([]ModelSearc
 	}
 	u := fmt.Sprintf("%s/models?filter=%s&sort=%s&direction=-1&limit=%d%s&expand[]=sha",
 		c.apiURL(), url.QueryEscape(q.Library), url.QueryEscape(q.Sort), q.Limit, searchExpand)
+	if q.Author != "" {
+		u = fmt.Sprintf("%s/models?author=%s&sort=%s&direction=-1&limit=%d%s&expand[]=sha",
+			c.apiURL(), url.QueryEscape(q.Author), url.QueryEscape(q.Sort), q.Limit, searchExpand)
+	}
 	if q.Tag != "" {
 		u += "&filter=" + url.QueryEscape(q.Tag)
 	}

@@ -17,6 +17,18 @@ which needs a Download button on a card that knows its fit.
   full-length requests at once, or that its experts would be in system RAM.
 - Checked rendered in headless Firefox with the live pool at 1280 and 800
   px: no horizontal scroll, cards stack at the narrow width.
+- **"Made for this image"** (added 2026-10-02, decided with the operator):
+  a variant may name its own publishers (`VARIANT_FEATURED`; rdna4-clav
+  names tcclaviger), whose models that fit get a section above the orders,
+  whichever order is chosen, rather than competing on downloads with
+  releases they are not comparable to. Queried by author, judged by the same
+  planner, kept out of the ranked pool. Their own formats say "made for this
+  image's kernels" rather than "not accelerated".
+- Found building it, and fixed for the whole feed: the estimate now uses the
+  launch environment (`Profile.Env`, the server's `configuredEnvPairs`) --
+  without the image's PLE default, Flash-Next was planned with expert
+  offload although it serves on four cards without -- and drafters are
+  dropped, as they cannot be served alone.
 
 ## Goal
 

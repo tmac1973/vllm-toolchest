@@ -28,6 +28,8 @@ type pool struct {
 	candidates  []Candidate
 	orders      map[string][]int
 	unverified  []int
+	featured    []int // verified, the image's own publishers', by downloads
+	featuredBy  []string
 	unavailable string
 }
 
@@ -40,6 +42,10 @@ type Result struct {
 	Unavailable string      `json:"unavailable"`
 	Verified    []Candidate `json:"verified"`
 	Unverified  []Candidate `json:"unverified"`
+	// Featured are the image's own publishers' models that fit, apart from
+	// the orders: they are not comparable to the rest, being made for it.
+	Featured   []Candidate `json:"featured"`
+	FeaturedBy []string    `json:"featured_by,omitempty"`
 }
 
 // NewEngine is an engine asking hub, caching configs under dataDir.
@@ -76,7 +82,7 @@ func (e *Engine) Recommended(modelID string) bool {
 	if e.pool == nil {
 		return false
 	}
-	for _, i := range e.pool.orders[IntentQuality] {
+	for _, i := range append(slices.Clone(e.pool.orders[IntentQuality]), e.pool.featured...) {
 		if e.pool.candidates[i].ID == modelID {
 			return true
 		}
@@ -93,7 +99,11 @@ func (e *Engine) view(intent string) Result {
 		Profile: p.profile, Intent: intent, GeneratedAt: p.generatedAt,
 		Stale:       p.unavailable == "" && e.now().Sub(p.generatedAt) > staleAfter,
 		Unavailable: p.unavailable,
-		Verified:    []Candidate{}, Unverified: []Candidate{},
+		Verified:    []Candidate{}, Unverified: []Candidate{}, Featured: []Candidate{},
+		FeaturedBy: p.featuredBy,
+	}
+	for _, i := range p.featured {
+		r.Featured = append(r.Featured, p.candidates[i])
 	}
 	for _, i := range p.orders[intent] {
 		r.Verified = append(r.Verified, p.candidates[i])
@@ -121,24 +131,40 @@ func (e *Engine) build(ctx context.Context, p Profile) *pool {
 		pl.unavailable = "Hugging Face could not be reached: " + err.Error()
 		return pl
 	}
+	// The image's own publishers' models, judged apart; kept out of the
+	// ranked pool so a model is in one place.
+	var featured []Candidate
+	own := map[string]bool{}
+	for _, r := range fetchFeatured(ctx, e.hub, p) {
+		c := toCandidate(r, p)
+		c.Featured = true
+		featured = append(featured, c)
+		own[r.ID] = true
+	}
+	pl.featuredBy = p.Featured
+
 	var cands []Candidate
 	for _, r := range coarseFilter(raw, p) {
-		if servable(r) {
+		if servable(r) && !own[r.ID] {
 			cands = append(cands, toCandidate(r, p))
 		}
 	}
 	cands = coarseRank(cands)
+	cands = append(cands, featured...)
 	evaluate(ctx, e.hub, e.dataDir, p, cands)
 
 	var verified []int
 	for i, c := range cands {
-		switch c.Verdict {
-		case Verified:
+		switch {
+		case c.Verdict == Verified && c.Featured:
+			pl.featured = append(pl.featured, i)
+		case c.Verdict == Verified:
 			verified = append(verified, i)
-		case Unverified:
+		case c.Verdict == Unverified:
 			pl.unverified = append(pl.unverified, i)
 		}
 	}
+	slices.SortStableFunc(pl.featured, func(a, b int) int { return cands[b].Downloads - cands[a].Downloads })
 	pl.candidates = cands
 	pl.orders = orders(cands, verified, p.Inventory.Count)
 	return pl

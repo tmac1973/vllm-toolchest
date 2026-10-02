@@ -69,6 +69,12 @@ func judge(ctx context.Context, hub Hub, dataDir string, p Profile, c *Candidate
 		c.Verdict, c.Reason = Unverified, reasonUnreadable
 		return
 	}
+	if cfg.Draft != nil {
+		// A drafter proposes tokens for another model; it cannot be served
+		// on its own, as registration already knows.
+		c.Verdict = Dropped
+		return
+	}
 	if len(cfg.Architectures) > 0 {
 		c.Arch = cfg.Architectures[0] // the file vLLM itself reads
 	}
@@ -86,7 +92,11 @@ func judge(ctx context.Context, hub Hub, dataDir string, p Profile, c *Candidate
 		Estimate: func(vc models.VLLMConfig) models.VRAMEstimate {
 			x := *m
 			x.VLLMConfig = vc
-			return models.EstimateVRAM(&x, nil)
+			var env []string
+			if p.Env != nil {
+				env = p.Env(&x)
+			}
+			return models.EstimateVRAM(&x, env)
 		},
 		ExpertOffload: p.ExpertOffload, HostRAMGB: p.HostRAMGB,
 	})
