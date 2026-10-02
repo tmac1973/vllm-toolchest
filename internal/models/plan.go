@@ -51,6 +51,9 @@ type PlanInput struct {
 	// system RAM, and HostRAMGB is that RAM. See planOffload.
 	ExpertOffload bool
 	HostRAMGB     float64
+	// PLENVMe says the image can serve a PLE table from NVMe through a row
+	// cache in RAM, rather than holding it all in RAM.
+	PLENVMe bool
 }
 
 // WidthPlan is one tensor-parallel width, fully configured.

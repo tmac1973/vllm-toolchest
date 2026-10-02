@@ -30,8 +30,8 @@ func (s *Server) planInput(m *models.Model, base models.VLLMConfig, class models
 		CardKVDtype: cardKVDtype,
 		Estimate:    s.estimateFor(m),
 	}
-	if d, ok := variants.Get(s.vllmEnv.Variant); ok && d.Has("expert_offload") {
-		in.ExpertOffload = true
+	if d, ok := variants.Get(s.vllmEnv.Variant); ok {
+		in.ExpertOffload, in.PLENVMe = d.Has("expert_offload"), d.Has("ple_nvme_offload")
 	}
 	if s.monitor != nil {
 		in.HostRAMGB = float64(s.monitor.Current().Memory.TotalMB) / 1024

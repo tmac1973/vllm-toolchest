@@ -3,7 +3,10 @@ package models
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // ExpertOffloadFlag turns on the rdna4-clav image's expert offload.
@@ -108,14 +111,30 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 		return WidthPlan{}, false, "even with the experts in system RAM, the rest does not fit on the cards"
 	}
 
-	hostNeed := experts + est.HostResidentGB
+	// In RAM: the experts the cards do not keep -- the resident layers stay
+	// on them, so on compute 50.2 GB of Flash-Next's 59.9 lived in RAM -- and
+	// anything already there, a PLE table. When the table does not fit
+	// beside them, an image that can serve it from NVMe keeps only a row
+	// cache in RAM: Flash-Next's card runs on two R9700s that way, in 82 GiB
+	// of RAM, where the table in RAM would need over a hundred.
+	hostExperts := experts * (1 - float64(residentExpertLayers)/float64(layers))
 	hostHas := offloadHostShare*in.HostRAMGB - offloadRankProcessGB*float64(tp) - offloadEngineGB
-	if hostNeed > hostHas {
+	table := est.HostResidentGB
+	inRAM, nvme := hostExperts+table, false
+	if inRAM > hostHas && in.PLENVMe && table > 0 {
+		inRAM, nvme = hostExperts+pleCacheGB, true
+	}
+	if inRAM > hostHas {
 		return WidthPlan{}, false, "the experts do not fit in the host's memory"
 	}
 
 	c.MaxModelLen = ctx
-	c.ExtraFlags = strings.TrimSpace(c.ExtraFlags + " " + ExpertOffloadFlag)
+	c.ExtraFlags = process.SetFlag(c.ExtraFlags, []string{ExpertOffloadFlag})
+	if nvme {
+		for _, g := range pleNVMeFlags {
+			c.ExtraFlags = process.SetFlag(c.ExtraFlags, g)
+		}
+	}
 	kv := kvPerTokenRank * float64(ctx) * offloadKVReserve / (1 << 30)
 	cache := budget - nonExpert - offloadGraphsGB - offloadRuntimeGB - kv
 	p := WidthPlan{
@@ -126,7 +145,7 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 	p.Notes = widthNotes(c, p, target, dtype, in.CardKVDtype != "", false, "")
 	p.Notes = append(p.Notes, ProfileNote{
 		Field: "extra_flags", Origin: "this machine",
-		Reason: offloadReason(experts, hostNeed-experts, cache*float64(tp)),
+		Reason: offloadReason(hostExperts, table, cache*float64(tp), nvme),
 	})
 	if droppedMTP {
 		p.Notes = append(p.Notes, ProfileNote{
@@ -137,12 +156,45 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 	return p, true, ""
 }
 
-func offloadReason(experts, other, cacheGB float64) string {
-	s := "Expert offload: the model's experts, " + gb(experts) + ", are held in system RAM"
-	if other > 0 {
-		s += " beside " + gb(other) + " already there"
+func offloadReason(hostExperts, table, cacheGB float64, nvme bool) string {
+	s := "Expert offload: " + gb(hostExperts) + " of the model's experts are held in system RAM"
+	switch {
+	case nvme:
+		s += ", and its " + gb(table) + " n-gram table is read from NVMe through a " + gb(pleCacheGB) +
+			" cache in RAM -- written beside the checkpoint on the first start, so that much disk is needed too"
+	case table > 0:
+		s += " beside its " + gb(table) + " n-gram table"
 	}
-	return s + ", and the cards keep " + gb(cacheGB) + " of them cached. The cache holds one full-length request at a time, and generation is slower: Flash-Next decoded about 54 tokens a second on two cards with offload, against 153 on four without it."
+	return s + "; the cards keep " + gb(cacheGB) + " of the experts cached. The cache holds one full-length request at a time, and generation is slower: Flash-Next decoded about 54 tokens a second on two cards in a test here (its card reports 100 with the image's tuned recipe), against 153 on four without offload."
+}
+
+// pleCacheGB is the RAM a PLE table served from NVMe keeps as its row cache,
+// as Flash-Next's card's two-card recipe sets it.
+const pleCacheGB = 8.0
+
+// pleNVMeFlags serve a PLE table from NVMe: the table file is written beside
+// the checkpoint once and kept between runs.
+var pleNVMeFlags = [][]string{{"--ple-nvme-offload"}, {"--ple-cache-gb", "8"}, {"--ple-cache-reuse", "true"}}
+
+// offloadFlagNames are the flags an offload plan sets, which applying the
+// plan to a config carries over.
+var offloadFlagNames = []string{ExpertOffloadFlag, "--ple-nvme-offload", "--ple-cache-gb", "--ple-cache-reuse"}
+
+// CarryOffloadFlags puts the offload flags a plan's config sets onto extra,
+// with their values, and leaves the rest of extra as it is.
+func CarryOffloadFlags(extra, planned string) string {
+	args := process.SplitFlags(planned)
+	for i, a := range args {
+		if !slices.Contains(offloadFlagNames, a) {
+			continue
+		}
+		g := []string{a}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			g = append(g, args[i+1])
+		}
+		extra = process.SetFlag(extra, g)
+	}
+	return extra
 }
 
 func gb(v float64) string { return fmt.Sprintf("%.1f GB", v) }

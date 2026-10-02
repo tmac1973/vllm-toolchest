@@ -26,7 +26,7 @@ func SeedConfig(base, planned models.VLLMConfig) models.VLLMConfig {
 	c.MaxNumSeqs = planned.MaxNumSeqs
 	c.KVCacheMemory = 0
 	if process.HasFlag(planned.ExtraFlags, models.ExpertOffloadFlag) {
-		c.ExtraFlags = process.SetFlag(c.ExtraFlags, []string{models.ExpertOffloadFlag})
+		c.ExtraFlags = models.CarryOffloadFlags(c.ExtraFlags, planned.ExtraFlags)
 		if ref, ok := models.ParseSpeculative(c.SpeculativeConfig); ok && strings.Contains(strings.ToLower(ref.Method), "mtp") {
 			c.SpeculativeConfig = ""
 		}

@@ -98,7 +98,7 @@ func judge(ctx context.Context, hub Hub, dataDir string, p Profile, c *Candidate
 			}
 			return models.EstimateVRAM(&x, env)
 		},
-		ExpertOffload: p.ExpertOffload, HostRAMGB: p.HostRAMGB,
+		ExpertOffload: p.ExpertOffload, HostRAMGB: p.HostRAMGB, PLENVMe: p.PLENVMe,
 	})
 	if !plan.Known {
 		c.Verdict = Dropped

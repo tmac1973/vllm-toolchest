@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
-	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // Deps is what a run needs from the server around it. Everything that
@@ -225,7 +224,7 @@ func (r *Result) Config(width string, ticked map[string]bool) (models.VLLMConfig
 		if w.Offload {
 			// The plan's own config has the flag on and any MTP config out;
 			// see models.planOffload for why MTP cannot stay.
-			cfg.ExtraFlags = process.SetFlag(cfg.ExtraFlags, []string{models.ExpertOffloadFlag})
+			cfg.ExtraFlags = models.CarryOffloadFlags(cfg.ExtraFlags, w.Config.ExtraFlags)
 			if w.Config.SpeculativeConfig == "" {
 				cfg.SpeculativeConfig = ""
 			}
