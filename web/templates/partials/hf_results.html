@@ -16,7 +16,7 @@
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
         {{- range .Variants}}
-        <a href="#" hx-get="/api/hf/model?id={{.ID}}" hx-target="#detail-{{$sid}}" hx-swap="innerHTML" title="{{.ID}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:{{.Color}};color:#fff;text-decoration:none;cursor:pointer;">{{.Format}}</a>
+        <a href="#" hx-get="/api/hf/model?id={{.ID}}" hx-target="#detail-{{$sid}}" hx-swap="innerHTML" hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}" title="{{.ID}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:{{.Color}};color:#fff;text-decoration:none;cursor:pointer;">{{.Format}}</a>
         {{- end}}
       </div>
     </div>
