@@ -125,6 +125,15 @@ fit.
 Live, two R9700s: 188 GB of RAM, offload with the table in RAM; 128 and
 96 GB, offload with the table on NVMe; 64 GB, not recommended.
 
+**Started on compute, 2026-10-02**, from the planner's own two-card, 128 GB
+config: the engine wrote the 38.7 GiB table to NVMe and kept an 8 GiB row
+cache; 84 GB of RAM in use against the card's 82 GiB; two cards at about
+26 GB each. The first start failed 0.84 GiB short of KV cache: the image
+reserves the offload's cache from an fp8 figure (9,302 B/token) and the plan
+had the default cache, which measured 13,427. With fp8 it measured 7,298 and
+served: 360,637 tokens, 1.38 full-length requests at 262,144, about 39
+tokens a second. Offload plans now always use an fp8 cache.
+
 ## Tests
 
 - The Flash-Next record at two cards: offload planned at 65,536, one
