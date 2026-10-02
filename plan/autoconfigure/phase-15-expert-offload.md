@@ -105,6 +105,26 @@ host-backed experts (per rank)                 25.1      host usable 112.6 of Me
    generation", scored for context at its offload context, and penalised on
    **Fastest** as weight-only formats are.
 
+## Added 2026-10-02: the PLE table on NVMe
+
+Flash-Next's card gives a two-R9700 recipe the first version could not
+reach: expert offload *and* the n-gram table served from NVMe
+(`--ple-nvme-offload --ple-cache-gb 8 --ple-cache-reuse true`), 82 GiB of
+RAM at runtime and about 100 tokens/s. The planner held the 41.6 GB table in
+RAM beside the experts, so a two-card host with 128 GB was told it did not
+fit.
+
+- The image declares `ple_nvme_offload`. When the experts and the table do
+  not fit in RAM together, the plan serves the table from NVMe and keeps an
+  8 GB row cache, and carries the three flags (`models.CarryOffloadFlags`,
+  also used by the review and by seeding). The reason says the table file is
+  written beside the checkpoint, so that much disk is needed.
+- RAM is charged for the experts the cards do not keep: the resident layers
+  stay on them (on compute, 50.2 GB of Flash-Next's 59.9 lived in RAM).
+
+Live, two R9700s: 188 GB of RAM, offload with the table in RAM; 128 and
+96 GB, offload with the table on NVMe; 64 GB, not recommended.
+
 ## Tests
 
 - The Flash-Next record at two cards: offload planned at 65,536, one

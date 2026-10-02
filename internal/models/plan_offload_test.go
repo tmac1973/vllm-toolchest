@@ -3,6 +3,8 @@ package models
 import (
 	"strings"
 	"testing"
+
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // flashNext is tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ as registered on
@@ -190,5 +192,44 @@ func TestApplyingAProfileClearsTheSeededMark(t *testing.T) {
 	r.ApplyProfile("org/m", AutoconfigProfileName)
 	if m, _ := r.Get("org/m"); m.ConfigSource != "" {
 		t.Error("an applied profile left the seeded mark")
+	}
+}
+
+// Flash-Next on two R9700s: with compute's 188 GB of RAM the experts and the
+// table both fit in RAM; with 128 GB only by serving the table from NVMe, as
+// its card's two-card recipe does (82 GiB of RAM at runtime); with 64 GB not
+// at all. Without the image's NVMe support, 128 GB is not enough.
+func TestOffloadWithThePLETableOnNVMe(t *testing.T) {
+	plan := func(ram float64, nvme bool) FitPlan {
+		in := offloadInput(flashNext(), 2, 31.86)
+		in.HostRAMGB, in.PLENVMe = ram, nvme
+		return PlanFit(in)
+	}
+	if p := plan(188, true); !p.Known || !p.All.Offload || process.HasFlag(p.All.Config.ExtraFlags, "--ple-nvme-offload") {
+		t.Errorf("188 GB: known=%v flags %q", p.Known, p.All.Config.ExtraFlags)
+	}
+	p := plan(128, true)
+	if !p.Known || !p.All.Offload || !process.HasFlag(p.All.Config.ExtraFlags, "--ple-nvme-offload") ||
+		!strings.Contains(p.All.Config.ExtraFlags, "--ple-cache-gb 8") {
+		t.Errorf("128 GB with NVMe: known=%v %s flags %q", p.Known, p.Why, p.All.Config.ExtraFlags)
+	}
+	if p := plan(128, false); p.Known {
+		t.Error("128 GB without NVMe support was planned")
+	}
+	if p := plan(64, true); p.Known {
+		t.Error("64 GB was planned")
+	}
+}
+
+func TestCarryOffloadFlags(t *testing.T) {
+	planned := "--enable-expert-offload --ple-nvme-offload --ple-cache-gb 8 --ple-cache-reuse true --other 1"
+	got := CarryOffloadFlags("--keep 2", planned)
+	for _, want := range []string{"--keep 2", "--enable-expert-offload", "--ple-nvme-offload", "--ple-cache-gb 8", "--ple-cache-reuse true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "--other") {
+		t.Errorf("a flag that is not offload's was carried: %q", got)
 	}
 }

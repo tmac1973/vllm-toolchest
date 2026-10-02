@@ -34,6 +34,8 @@ type Profile struct {
 	// Featured are the image's own publishers, whose models that fit get a
 	// section of their own.
 	Featured []string
+	// PLENVMe says the image can serve a PLE table from NVMe.
+	PLENVMe bool
 
 	// Env is the environment a model would launch with here -- the machine's
 	// and the image's defaults with the model's own -- for the estimate. Nil
@@ -52,7 +54,7 @@ func NewProfile(inv models.GPUInventory, gpuName, gpuArch string, d variants.Des
 		Accelerated: acceleratedFormats(gpuArch, d.NoAccel),
 		Archs:       archs, ArchsKnown: archsKnown,
 		Defaults: defaults, ExpertOffload: d.Has("expert_offload"), HostRAMGB: hostRAMGB,
-		Featured: d.Featured,
+		Featured: d.Featured, PLENVMe: d.Has("ple_nvme_offload"),
 	}
 }
 
