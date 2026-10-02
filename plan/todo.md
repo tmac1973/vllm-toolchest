@@ -3,9 +3,9 @@
 ## Where things stand, 2026-10-02
 
 Built, merged and deployed; acceptance runs in
-`plan/autoconfigure/acceptance.md`:
+`plan/archive/autoconfigure/acceptance.md`:
 
-- **Autoconfigure** (`plan/autoconfigure/`, phases 01-15). A helper model
+- **Autoconfigure** (`plan/archive/autoconfigure/`, phases 01-15). A helper model
   reads the card, the hardware half plans width, context, KV dtype and
   concurrency, the review proposes, and the first start refines. Four
   families have gone from download to serving on their first start with its
@@ -71,10 +71,10 @@ Decisions taken:
   then it stops. Both are done as of 2026-09-30; see below. No further
   calibration runs are planned for their own sake.
 - **Autoconfigure is built, bar its hardware acceptance.** Phases 01-13 of
-  `plan/autoconfigure/` are on the `autoconfigure` branch. What remains --
+  `plan/archive/autoconfigure/` are on the `autoconfigure` branch. What remains --
   deploying, loading the helper on real images, and the reference models'
-  first starts -- is listed in `plan/autoconfigure/acceptance.md`.
-- **The autoconfigure plan is `plan/autoconfigure/`.** It answers the "no
+  first starts -- is listed in `plan/archive/autoconfigure/acceptance.md`.
+- **The autoconfigure plan is `plan/archive/autoconfigure/`.** It answers the "no
   firm fit" question by planning on the estimate's expected figure, labelling
   the result a first guess, and refining it from the first real start.
 - **Measurement may correct a config, by proposal.** After a start,
@@ -483,7 +483,7 @@ what seeding writes. The circularity below goes with it: the context is the
 planner's answer, not an input. Figures are still projections, and the help
 text says they are estimates the first start refines.
 
-Read while reviewing `plan/phase-15..19`, 2026-09-22. None of the five phases
+Read while reviewing `plan/archive/phase-15..19`, 2026-09-22. None of the five phases
 had any code then; these were in the documents:
 
 - **Phase 17 step 12 does not typecheck.** It says call

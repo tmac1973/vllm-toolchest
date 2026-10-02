@@ -15,7 +15,7 @@ import (
 // It exists because every figure this project derived from first principles
 // turned out wrong -- KV per token by a factor of 2.6, activation by 23, the
 // allocator overhead by not being modelled at all -- while every figure taken
-// from the engine was right. See plan/phase-14-measured-vram.md.
+// from the engine was right. See plan/archive/phase-14-measured-vram.md.
 type RunMeasurement struct {
 	At time.Time `json:"at"`
 	// TP is the width the run used. Needed to read the per-rank figures, and

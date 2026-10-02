@@ -525,7 +525,7 @@ no bytes-variant to keep in step.
       fits, on an image whose variant declares `expert_offload`, for which
       `models.PlanFit` (with `PlanInput.ExpertOffload` and the host's RAM in
       `HostRAMGB`) returns a plan whose `All.Offload` is set. It is the same
-      planner autoconfigure uses (`plan/autoconfigure/phase-15-expert-offload.md`),
+      planner autoconfigure uses (`plan/archive/autoconfigure/phase-15-expert-offload.md`),
       so the feed and the review agree on which models run this way. The fit
       sentence says "experts in system RAM — slower generation"; the
       context objective uses that plan's `ContextTokens`; **Fastest**

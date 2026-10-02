@@ -14,7 +14,7 @@ type EstimateSource string
 const (
 	// SourceProjected is arithmetic over the checkpoint's shape, for a model
 	// that has never been started. Known to be weak: see
-	// plan/phase-14-measured-vram.md for how weak, and in which direction.
+	// plan/archive/phase-14-measured-vram.md for how weak, and in which direction.
 	SourceProjected EstimateSource = "projected"
 	// SourceMeasured is what a successful start reported.
 	SourceMeasured EstimateSource = "measured"

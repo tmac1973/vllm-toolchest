@@ -170,9 +170,9 @@ other case that must work.
   (`internal/models/measured.go`), engine advice (`internal/advice`), draft
   detection and pairing (`internal/models/draft.go`), and the download queue.
 - **Two planning documents contradict this work** and are amended by it:
-  `plan/recommend-models-overview.md` lists "no launch-config optimizer" and
+  `plan/archive/recommend-models-overview.md` lists "no launch-config optimizer" and
   "no automatic re-configuration after a run" as non-goals, and
-  `plan/phase-19-fit-handoff.md` says measurement must never touch a config.
+  `plan/archive/phase-19-fit-handoff.md` says measurement must never touch a config.
 
 ## Success criteria
 
@@ -204,7 +204,7 @@ other case that must work.
 
 - **Trigger** → A button on each model card, run on demand. Nothing runs
   automatically on download.
-- **Plan layout** → A folder of its own, `plan/autoconfigure/`, with its own
+- **Plan layout** → A folder of its own, `plan/archive/autoconfigure/`, with its own
   phase numbering.
 - **First start on a model that has never run** → Detect the narrowest width
   that should fit and surface the choice between narrow and all cards, because

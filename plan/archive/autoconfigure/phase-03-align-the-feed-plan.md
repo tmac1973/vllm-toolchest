@@ -7,18 +7,18 @@ the rewritten steps cite)
 ## Goal
 
 Two planning documents say the opposite of what this project now intends.
-`plan/recommend-models-overview.md` lists "no launch-config optimizer" and "no
+`plan/archive/recommend-models-overview.md` lists "no launch-config optimizer" and "no
 automatic re-configuration after a run" among its non-goals, and
-`plan/phase-19-fit-handoff.md` has a section arguing that measurement must
+`plan/archive/phase-19-fit-handoff.md` has a section arguing that measurement must
 never touch a config. Neither has been built, so this phase is documents only:
 it amends them so that whoever builds the feed seeds a model by calling the
 planner from phase 02, and reads a plan that agrees with autoconfigure.
 
 ## Files touched
 
-- `plan/recommend-models-overview.md` — amend Goals, Non-goals and the primary
+- `plan/archive/recommend-models-overview.md` — amend Goals, Non-goals and the primary
   flow's step 7.
-- `plan/phase-19-fit-handoff.md` — rewrite the Goal, the "What seeding is not"
+- `plan/archive/phase-19-fit-handoff.md` — rewrite the Goal, the "What seeding is not"
   section, the files list and the steps that compute the seed.
 - `plan/README.md` — add the autoconfigure folder to the Active list.
 - `plan/todo.md` — update "Direction, decided 2026-09-30".
@@ -29,7 +29,7 @@ planner from phase 02, and reads a plan that agrees with autoconfigure.
    - Replace the **No launch-config optimizer** bullet with: seeding on
      download is the whole of the *feed's* handoff; configuring a model
      properly is autoconfigure's job, defined in
-     `plan/autoconfigure/overview.md`.
+     `plan/archive/autoconfigure/overview.md`.
    - Replace the **No automatic re-configuration after a run** bullet with:
      nothing rewrites `VLLMConfig` without an explicit apply. A measurement
      may produce a *proposal*, which autoconfigure's refinement shows on a
@@ -94,14 +94,14 @@ planner from phase 02, and reads a plan that agrees with autoconfigure.
 5. `plan/todo.md`, "Direction, decided 2026-09-30": replace the sentence saying
    the two documents "still say otherwise and need amending" with a statement
    that they were amended in this phase, and replace "Next is the autoconfigure
-   phase document" with a pointer to `plan/autoconfigure/`.
+   phase document" with a pointer to `plan/archive/autoconfigure/`.
 
 ## Build gate
 
 Documents only, so the gate is that they agree with each other:
 
 ```
-grep -ni "no automatic re-configuration\|no launch-config optimizer\|what seeding is not" plan/recommend-models-overview.md plan/phase-19-fit-handoff.md
+grep -ni "no automatic re-configuration\|no launch-config optimizer\|what seeding is not" plan/archive/recommend-models-overview.md plan/archive/phase-19-fit-handoff.md
 ```
 
 must print nothing, and `go test ./...` still passes (nothing in it reads

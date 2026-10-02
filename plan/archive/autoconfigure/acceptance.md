@@ -348,7 +348,7 @@ not something to do unasked, so it is left for a session where it is agreed.
 | No helper, or a card with nothing usable: a proposal from the machine and the command, with a note | met in tests | `TestRunWithoutAHelper`, `TestRunWithAnAnswerThatAddsNothing`, `TestAutoconfigureWithoutAHelper` |
 | A run while a model serves ends with it serving again, including on helper failure or timeout | met in tests | `TestBorrow*`, `TestAutoconfigureInterruptsAndRestores`; not yet on hardware |
 | A failed start and a measured start each produce a notice that changes only what it shows | met in tests | `TestAStartThatRanOutOfContext` and siblings, `TestRefineTo*` |
-| The feed's phase 19 seeds through the same planner | met | phase 03 amended `plan/phase-19-fit-handoff.md` |
+| The feed's phase 19 seeds through the same planner | met | phase 03 amended `plan/archive/phase-19-fit-handoff.md` |
 | `go test ./...` passes with the helper and the Hub faked | met | 16 packages |
 
 ## Images
