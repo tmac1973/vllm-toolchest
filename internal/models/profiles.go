@@ -262,6 +262,9 @@ func (r *Registry) ApplyProfile(modelID, name string) (VLLMConfig, error) {
 		return VLLMConfig{}, ErrProfileNotFound
 	}
 
+	if m.VLLMConfig != r.profiles[i].Config {
+		m.ConfigSource = "" // a profile's config is not what was seeded
+	}
 	m.VLLMConfig = r.profiles[i].Config
 	m.ActiveProfile = r.profiles[i].Name
 	m.VRAMEstimate = EstimateVRAM(m, m.OwnEnvPairs())

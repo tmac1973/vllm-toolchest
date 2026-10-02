@@ -167,3 +167,28 @@ func TestConfigSource(t *testing.T) {
 		t.Error("a change kept the mark")
 	}
 }
+
+// Applying a profile whose config differs clears the seeded mark: found when
+// autoconfigure's Save and apply left a seeded model still claiming its
+// settings were the feed's.
+func TestApplyingAProfileClearsTheSeededMark(t *testing.T) {
+	r := NewRegistry(t.TempDir(), t.TempDir())
+	r.Register(&Model{ID: "org/m", LocalPath: t.TempDir()})
+	m, _ := r.Get("org/m")
+	seeded := m.VLLMConfig
+	seeded.TensorParallelSize = 4
+	r.SetSeededConfig("org/m", seeded)
+
+	r.SaveProfileFrom("org/m", "Same", ConfigProfile{Config: seeded})
+	r.ApplyProfile("org/m", "Same")
+	if m, _ := r.Get("org/m"); m.ConfigSource != ConfigSeeded {
+		t.Error("a profile holding the same config cleared the mark")
+	}
+	other := seeded
+	other.ReasoningParser = "gemma4"
+	r.SaveProfileFrom("org/m", AutoconfigProfileName, ConfigProfile{Config: other})
+	r.ApplyProfile("org/m", AutoconfigProfileName)
+	if m, _ := r.Get("org/m"); m.ConfigSource != "" {
+		t.Error("an applied profile left the seeded mark")
+	}
+}

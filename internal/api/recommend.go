@@ -116,6 +116,12 @@ func (s *Server) seedFromFeed(modelID string) {
 	if !ok {
 		return
 	}
+	// Only a config that is still registration's default: one restored from
+	// a backup, claimed as the model arrived, is somebody's and stays.
+	if m.VLLMConfig != models.Describe(m.ID, m.LocalPath).VLLMConfig {
+		slog.Info("downloaded from the feed but not seeded: it arrived with a config", "model", modelID)
+		return
+	}
 	plan := models.PlanFit(s.planInput(m, m.VLLMConfig, models.ContextMax, ""))
 	if !plan.Known {
 		slog.Info("downloaded from the feed but not seeded: no fit", "model", modelID, "why", plan.Why)
