@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -47,7 +48,9 @@ func (h serverHub) GetFiles(ctx context.Context, modelID, revision string) (stri
 
 func (s *Server) recommendEngine() *recommend.Engine {
 	s.recommend.once.Do(func() {
-		s.recommend.engine = recommend.NewEngine(serverHub{s}, s.cfg.DataDir)
+		if s.recommend.engine == nil {
+			s.recommend.engine = recommend.NewEngine(serverHub{s}, s.cfg.DataDir)
+		}
 	})
 	return s.recommend.engine
 }
@@ -97,4 +100,32 @@ func (s *Server) handleRecommendRefresh(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), recommendTimeout)
 	defer cancel()
 	respondJSON(w, s.recommendEngine().Refresh(ctx, s.recommendProfile()))
+}
+
+// seedFromFeed gives a model just downloaded from the recommendation feed the
+// hardware settings its card stated: models.PlanFit on the downloaded model's
+// own config, at the most context it holds, as autoconfigure's hardware half
+// would with no card. Only for a model registered by this download -- a
+// re-download never overwrites a config someone has since tuned -- and only
+// while the feed still lists it. Otherwise the model keeps its defaults.
+func (s *Server) seedFromFeed(modelID string) {
+	if s.recommend.engine == nil || !s.recommend.engine.Recommended(modelID) {
+		return
+	}
+	m, ok := s.registry.Get(modelID)
+	if !ok {
+		return
+	}
+	plan := models.PlanFit(s.planInput(m, m.VLLMConfig, models.ContextMax, ""))
+	if !plan.Known {
+		slog.Info("downloaded from the feed but not seeded: no fit", "model", modelID, "why", plan.Why)
+		return
+	}
+	cfg := recommend.SeedConfig(m.VLLMConfig, plan.All.Config)
+	if err := s.registry.SetSeededConfig(modelID, cfg); err != nil {
+		slog.Warn("could not seed the downloaded model's config", "model", modelID, "error", err)
+		return
+	}
+	slog.Info("seeded the downloaded model's config from its fit", "model", modelID,
+		"tp", cfg.TensorParallelSize, "max_model_len", cfg.MaxModelLen)
 }

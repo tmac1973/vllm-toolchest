@@ -29,7 +29,11 @@ type helperWanted struct{ atomic.Bool }
 // onTransferComplete is the downloader's completion hook: register the model
 // as any download is, then claim the helper if that is what this was.
 func (s *Server) onTransferComplete(downloadID, modelID, modelDir string) {
+	_, existed := s.registry.Get(modelID)
 	recordTransfer(s.registry)(downloadID, modelID, modelDir)
+	if !existed {
+		s.seedFromFeed(modelID)
+	}
 	if modelID == models.HelperRepo && s.wantHelper.Load() {
 		if err := s.registry.SetHelper(modelID, true); err != nil {
 			slog.Warn("the helper model downloaded but could not be marked as the helper", "error", err)

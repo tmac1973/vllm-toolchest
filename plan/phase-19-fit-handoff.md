@@ -5,6 +5,25 @@ on a card), `plan/autoconfigure` phase 02 (`models.PlanFit` and
 `(*Server).planInput`) · **Enables:** nothing further. This closes the
 feature.
 
+## As built, 2026-10-01
+
+- **Offload plans seed their flag.** This phase predates expert offload. A
+  model the feed planned with its experts in RAM starts only with
+  `--enable-expert-offload` and without MTP, so `SeedConfig` takes those two
+  from such a plan beside the five hardware fields -- what autoconfigure does
+  when its offload width is chosen. Nothing else is taken.
+- **`SeedFor` is `Recommended(id) bool`.** The seed is computed at
+  completion from the downloaded model's own config (step 6), so the engine
+  only answers whether the pool lists the model.
+- **`SeedConfig(base, planned) VLLMConfig`** returns the config rather than
+  changing a model, and `Registry.SetSeededConfig` stores it with the mark in
+  one save.
+- **The mark clears on the first change.** `UpdateConfig` clears
+  `ConfigSource` when the config differs, not on every autosave, so the note
+  on the panel stops claiming values the operator has since changed.
+- The note is on the config panel; there is no `hf_download.go` -- the hook
+  is `onTransferComplete`, which already registers only a new model.
+
 ## Goal
 
 When a model is downloaded from the feed, seed its `models.json` entry with
