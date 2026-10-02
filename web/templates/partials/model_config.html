@@ -147,8 +147,14 @@
              submitted max_model_len, the picker's "custom" went first, and
              FormValue returned the string "custom" — which parsed to 0, and
              silently reset the operator's context length to the model default
-             the next time anything on this form was touched. */}}
-        <label title="Maps to vLLM's --max-model-len. Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache and let the engine warm up faster. Model max is {{.MaxCtx}}.">Context length <small>(--max-model-len, max: {{.MaxCtx}})</small><select name="{{if not .CtxIsCustom}}max_model_len{{end}}" id="ctx-sel-{{.SafeID}}" onchange="var c=document.getElementById('ctx-cust-{{.SafeID}}');if(this.value==='custom'){c.style.display='';c.name='max_model_len';this.name='';}else{c.style.display='none';c.name='';this.name='max_model_len';}">
+             the next time anything on this form was touched.
+
+             Choosing "Custom..." must not reach the form: the form saves on
+             change and re-renders, and the context it would save is the one it
+             already has, so the panel came back on the matching preset with the
+             box hidden before anything could be typed in it (issue #86). The
+             box's own change -- a number typed and left -- is what saves. */}}
+        <label title="Maps to vLLM's --max-model-len. Maximum sequence length (prompt + generation). Lower values use less VRAM for KV cache and let the engine warm up faster. Model max is {{.MaxCtx}}.">Context length <small>(--max-model-len, max: {{.MaxCtx}})</small><select name="{{if not .CtxIsCustom}}max_model_len{{end}}" id="ctx-sel-{{.SafeID}}" onchange="var c=document.getElementById('ctx-cust-{{.SafeID}}');if(this.value==='custom'){event.stopPropagation();c.style.display='';c.name='max_model_len';this.name='';c.focus();}else{c.style.display='none';c.name='';this.name='max_model_len';}">
           {{- range .CtxOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end -}}
           <option value="custom"{{if .CtxIsCustom}} selected{{end}}>Custom...</option>
         </select><input type="number" id="ctx-cust-{{.SafeID}}" name="{{.CtxCustomName}}" value="{{.ModelLen}}" min="256" max="{{.MaxCtx}}" style="{{if not .CtxIsCustom}}display:none;{{end}}margin-top:0.25rem;" placeholder="Custom context length"></label>
