@@ -30,6 +30,17 @@ type Profile struct {
 	Defaults      models.PlanDefaults
 	ExpertOffload bool
 	HostRAMGB     float64
+
+	// Featured are the image's own publishers, whose models that fit get a
+	// section of their own.
+	Featured []string
+
+	// Env is the environment a model would launch with here -- the machine's
+	// and the image's defaults with the model's own -- for the estimate. Nil
+	// means the model's own only. Without it, the image's default of keeping
+	// a PLE table in RAM was missed, and Flash-Next, which serves on four
+	// cards, was planned with its experts in RAM too.
+	Env func(*models.Model) []string
 }
 
 // NewProfile builds a profile, working out the accelerated formats from the
@@ -41,6 +52,7 @@ func NewProfile(inv models.GPUInventory, gpuName, gpuArch string, d variants.Des
 		Accelerated: acceleratedFormats(gpuArch, d.NoAccel),
 		Archs:       archs, ArchsKnown: archsKnown,
 		Defaults: defaults, ExpertOffload: d.Has("expert_offload"), HostRAMGB: hostRAMGB,
+		Featured: d.Featured,
 	}
 }
 
@@ -53,7 +65,7 @@ func (p Profile) Key() string {
 		fmt.Sprint(p.Inventory.Count), fmt.Sprintf("%.1f", p.Inventory.PerCardGB), p.GPUArch, p.Variant,
 		strings.Join(acc, ","), fmt.Sprint(p.ArchsKnown), fmt.Sprint(len(p.Archs)),
 		fmt.Sprintf("%.2f", p.Defaults.GPUMemoryUtilization), fmt.Sprint(p.Defaults.MaxNumSeqs),
-		fmt.Sprint(p.ExpertOffload), fmt.Sprintf("%.0f", p.HostRAMGB),
+		fmt.Sprint(p.ExpertOffload), fmt.Sprintf("%.0f", p.HostRAMGB), strings.Join(p.Featured, ","),
 	}, "|")
 }
 

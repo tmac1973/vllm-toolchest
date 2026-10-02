@@ -72,8 +72,12 @@ func (s *Server) recommendProfile() recommend.Profile {
 		}
 		hostRAM = float64(cur.Memory.TotalMB) / 1024
 	}
-	return recommend.NewProfile(inv, gpuName, s.cfg.GPUArch, desc, archs, known,
+	p := recommend.NewProfile(inv, gpuName, s.cfg.GPUArch, desc, archs, known,
 		models.PlanDefaults{GPUMemoryUtilization: s.cfg.GPUMemoryUtil, MaxNumSeqs: s.cfg.MaxNumSeqs}, hostRAM)
+	// The launch environment autoconfigure estimates with, image defaults
+	// included, so the feed and the review plan a model alike.
+	p.Env = s.configuredEnvPairs
+	return p
 }
 
 // recommendTimeout bounds a build: twenty Hub queries and forty finalists'

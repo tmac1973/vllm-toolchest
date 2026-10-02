@@ -17,6 +17,18 @@
 {{- if .Unavailable}}
 <p class="recommend-empty"><small>No recommendations right now: {{.Unavailable}}. Search below still works.</small></p>
 {{- else}}
+{{- with .Featured}}
+<section class="recommend-featured">
+  <p><strong>Made for this image</strong> <small>by {{$.FeaturedBy}} &mdash; formats and kernels this image carries, shown whichever order is chosen</small></p>
+  {{- range .}}{{template "recommend_card" .}}{{end}}
+  {{- with $.FeaturedMore}}
+  <details class="recommend-more">
+    <summary><small>Show {{len .}} more</small></summary>
+    {{- range .}}{{template "recommend_card" .}}{{end}}
+  </details>
+  {{- end}}
+</section>
+{{- end}}
 <div role="group" class="recommend-chips">
   {{- range .Chips}}
   <button type="button" class="recommend-chip" aria-pressed="{{if .Pressed}}true{{else}}false{{end}}"

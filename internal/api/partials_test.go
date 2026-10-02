@@ -8,6 +8,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/recommend"
 )
 
 // presetChoice matches what the benchmark form template reads off a preset.
@@ -663,6 +664,18 @@ func TestGoldenPartials(t *testing.T) {
 			name:    "recommend_feed_archs_unknown",
 			partial: "recommend_feed",
 			data:    newRecommendFeedView(feedResult(false), feedNow),
+		},
+		{
+			// The image's own publisher, above the orders.
+			name:    "recommend_feed_featured",
+			partial: "recommend_feed",
+			data: func() recommendFeedView {
+				r := feedResult(true)
+				r.FeaturedBy = []string{"tcclaviger"}
+				r.Featured = []recommend.Candidate{{ID: "tcclaviger/Qwen3.6-27B-MXFP416-MTP", Format: "Other", WeightGB: 16.3, TP: 2,
+					Required: 30, Available: 57, AffordableTokens: 262144, FullContextRequests: 3, Featured: true, Arch: "Qwen3_5ForConditionalGeneration"}}
+				return newRecommendFeedView(r, feedNow)
+			}(),
 		},
 		{
 			name:    "recommend_feed_unavailable",

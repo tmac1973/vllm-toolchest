@@ -11,16 +11,20 @@ import (
 // recommendFeedView is the feed as the page shows it: every sentence made
 // here, so the template only lays it out.
 type recommendFeedView struct {
-	Profile     string // "4× AMD Radeon AI PRO R9700 · 128 GB · gfx1201 · rdna4-clav"
-	Intent      string
-	Chips       []recommendChip
-	Cards       []recommendCard // the first few, shown
-	More        []recommendCard // the rest, folded
-	Unverified  []recommendUnverified
-	Unavailable string
-	Empty       bool // built, and nothing in it fits
-	Age         string
-	Stale       bool
+	Profile string // "4× AMD Radeon AI PRO R9700 · 128 GB · gfx1201 · rdna4-clav"
+	Intent  string
+	Chips   []recommendChip
+	// Featured are the image's own publishers' models that fit, in a section
+	// of their own above the orders; FeaturedBy names the publishers.
+	Featured, FeaturedMore []recommendCard
+	FeaturedBy             string
+	Cards                  []recommendCard // the first few, shown
+	More                   []recommendCard // the rest, folded
+	Unverified             []recommendUnverified
+	Unavailable            string
+	Empty                  bool // built, and nothing in it fits
+	Age                    string
+	Stale                  bool
 }
 
 type recommendChip struct {
@@ -74,34 +78,15 @@ func newRecommendFeedView(r recommend.Result, now time.Time) recommendFeedView {
 	}
 
 	for _, c := range r.Verified {
-		clauses := []string{
-			fmt.Sprintf("fits at TP=%d", c.TP),
-			fmt.Sprintf("%.0f GB of %.0f", c.Required, c.Available),
-		}
-		if c.Accelerated {
-			clauses = append(clauses, "accelerated on "+p.GPUArch)
-		} else {
-			clauses = append(clauses, "not accelerated on "+p.GPUArch)
-		}
-		if p.ArchsKnown && c.Arch != "" {
-			clauses = append(clauses, c.Arch+" supported by this image")
-		}
-		ctx := groupThousands(c.AffordableTokens) + " tokens"
-		switch {
-		case c.Offload:
-			ctx += " · experts in system RAM, one request at a time — slower generation"
-		case c.FullContextRequests == 1:
-			ctx += ", one full-length request at a time"
-		case c.FullContextRequests > 1:
-			ctx += fmt.Sprintf(", %d full-length requests at once", c.FullContextRequests)
-		}
-		v.Cards = append(v.Cards, recommendCard{
-			ID: c.ID, SafeID: safeID(c.ID), Format: c.Format, Color: quantBadgeColor(c.Format),
-			Weights: fmt.Sprintf("%.1f GB", c.WeightGB),
-			Fit:     strings.Join(clauses, " · "), Context: "holds " + ctx,
-			Gated: c.Gated, Offload: c.Offload,
-		})
+		v.Cards = append(v.Cards, newRecommendCard(c, p))
 	}
+	for _, c := range r.Featured {
+		v.Featured = append(v.Featured, newRecommendCard(c, p))
+	}
+	if len(v.Featured) > featuredShown {
+		v.Featured, v.FeaturedMore = v.Featured[:featuredShown], v.Featured[featuredShown:]
+	}
+	v.FeaturedBy = strings.Join(r.FeaturedBy, ", ")
 	for _, c := range r.Unverified {
 		v.Unverified = append(v.Unverified, recommendUnverified{ID: c.ID, Reason: c.Reason, Gated: c.Gated})
 	}
@@ -116,6 +101,46 @@ func newRecommendFeedView(r recommend.Result, now time.Time) recommendFeedView {
 // verified 35 on compute, and all of them pushed the search box a page and a
 // half down: the feed is above search, not instead of it.
 const recommendShown = 8
+
+// featuredShown is how many of the image's own publishers' cards show before
+// the rest fold.
+const featuredShown = 4
+
+// newRecommendCard is one model's card.
+func newRecommendCard(c recommend.Candidate, p recommend.ProfileView) recommendCard {
+	clauses := []string{
+		fmt.Sprintf("fits at TP=%d", c.TP),
+		fmt.Sprintf("%.0f GB of %.0f", c.Required, c.Available),
+	}
+	switch {
+	case c.Accelerated:
+		clauses = append(clauses, "accelerated on "+p.GPUArch)
+	case c.Featured:
+		// The image's own formats run on its own kernels: "not accelerated"
+		// would be the wrong thing to say of them.
+		clauses = append(clauses, "made for this image's kernels")
+	default:
+		clauses = append(clauses, "not accelerated on "+p.GPUArch)
+	}
+	if p.ArchsKnown && c.Arch != "" {
+		clauses = append(clauses, c.Arch+" supported by this image")
+	}
+	ctx := groupThousands(c.AffordableTokens) + " tokens"
+	switch {
+	case c.Offload:
+		ctx += " · experts in system RAM, one request at a time — slower generation"
+	case c.FullContextRequests == 1:
+		ctx += ", one full-length request at a time"
+	case c.FullContextRequests > 1:
+		ctx += fmt.Sprintf(", %d full-length requests at once", c.FullContextRequests)
+	}
+	return recommendCard{
+		ID: c.ID, SafeID: safeID(c.ID), Format: c.Format, Color: quantBadgeColor(c.Format),
+		Weights: fmt.Sprintf("%.1f GB", c.WeightGB),
+		Fit:     strings.Join(clauses, " · "), Context: "holds " + ctx,
+		Gated: c.Gated, Offload: c.Offload,
+	}
+}
 
 // ago is a duration as a reader says it.
 func ago(d time.Duration) string {

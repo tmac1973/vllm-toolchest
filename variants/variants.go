@@ -155,6 +155,11 @@ type Descriptor struct {
 	// accelerated. No shipped variant sets VARIANT_NO_ACCEL yet.
 	NoAccel []string
 
+	// Featured are the publishers whose checkpoints are made for this image
+	// -- its own formats, its kernels -- and that the recommendation feed
+	// shows in a section of their own when they fit. From VARIANT_FEATURED.
+	Featured []string
+
 	// ImageEnv is the environment this variant's image needs in order to
 	// behave as its author intended: kernel routing, backend selection, and
 	// anything else that is not an operator choice.
@@ -404,6 +409,7 @@ func parse(id string, src string) (Descriptor, error) {
 		Caps:           strings.Fields(kv["VARIANT_CAPS"]),
 		Capabilities:   strings.Fields(kv["VARIANT_CAPABILITIES"]),
 		NoAccel:        strings.Fields(strings.ToLower(kv["VARIANT_NO_ACCEL"])),
+		Featured:       strings.Fields(kv["VARIANT_FEATURED"]),
 		ImageEnv:       strings.Fields(kv["VARIANT_IMAGE_ENV"]),
 	}
 

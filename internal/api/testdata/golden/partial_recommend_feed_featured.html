@@ -1,0 +1,88 @@
+<header class="recommend-head">
+  <div>
+    <strong>Recommended for this machine</strong>
+    <br><small class="recommend-profile" title="What these recommendations were worked out for. If one looks wrong, check this first.">4× AMD Radeon AI PRO R9700 · 128 GB · gfx1201 · rdna4-clav</small>
+  </div>
+  <div class="recommend-refresh"><small>updated 3 minutes ago</small>
+    <button type="button" class="outline secondary"
+            hx-post="/api/recommend/refresh" hx-swap="none"
+            hx-indicator="#recommend-busy"
+            hx-on::after-request="var c=document.querySelector('.recommend-chip[aria-pressed=\'true\']'); if(c){c.click()}"
+            title="Ask Hugging Face again. The list is otherwise kept for six hours.">Refresh</button>
+    <span id="recommend-busy" class="htmx-indicator" aria-busy="true"></span>
+  </div>
+</header>
+<section class="recommend-featured">
+  <p><strong>Made for this image</strong> <small>by tcclaviger &mdash; formats and kernels this image carries, shown whichever order is chosen</small></p><article class="recommend-card">
+  <div class="recommend-card-head">
+    <div>
+      <strong>tcclaviger/Qwen3.6-27B-MXFP416-MTP</strong>
+      <a href="https://huggingface.co/tcclaviger/Qwen3.6-27B-MXFP416-MTP" target="_blank" rel="noopener" class="recommend-hub" title="View on HuggingFace">&#8599;</a>
+      <br><small>fits at TP=2 · 30 GB of 57 · made for this image&#39;s kernels · Qwen3_5ForConditionalGeneration supported by this image</small>
+      <br><small class="recommend-context">holds 262,144 tokens, 3 full-length requests at once</small>
+    </div>
+    <div class="recommend-card-side">
+      <span class="recommend-badge" style="background:#555;">Other</span>
+      <small>16.3 GB</small>
+      <button type="button" class="outline"
+              hx-get="/api/hf/model?id=tcclaviger/Qwen3.6-27B-MXFP416-MTP" hx-target="#recdetail-tcclaviger--Qwen3-6-27B-MXFP416-MTP" hx-swap="innerHTML"
+              hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}"
+              title="Sizes, disk space and the download button">Details</button>
+    </div>
+  </div>
+  <div id="recdetail-tcclaviger--Qwen3-6-27B-MXFP416-MTP"></div>
+</article>
+</section>
+<div role="group" class="recommend-chips">
+  <button type="button" class="recommend-chip" aria-pressed="false"
+          hx-get="/api/recommend?intent=quality" hx-target="#recommend-feed" hx-swap="innerHTML">Best quality</button>
+  <button type="button" class="recommend-chip" aria-pressed="true"
+          hx-get="/api/recommend?intent=fastest" hx-target="#recommend-feed" hx-swap="innerHTML">Fastest</button>
+  <button type="button" class="recommend-chip" aria-pressed="false"
+          hx-get="/api/recommend?intent=context" hx-target="#recommend-feed" hx-swap="innerHTML">Longest context</button>
+  <button type="button" class="recommend-chip" aria-pressed="false"
+          hx-get="/api/recommend?intent=newest" hx-target="#recommend-feed" hx-swap="innerHTML">Newest</button>
+</div><article class="recommend-card">
+  <div class="recommend-card-head">
+    <div>
+      <strong>Qwen/Qwen3.5-35B-A3B-FP8</strong>
+      <a href="https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8" target="_blank" rel="noopener" class="recommend-hub" title="View on HuggingFace">&#8599;</a>
+      <br><small>fits at TP=2 · 41 GB of 57 · accelerated on gfx1201 · Qwen3_5MoeForConditionalGeneration supported by this image</small>
+      <br><small class="recommend-context">holds 262,144 tokens, 6 full-length requests at once</small>
+    </div>
+    <div class="recommend-card-side">
+      <span class="recommend-badge" style="background:#7a3db8;">FP8</span>
+      <small>34.9 GB</small>
+      <button type="button" class="outline"
+              hx-get="/api/hf/model?id=Qwen/Qwen3.5-35B-A3B-FP8" hx-target="#recdetail-Qwen--Qwen3-5-35B-A3B-FP8" hx-swap="innerHTML"
+              hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}"
+              title="Sizes, disk space and the download button">Details</button>
+    </div>
+  </div>
+  <div id="recdetail-Qwen--Qwen3-5-35B-A3B-FP8"></div>
+</article><article class="recommend-card">
+  <div class="recommend-card-head">
+    <div>
+      <strong>org/Model-AWQ</strong> <small class="recommend-gated" title="This is a gated model. Configure your HF token in Settings to download.">[gated]</small>
+      <a href="https://huggingface.co/org/Model-AWQ" target="_blank" rel="noopener" class="recommend-hub" title="View on HuggingFace">&#8599;</a>
+      <br><small>fits at TP=1 · 24 GB of 29 · not accelerated on gfx1201 · LlamaForCausalLM supported by this image</small>
+      <br><small class="recommend-context">holds 32,768 tokens, one full-length request at a time</small>
+    </div>
+    <div class="recommend-card-side">
+      <span class="recommend-badge" style="background:#2d8a4e;">AWQ</span>
+      <small>18.1 GB</small>
+      <button type="button" class="outline"
+              hx-get="/api/hf/model?id=org/Model-AWQ" hx-target="#recdetail-org--Model-AWQ" hx-swap="innerHTML"
+              hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}"
+              title="Sizes, disk space and the download button">Details</button>
+    </div>
+  </div>
+  <div id="recdetail-org--Model-AWQ"></div>
+</article>
+<details class="recommend-unverified">
+  <summary><small>2 could not be fully checked</small></summary>
+  <ul>
+    <li><small><strong>org/Odd</strong> &mdash; config unreadable — config.json is missing the fields the fit needs</small></li>
+    <li><small><strong>org/New</strong> &mdash; architecture NewForCausalLM is not in this image&#39;s model registry</small></li>
+  </ul>
+</details>
