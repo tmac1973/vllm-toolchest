@@ -1,6 +1,56 @@
 # Remaining Work
 
+## Where things stand, 2026-10-02
+
+Built, merged and deployed; acceptance runs in
+`plan/autoconfigure/acceptance.md`:
+
+- **Autoconfigure** (`plan/autoconfigure/`, phases 01-15). A helper model
+  reads the card, the hardware half plans width, context, KV dtype and
+  concurrency, the review proposes, and the first start refines. Four
+  families have gone from download to serving on their first start with its
+  settings: Qwen3.5-35B-A3B-FP8, Mistral Small 3.2 (BF16 and a third-party
+  FP8), Gemma 4 31B (tcclaviger MXFP416, RedHat FP8-dynamic), and
+  Qwen3.8-Flash-Next.
+- **Expert offload** on the rdna4-clav image (phase 15 of autoconfigure):
+  planned when a 4-bit MoE does not fit on the cards, with the n-gram table
+  on NVMe when RAM cannot hold it, always with an fp8 KV cache. Flash-Next
+  started on two R9700s from the planner's own config, 84 GB of RAM in use.
+- **The recommendation feed** (phases 15-19): exact sizes from the file tree,
+  the image's architecture registry, the engine ranking Hub models through
+  autoconfigure's planner, the feed behind *Find recommended models* on
+  Download Models with a *Made for this image* section, and seeding a model
+  downloaded from it.
+
+### Still open
+
+1. **Single-card acceptance.** The last criterion of autoconfigure not yet
+   run: the workstation (RX 9070 XT, 16 GB) deployed, the helper on one
+   16 GB card, and a model autoconfigured and started there. Waiting on the
+   workstation's GPU being free.
+2. **Two bugs in the tcclaviger image, to report upstream.** Not yet sent.
+   - Expert offload with MTP does not start: `expert_plan.py` sizes the KV
+     reserve from the registry's figure without the MTP layer (Flash-Next at
+     TP=2: 9,655 B/token reserved, 11,597 measured, 0.09 GiB short).
+     Autoconfigure leaves MTP out of offload plans until it is fixed.
+   - Any draft model fails on Gemma 4: `vllm/config/tp_padding.py`'s
+     `_int_attr` reads `num_key_value_heads` with `getattr(cfg, key, None)`,
+     and transformers 5.17 raises `AmbiguousGlobalPerLayerAttributeError` (a
+     RuntimeError) for Gemma 4's per-layer config. Fix: catch `Exception`.
+     Also, that model card's "see docker-compose.example.yml" names a file
+     the repository never had.
+3. **Estimates resting on one or two starts**, to firm up as more models are
+   autoconfigured, not by calibration runs for their own sake:
+   - Sliding-window KV (Gemma 4): global layers exact, sliding layers about
+     4,700 B/token per card under; the margin covered it.
+   - The 8-bit-and-wider overhead band (0-2.1 GiB a rank) is drawn from three
+     models; the one dense model sat at its bottom.
+   - The offload planner's minimum expert cache is an assumption no start has
+     tested below.
+
 ## Direction, decided 2026-09-30
+
+*History: everything below was carried out. Kept for the reasoning.*
 
 The end goal is **autoconfigure**: one action that sets a model up properly,
 as llama-toolchest does by having a helper model read the card. Nothing in
@@ -423,9 +473,18 @@ the per-rank band containing the engine's measured 19.07 GiB.
 
 ## Recommend feed (phases 15-19): defects found before building
 
+**Resolved 2026-10-01, when the phases were built** (each phase file has an
+*As built* section). The feed does not wrap a candidate for `Fit` at all: it
+describes it as registration would (`models.Describe`) with its weight bytes
+from the file tree in `TotalSizeBytes` before the estimate, and plans it with
+`models.PlanFit` at `ContextMax` -- autoconfigure's planner -- so the width,
+context and request count stated are what autoconfigure would configure, and
+what seeding writes. The circularity below goes with it: the context is the
+planner's answer, not an input. Figures are still projections, and the help
+text says they are estimates the first start refines.
+
 Read while reviewing `plan/phase-15..19`, 2026-09-22. None of the five phases
-has any code yet; these are in the documents and will be inherited by whoever
-implements them.
+had any code then; these were in the documents:
 
 - **Phase 17 step 12 does not typecheck.** It says call
   `models.ParseHFConfig`, then `models.EstimateVRAM`, then `models.Fit`. But
@@ -465,7 +524,11 @@ implements them.
 
 ## Second VRAM estimator in the HuggingFace client
 
-`internal/huggingface/client.go:564` estimates VRAM for models not yet
+**Removed 2026-10-01** (recommend phase 15): the detail panel shows the exact
+weight size from the file tree, and the formula estimators are gone. What
+follows was the state before.
+
+`internal/huggingface/client.go:564` estimated VRAM for models not yet
 downloaded, from the repo's advertised parameter count and file sizes. It is a
 different question with worse data — there is no local config to parse — and it
 was deliberately left alone. It does not know about MoE, offload, or tensor
