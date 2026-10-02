@@ -34,6 +34,7 @@
       <small>34.9 GB</small>
       <button type="button" class="outline"
               hx-get="/api/hf/model?id=Qwen/Qwen3.5-35B-A3B-FP8" hx-target="#recdetail-Qwen--Qwen3-5-35B-A3B-FP8" hx-swap="innerHTML"
+              hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}"
               title="Sizes, disk space and the download button">Details</button>
     </div>
   </div>
@@ -51,6 +52,7 @@
       <small>18.1 GB</small>
       <button type="button" class="outline"
               hx-get="/api/hf/model?id=org/Model-AWQ" hx-target="#recdetail-org--Model-AWQ" hx-swap="innerHTML"
+              hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}"
               title="Sizes, disk space and the download button">Details</button>
     </div>
   </div>

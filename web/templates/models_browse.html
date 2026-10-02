@@ -140,4 +140,23 @@
 {{end}}
 
 <div id="search-results"></div>
+
+<script>
+// A model's details open under its row and close again on a second click of
+// the same control; a different variant into the same row replaces them.
+// Called before htmx sends the request: true means "closed instead", and the
+// request is cancelled.
+function detailToggleClosed(el) {
+    var target = document.querySelector(el.getAttribute('hx-target'));
+    if (!target) return false;
+    var url = el.getAttribute('hx-get');
+    if (target.dataset.open === url && target.innerHTML.trim() !== '') {
+        target.innerHTML = '';
+        delete target.dataset.open;
+        return true;
+    }
+    target.dataset.open = url;
+    return false;
+}
+</script>
 {{end}}

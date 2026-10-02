@@ -7,8 +7,8 @@
         <br><small style="opacity:0.7;">Qwen &middot; 1.2M downloads &middot; 3.4K likes</small>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
-        <a href="#" hx-get="/api/hf/model?id=Qwen/Qwen3.8-27B" hx-target="#detail-Qwen--Qwen3-8-27B" hx-swap="innerHTML" title="Qwen/Qwen3.8-27B" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#555;color:#fff;text-decoration:none;cursor:pointer;">FP16</a>
-        <a href="#" hx-get="/api/hf/model?id=unsloth/Qwen3.8-27B-FP8" hx-target="#detail-Qwen--Qwen3-8-27B" hx-swap="innerHTML" title="unsloth/Qwen3.8-27B-FP8" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#7a3db8;color:#fff;text-decoration:none;cursor:pointer;">FP8</a>
+        <a href="#" hx-get="/api/hf/model?id=Qwen/Qwen3.8-27B" hx-target="#detail-Qwen--Qwen3-8-27B" hx-swap="innerHTML" hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}" title="Qwen/Qwen3.8-27B" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#555;color:#fff;text-decoration:none;cursor:pointer;">FP16</a>
+        <a href="#" hx-get="/api/hf/model?id=unsloth/Qwen3.8-27B-FP8" hx-target="#detail-Qwen--Qwen3-8-27B" hx-swap="innerHTML" hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}" title="unsloth/Qwen3.8-27B-FP8" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#7a3db8;color:#fff;text-decoration:none;cursor:pointer;">FP8</a>
       </div>
     </div>
   </header>
@@ -22,7 +22,7 @@
         <br><small style="opacity:0.7;">980.0K downloads &middot; 2.1K likes</small>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.15rem;">
-        <a href="#" hx-get="/api/hf/model?id=meta-llama/Llama-4-70B" hx-target="#detail-meta-llama--Llama-4-70B" hx-swap="innerHTML" title="meta-llama/Llama-4-70B" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#555;color:#fff;text-decoration:none;cursor:pointer;">FP16</a>
+        <a href="#" hx-get="/api/hf/model?id=meta-llama/Llama-4-70B" hx-target="#detail-meta-llama--Llama-4-70B" hx-swap="innerHTML" hx-on::before-request="if(detailToggleClosed(this)){event.preventDefault()}" title="meta-llama/Llama-4-70B" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:0.2rem;font-size:0.7rem;background:#555;color:#fff;text-decoration:none;cursor:pointer;">FP16</a>
       </div>
     </div>
   </header>
