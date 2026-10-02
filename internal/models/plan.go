@@ -233,13 +233,12 @@ func bestOffload(in PlanInput, d PlanDefaults, widths []int, target int, dtype s
 	if tp == 0 {
 		return WidthPlan{}, false, ""
 	}
-	p, ok, why := planOffload(in, d, tp, target, dtype)
-	if in.CardKVDtype == "" && dtype == "auto" && (!ok || p.ContextTokens < target) {
-		if q, qok, _ := planOffload(in, d, tp, target, "fp8"); qok && (!ok || q.ContextTokens > p.ContextTokens) {
-			return q, true, ""
-		}
-	}
-	return p, ok, why
+	// Always an fp8 cache: the image sizes the offload's KV reserve for one.
+	// With the default cache Flash-Next measured 13,427 bytes a token against
+	// the 9,302 reserved, and the start fell 0.84 GiB short at 262,144; with
+	// fp8 it measured 8,437 and served. Its card ships calibrated fp8 KV
+	// scales for the same reason.
+	return planOffload(in, d, tp, target, "fp8")
 }
 
 // planTarget is the context a class asks for, for this model.

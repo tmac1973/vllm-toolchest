@@ -147,6 +147,10 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 		Field: "extra_flags", Origin: "this machine",
 		Reason: offloadReason(hostExperts, table, cache*float64(tp), nvme),
 	})
+	p.Notes = append(p.Notes, ProfileNote{
+		Field: "kv_cache_dtype", Origin: "this machine",
+		Reason: "fp8, because with expert offload this image reserves the KV cache for an fp8 cache: with the engine's default, a start falls short of it.",
+	})
 	if droppedMTP {
 		p.Notes = append(p.Notes, ProfileNote{
 			Field: "speculative_config", Origin: "this machine",
@@ -165,7 +169,12 @@ func offloadReason(hostExperts, table, cacheGB float64, nvme bool) string {
 	case table > 0:
 		s += " beside its " + gb(table) + " n-gram table"
 	}
-	return s + "; the cards keep " + gb(cacheGB) + " of the experts cached. The cache holds one full-length request at a time, and generation is slower: Flash-Next decoded about 54 tokens a second on two cards in a test here (its card reports 100 with the image's tuned recipe), against 153 on four without offload."
+	speed := "Flash-Next decoded about 54 tokens a second on two cards with its table in RAM in a test here"
+	if nvme {
+		speed = "Flash-Next decoded about 39 tokens a second on two cards with its table on NVMe in a test here"
+	}
+	return s + "; the cards keep " + gb(cacheGB) + " of the experts cached. The cache holds one full-length request at a time, and generation is slower: " +
+		speed + " (its card reports 100 with the image's tuned recipe), against 153 on four without offload."
 }
 
 // pleCacheGB is the RAM a PLE table served from NVMe keeps as its row cache,
