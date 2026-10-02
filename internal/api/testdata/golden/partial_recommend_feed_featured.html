@@ -10,6 +10,8 @@
             hx-on::after-request="var c=document.querySelector('.recommend-chip[aria-pressed=\'true\']'); if(c){c.click()}"
             title="Ask Hugging Face again. The list is otherwise kept for six hours.">Refresh</button>
     <span id="recommend-busy" class="htmx-indicator" aria-busy="true"></span>
+    <button type="button" class="outline secondary" onclick="recommendCollapse()"
+            title="Put the recommendations away; the search stays where it is.">Hide</button>
   </div>
 </header>
 <section class="recommend-featured">

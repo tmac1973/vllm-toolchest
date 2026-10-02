@@ -17,6 +17,11 @@ which needs a Download button on a card that knows its fit.
   full-length requests at once, or that its experts would be in system RAM.
 - Checked rendered in headless Firefox with the live pool at 1280 and 800
   px: no horizontal scroll, cards stack at the narrow width.
+- **Collapsed until asked for** (2026-10-02, at the operator's request): the
+  page is *Search HuggingFace*, and the feed open by default put the search
+  bar a page down. It is now a **Find recommended models** button above the
+  search, which loads the feed in place; the feed's **Hide** puts it back.
+  This replaces step 1's load on page open.
 - **"Made for this image"** (added 2026-10-02, decided with the operator):
   a variant may name its own publishers (`VARIANT_FEATURED`; rdna4-clav
   names tcclaviger), whose models that fit get a section above the orders,

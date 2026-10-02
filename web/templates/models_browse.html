@@ -11,6 +11,9 @@
 /* The recommendation feed: cards in the page flow, growing with their
    content. Everything is scoped under .recommend-feed. */
 .recommend-feed { margin-bottom: 1rem; padding: 0.75rem 1rem; }
+.recommend-feed .recommend-collapsed { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.recommend-feed .recommend-collapsed button { margin: 0; padding: 0.3rem 0.9rem; font-size: 0.9rem; }
+.recommend-feed .recommend-collapsed small { opacity: 0.7; }
 .recommend-feed .recommend-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; padding: 0; margin-bottom: 0.5rem; background: none; border: 0; }
 .recommend-feed .recommend-profile { opacity: 0.7; }
 .recommend-feed .recommend-refresh { display: flex; align-items: center; gap: 0.5rem; }
@@ -36,14 +39,28 @@
 .recommend-feed .recommend-unverified ul { margin: 0.4rem 0 0 1rem; }
 </style>
 
-<article class="recommend-feed">
-    <div id="recommend-feed"
-         hx-get="/api/recommend?intent=quality"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <p aria-busy="true"><small>Working out which models fit this machine&hellip;</small></p>
+{{/* Collapsed until asked for: this page is a search, and a feed open by
+     default put the search bar a page down. The button and the feed's Hide
+     both work through #recommend-feed; Hide restores this template. */}}
+<template id="recommend-collapsed">
+    <div class="recommend-collapsed">
+        <button type="button" class="outline"
+                hx-get="/api/recommend?intent=quality" hx-target="#recommend-feed" hx-swap="innerHTML"
+                hx-on::before-request="this.setAttribute('aria-busy','true')">Find recommended models</button>
+        <small>Models from Hugging Face that should run on this machine, with how many GPUs and how much context each would get.</small>
     </div>
+</template>
+<article class="recommend-feed">
+    <div id="recommend-feed"></div>
 </article>
+<script>
+function recommendCollapse() {
+    var feed = document.getElementById('recommend-feed');
+    feed.innerHTML = document.getElementById('recommend-collapsed').innerHTML;
+    htmx.process(feed);
+}
+recommendCollapse();
+</script>
 
 <details class="quant-key">
     <summary>What do the format badges mean?</summary>
