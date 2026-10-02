@@ -94,6 +94,7 @@ func TestTheFeedsEmptyStates(t *testing.T) {
 // The page keeps its search box whatever the feed says: the feed is a
 // section above it, loaded on its own.
 func TestTheBrowsePageKeepsItsSearch(t *testing.T) {
+	// (and the feed starts collapsed: see below)
 	s := newGoldenServer(t, goldenEnvGeneric)
 	s.router = s.buildRouter()
 	rec := httptest.NewRecorder()
@@ -104,6 +105,14 @@ func TestTheBrowsePageKeepsItsSearch(t *testing.T) {
 	}
 	if strings.Index(body, `id="recommend-feed"`) > strings.Index(body, `id="hf-search-input"`) {
 		t.Error("the feed is not above the search")
+	}
+	// Collapsed until asked for: nothing loads the feed by itself, and the
+	// button that does is what sits above the search.
+	if strings.Contains(body, `hx-trigger="load"`) && strings.Contains(body[strings.Index(body, `id="recommend-feed"`):strings.Index(body, `id="recommend-feed"`)+200], "hx-trigger") {
+		t.Error("the feed loads by itself")
+	}
+	if !strings.Contains(body, "Find recommended models") || !strings.Contains(body, "recommendCollapse()") {
+		t.Error("no button to find recommended models")
 	}
 }
 
