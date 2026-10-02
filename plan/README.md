@@ -6,52 +6,8 @@ things that turned out to be wrong.
 
 ## Active
 
-- [`phase-10-variant-expansion.md`](phase-10-variant-expansion.md) — image
-  variants for NVIDIA, AMD and Intel accelerators. Implemented on the
-  `variant-manifests` branch; its §7 lists what is still unproven.
-- [`phase-11-config-profiles.md`](phase-11-config-profiles.md) — named,
-  per-model snapshots of a launch config, and the `models.json` schema gate
-  they needed first.
-- [`phase-12-per-model-env.md`](phase-12-per-model-env.md) — per-model
-  environment variables, overriding the machine-wide ones. Planned, not built.
-- [`phase-13-engine-advice.md`](phase-13-engine-advice.md) — reading what the
-  engine measured and what it suggests, out of its own log output. The first
-  slice of the "optimizer"; acting on any of it is deliberately a later phase.
-- [`phase-14-measured-vram.md`](phase-14-measured-vram.md) — take the VRAM
-  figures from the engine's own report instead of deriving them. A reversal of
-  phase 13's assumption that the estimator could be calibrated into
-  correctness; §1 is the evidence that it could not.
-- [`recommend-models-overview.md`](recommend-models-overview.md) — the shared
-  definition for phases 15–19: a hardware- and runtime-aware "Recommended for
-  this machine" feed on the Download Models page, generated from the Hub
-  rather than from a shipped list. Planned, not built.
-- [`phase-15-exact-model-sizes.md`](phase-15-exact-model-sizes.md) — take model
-  sizes from the Hub's `safetensors` metadata instead of a dense-transformer
-  formula that understates a mixture-of-experts checkpoint by its expert
-  count. Ships on its own; everything after it depends on the figures.
-- [`phase-16-arch-registry-probe.md`](phase-16-arch-registry-probe.md) — read
-  the running image's supported model architectures out of vLLM's own
-  registry, by the probe-and-cache pattern the device name already uses.
-  Independent of phase 15.
-- [`phase-17-recommend-engine.md`](phase-17-recommend-engine.md) — the
-  `internal/recommend` package: the machine profile, the candidate pool, the
-  staged ranking the Hub's two-tier API forces, and the four objectives. Ends
-  at a JSON endpoint, with no UI.
-- [`phase-18-recommend-feed.md`](phase-18-recommend-feed.md) — the feed itself:
-  the profile line that makes a wrong recommendation traceable, the four
-  intent chips, and the verified and unverified lists.
-- [`phase-19-fit-handoff.md`](phase-19-fit-handoff.md) — seed a downloaded
-  model's hardware settings through autoconfigure's planner. §"What seeding
-  is, and what comes after" says how a measurement may later lead to a
-  proposal, by way of autoconfigure.
-- [`autoconfigure/`](autoconfigure/overview.md) — one action that configures a
-  model from its card and this machine: a helper model reads the card, a
-  planner fits the hardware, a review shows every setting before it is
-  applied, and a measured start refines it. Its own phase numbering, 01-14.
-  Phases 01-13 built on the `autoconfigure` branch, 2026-09-30; phase 14's
-  hardware runs are outstanding -- see
-  [`autoconfigure/acceptance.md`](autoconfigure/acceptance.md).
-- [`todo.md`](todo.md) — everything with no phase of its own.
+- [`todo.md`](todo.md) — where things stand, what is still open, and
+  everything with no phase of its own.
 
 ## Archive
 
@@ -72,6 +28,18 @@ is not recoverable from the code:
 | [`phase-08-setup-script-and-polish.md`](archive/phase-08-setup-script-and-polish.md) | `setup.sh`, install flow |
 | [`phase-09-nvidia-cuda-support.md`](archive/phase-09-nvidia-cuda-support.md) | NVIDIA CUDA as a second target |
 | [`ui-parity-plan.md`](archive/ui-parity-plan.md) | Web UI parity with llama-toolchest |
+| [`phase-10-variant-expansion.md`](archive/phase-10-variant-expansion.md) | Image variants for NVIDIA, AMD and Intel; §7 lists what was unproven |
+| [`phase-11-config-profiles.md`](archive/phase-11-config-profiles.md) | Named per-model config profiles, the `models.json` schema gate |
+| [`phase-12-per-model-env.md`](archive/phase-12-per-model-env.md) | Per-model environment variables |
+| [`phase-13-engine-advice.md`](archive/phase-13-engine-advice.md) | Reading the engine's measurements and suggestions from its log (its §6 display was built later, as the advice panel) |
+| [`phase-14-measured-vram.md`](archive/phase-14-measured-vram.md) | VRAM from the engine's own report, and why the estimator could not be calibrated into correctness |
+| [`recommend-models-overview.md`](archive/recommend-models-overview.md) | The recommendation feed, phases 15–19 |
+| [`phase-15-exact-model-sizes.md`](archive/phase-15-exact-model-sizes.md) | Exact model sizes from the Hub |
+| [`phase-16-arch-registry-probe.md`](archive/phase-16-arch-registry-probe.md) | The image's supported architectures, probed and cached |
+| [`phase-17-recommend-engine.md`](archive/phase-17-recommend-engine.md) | The recommend engine: profile, candidates, ranking |
+| [`phase-18-recommend-feed.md`](archive/phase-18-recommend-feed.md) | The feed on Download Models |
+| [`phase-19-fit-handoff.md`](archive/phase-19-fit-handoff.md) | Seeding a downloaded model through autoconfigure's planner |
+| [`autoconfigure/`](archive/autoconfigure/overview.md) | Autoconfigure, its own phases 01–15; [`acceptance.md`](archive/autoconfigure/acceptance.md) records the hardware runs |
 
 Archived documents are left as they were written. Where one describes something
 that has since changed — the compose file names in the phase 8 and 9 notes, for

@@ -48,13 +48,13 @@ already requests `config=true` for every result and then discards all but the
   RAM (`expert_offload`, the rdna4-clav image), a model that fits only that
   way is shown, labelled as slower, rather than dropped. It is planned by the
   same function autoconfigure uses; see
-  `plan/autoconfigure/phase-15-expert-offload.md`. Added 2026-10-01.
+  `plan/archive/autoconfigure/phase-15-expert-offload.md`. Added 2026-10-01.
 - Exact weight sizes from the Hub's `safetensors` metadata rather than a
   formula, replacing the MoE-blind estimate for candidate models.
 - Fit output survives the download: the new model's starting `VLLMConfig`
   takes the hardware fields `models.PlanFit` returns for it on this machine,
   with `ContextMax` and the all-cards width -- the planner autoconfigure uses
-  (`plan/autoconfigure/`) -- recorded as having been seeded rather than chosen,
+  (`plan/archive/autoconfigure/`) -- recorded as having been seeded rather than chosen,
   so the Models page can say where they came from.
 - The existing search keeps its place on the page and its behaviour. The
   size figure in the panel that expands under a search result is corrected by
@@ -67,7 +67,7 @@ already requests `config=true` for every result and then discards all but the
   download time is the whole of the *feed's* handoff. Configuring a model
   properly -- parsers, sampling, flags and environment from its card, and the
   hardware for this machine -- is autoconfigure's job, defined in
-  `plan/autoconfigure/overview.md`.
+  `plan/archive/autoconfigure/overview.md`.
 - **No use-case classification.** No Chat / Code / Tool-use chips. Those
   require inferring a model's purpose from names and tags, which is guesswork,
   and a misclassification is invisible to the user. The chat template that

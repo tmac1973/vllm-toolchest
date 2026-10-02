@@ -15,7 +15,7 @@ and not measured.
 
 ## Files touched
 
-- `plan/autoconfigure/acceptance.md` — new. The record of each run.
+- `plan/archive/autoconfigure/acceptance.md` — new. The record of each run.
 - `web/templates/help.html` — an Autoconfigure section.
 - `README.md` — the feature, in the list the README already keeps.
 - `plan/README.md` — mark the feature built.

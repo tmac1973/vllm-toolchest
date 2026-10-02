@@ -1,7 +1,7 @@
 # Phase 15 — Expert offload in the planner
 
 **Depends on:** phase 02 (the planner), phase 10 (the review) · **Enables:**
-the recommend feed counting offload (`plan/phase-17-recommend-engine.md`,
+the recommend feed counting offload (`plan/archive/phase-17-recommend-engine.md`,
 amended in step 9)
 
 ## Goal
@@ -99,7 +99,7 @@ host-backed experts (per rank)                 25.1      host usable 112.6 of Me
    working out feasibility from the engine's own sum above, and a start's
    measurement replaces both.
 
-9. **The feed** (`plan/phase-17-recommend-engine.md`, step 14): a finalist
+9. **The feed** (`plan/archive/phase-17-recommend-engine.md`, step 14): a finalist
    that does not fit is not Dropped when this planner finds an offload plan
    for it; it is Verified, labelled "experts in system RAM — slower
    generation", scored for context at its offload context, and penalised on

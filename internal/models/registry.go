@@ -36,7 +36,7 @@ type Model struct {
 	// It outranks VRAMEstimate wherever it applies. Every figure this project
 	// derived turned out wrong and every figure the engine reported turned out
 	// right, so a measurement is not a check on the estimate -- it replaces it.
-	// See plan/phase-14-measured-vram.md.
+	// See plan/archive/phase-14-measured-vram.md.
 	Measured *RunMeasurement `json:"measured,omitempty"`
 
 	// ActiveProfile is the profile the live VLLMConfig was last restored from

@@ -13,7 +13,7 @@ import (
 const ExpertOffloadFlag = "--enable-expert-offload"
 
 // What the image's expert-offload planner reserves on each card besides the
-// weights, measured on compute (plan/autoconfigure/phase-15-expert-offload.md):
+// weights, measured on compute (plan/archive/autoconfigure/phase-15-expert-offload.md):
 // Flash-Next at two cards was planned at 0.40 GiB of graphs and 8.48 of
 // runtime overhead, and measured 6.38 to 8.43 for the latter. The KV reserve
 // is one request at the configured context, 8% over.
