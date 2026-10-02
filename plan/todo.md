@@ -48,12 +48,6 @@ Built, merged and deployed; acceptance runs in
    - The offload planner's minimum expert cache is an assumption no start has
      tested below.
 
-### Housekeeping noted along the way
-
-- Compute holds a 38.7 GiB NVMe copy of Flash-Next's n-gram table at
-  `/data/models/tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ/ple_nvme/` from
-  the two-card test; a two-card run reuses it, and it can be deleted.
-
 ## Direction, decided 2026-09-30
 
 *History: everything below was carried out. Kept for the reasoning.*
