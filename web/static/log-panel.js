@@ -15,6 +15,7 @@ function initLogPanels() {
         const pre = panel.querySelector('pre');
         const tailToggle = panel.querySelector('.log-tail-toggle');
         const wrapToggle = panel.querySelector('.log-wrap-toggle');
+        const pollToggle = panel.querySelector('.log-poll-toggle');
         const copyBtn = panel.querySelector('.log-copy-btn');
         const clearBtn = panel.querySelector('.log-clear-btn');
         if (!pre) return;
@@ -44,6 +45,21 @@ function initLogPanels() {
             });
         }
 
+        // The toolchest polls vLLM's /metrics and /health, and uvicorn logs
+        // every one of those requests. Hidden by default, and remembered.
+        if (pollToggle) {
+            let hide = true;
+            try { hide = localStorage.getItem('logHidePolls') !== '0'; } catch (e) {}
+            pollToggle.checked = hide;
+            pre._hidePolls = hide;
+            renderLog(pre);
+            pollToggle.addEventListener('change', () => {
+                pre._hidePolls = pollToggle.checked;
+                try { localStorage.setItem('logHidePolls', pollToggle.checked ? '1' : '0'); } catch (e) {}
+                renderLog(pre);
+            });
+        }
+
         const observer = new MutationObserver(() => {
             if (liveTail) pre.scrollTop = pre.scrollHeight;
         });
@@ -66,6 +82,7 @@ function initLogPanels() {
         if (clearBtn) {
             clearBtn.addEventListener('click', () => {
                 pre.textContent = '';
+                pre._rawLog = '';
                 // Clearing only the pane leaves the server-side buffer intact,
                 // so the next page load brings everything back. A panel that
                 // names its buffer gets that emptied too.
@@ -76,6 +93,25 @@ function initLogPanels() {
             });
         }
     });
+}
+
+// Only successful polls are hidden: a failing /health stays visible.
+const POLL_LINE = /"GET \/(metrics|health) HTTP\/[\d.]+" 2\d\d/;
+
+function visibleLog(pre, text) {
+    if (!pre._hidePolls) return text;
+    return text.split('\n').filter(line => !POLL_LINE.test(line)).join('\n');
+}
+
+// Append log text to a panel's pre. The unfiltered text is kept so that
+// turning a filter off brings the hidden lines back.
+function logPanelAppend(pre, text) {
+    pre._rawLog = (pre._rawLog || '') + text;
+    pre.textContent += visibleLog(pre, text);
+}
+
+function renderLog(pre) {
+    pre.textContent = visibleLog(pre, pre._rawLog || '');
 }
 
 function copyToClipboard(text) {
