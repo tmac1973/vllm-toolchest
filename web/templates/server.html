@@ -266,6 +266,12 @@
                             <input type="checkbox" class="log-wrap-toggle" role="switch" checked
                                    style="margin: 0;">
                         </label>
+                        <label style="margin: 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;"
+                               title="Hide the access-log lines for the toolchest's own /metrics and /health polling.">
+                            Hide polling
+                            <input type="checkbox" class="log-poll-toggle" role="switch" checked
+                                   style="margin: 0;">
+                        </label>
                         <label style="margin: 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
                             Live tail
                             <input type="checkbox" class="log-tail-toggle" role="switch" checked
@@ -431,7 +437,7 @@ async function restartServer(btn) {
     var logSSE = new EventSource('/api/service/log-stream');
     logSSE.onmessage = function(e) {
         var pre = document.getElementById('service-logs');
-        pre.textContent += e.data + '\n';
+        logPanelAppend(pre, e.data + '\n');
         var toggle = document.querySelector('.log-tail-toggle');
         if (toggle && toggle.checked) {
             pre.scrollTop = pre.scrollHeight;
@@ -447,8 +453,8 @@ async function restartServer(btn) {
         .then(function(r) { return r.text(); })
         .then(function(text) {
             var pre = document.getElementById('service-logs');
-            if (text && !pre.textContent) {
-                pre.textContent = text;
+            if (text && !pre._rawLog) {
+                logPanelAppend(pre, text);
                 pre.scrollTop = pre.scrollHeight;
             }
         })
