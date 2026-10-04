@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,7 +47,10 @@ type composeService struct {
 	IPC      string   `yaml:"ipc"`
 	ShmSize  string   `yaml:"shm_size"`
 	CapAdd   []string `yaml:"cap_add"`
-	Ulimits  map[string]struct {
+	// StopGrace is stop_grace_period, how long the runtime waits after
+	// SIGTERM before it kills the container.
+	StopGrace string `yaml:"stop_grace_period"`
+	Ulimits   map[string]struct {
 		Soft int `yaml:"soft"`
 		Hard int `yaml:"hard"`
 	} `yaml:"ulimits"`
@@ -308,6 +312,26 @@ func TestQuadletMatchesCompose(t *testing.T) {
 				if !hostIPC {
 					t.Error("compose sets ipc:host; the unit does not")
 				}
+			}
+
+			// Stop timeout. vllmctl stops vLLM on SIGTERM, which takes up to
+			// its stop grace plus kill wait; a runtime that SIGKILLs sooner
+			// takes the container down mid-teardown. systemd's own stop
+			// timeout must outlast podman's, or it kills podman first.
+			grace, err := time.ParseDuration(svc.StopGrace)
+			if err != nil {
+				t.Fatalf("docker-compose.%s.yml: stop_grace_period %q: %v", vendor, svc.StopGrace, err)
+			}
+			if grace < 45*time.Second {
+				t.Errorf("stop_grace_period %s is shorter than vllmctl's own stop of vLLM (45s)", grace)
+			}
+			stopTimeout := keys["StopTimeout"]
+			if len(stopTimeout) != 1 || stopTimeout[0] != strconv.Itoa(int(grace.Seconds())) {
+				t.Errorf("compose waits %s to stop; the unit's StopTimeout is %v", grace, stopTimeout)
+			}
+			tss := keys["TimeoutStopSec"]
+			if n, err := strconv.Atoi(strings.Join(tss, "")); len(tss) != 1 || err != nil || n <= int(grace.Seconds()) {
+				t.Errorf("TimeoutStopSec %v must exceed StopTimeout, or systemd kills podman mid-stop", tss)
 			}
 
 			// .env. Compose loads it wholesale, which is how the feature

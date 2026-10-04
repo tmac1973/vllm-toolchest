@@ -119,6 +119,10 @@ services:
       - path: .env
         required: false
     restart: unless-stopped
+    # vllmctl stops vLLM on SIGTERM: 30 s for a clean exit, then SIGKILL and
+    # up to 10 s for the workers to release the GPUs. The 10 s default cut
+    # that short. Kept equal to StopTimeout in setup.sh's Quadlet unit.
+    stop_grace_period: 90s
 
 volumes:
   vllmctl-data:

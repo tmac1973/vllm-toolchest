@@ -63,11 +63,13 @@ func processAlive(pid int) bool {
 // groupAlive reports whether any process in group pgid is still running,
 // ignoring zombies.
 //
-// kill(-pgid, 0) cannot answer this. vllmctl is PID 1 in its container, so a
-// worker orphaned by its server is reparented to it -- and nothing waits on
-// those, so they stay zombies forever. On compute a dead server's group still
-// had one, and kill -0 said the group existed for as long as the container
-// did. Asked that way, a stale group would never read as gone.
+// kill(-pgid, 0) cannot answer this: it counts zombies. When vllmctl was PID 1
+// in its container, a worker orphaned by its server was reparented to it and
+// nothing waited on it, so on compute a dead server's group kept a zombie, and
+// kill -0 said the group existed, for as long as the container did. The images
+// now run vllmctl under tini, which reaps orphans, but a worker still sits as a
+// zombie for seconds while its other threads release the GPU, and an image
+// built before tini has nothing reaping them at all.
 //
 // A pid number cannot be reused while it is still some group's id, so a group
 // found here is the one that was recorded, not a recycled one.
