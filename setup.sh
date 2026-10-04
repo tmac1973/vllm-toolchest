@@ -2186,10 +2186,17 @@ ${extra_caps}
 Ulimit=memlock=-1:-1
 Ulimit=nofile=65536:65536
 ${gpu_args}
+# On SIGTERM vllmctl stops vLLM the way the Stop button does: SIGTERM to the
+# server, 30 s to exit, SIGKILL, up to 10 s for the workers to let go of the
+# GPUs. podman's default of 10 s cut that short and SIGKILLed the container
+# mid-teardown. Kept equal to stop_grace_period in the compose files.
+StopTimeout=90
 
 [Service]
 Restart=on-failure
 TimeoutStartSec=900
+# Above StopTimeout, or systemd kills podman while podman is still waiting.
+TimeoutStopSec=120
 # Ulimit= in [Container] asks podman for a limit; this is what lets it have
 # one. A unit cannot raise a limit above its own service limit, and the user
 # manager's default is typically 8 MiB -- the same ceiling that makes a

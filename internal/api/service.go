@@ -351,3 +351,26 @@ func (s *Server) AutoStart() {
 		slog.Error("auto-start failed", "model", m.ID, "error", err)
 	}
 }
+
+// Shutdown stops what holds the GPUs, for the container stop path: a running
+// tuning job is cancelled and vLLM is stopped through the same SIGTERM, grace,
+// SIGKILL sequence as the Stop button. Without it the server only died when
+// the container's init exited and the kernel killed everything left in the
+// namespace, with no chance to tear down cleanly.
+//
+// It returns once vLLM's process group is gone or Stop gives up on it, at most
+// the manager's stop grace plus its kill wait. The container's stop timeout
+// has to leave room for that.
+func (s *Server) Shutdown() {
+	if s.tuner != nil {
+		s.tuner.Cancel()
+	}
+	st := s.process.GetStatus().State
+	if st != process.StateRunning && st != process.StateStarting {
+		return
+	}
+	slog.Info("stopping vLLM for shutdown", "model", s.process.GetStatus().ModelID)
+	if err := s.process.Stop(); err != nil {
+		slog.Warn("stopping vLLM for shutdown", "error", err)
+	}
+}

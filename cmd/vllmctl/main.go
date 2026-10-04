@@ -101,7 +101,23 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("shutting down")
-	httpSrv.Shutdown(context.Background())
+
+	// The listener first, so nothing starts a model while the old one is
+	// being stopped. Bounded, because Shutdown waits for every connection to
+	// go idle and an open log stream never does: an unbounded wait held the
+	// process until the runtime's stop timeout ran out and SIGKILL took the
+	// container, vLLM and all.
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := httpSrv.Shutdown(sctx); err != nil {
+		httpSrv.Close()
+	}
+	cancel()
+
+	// Then vLLM. This can take as long as the manager's stop grace plus its
+	// kill wait; the stop timeouts in setup.sh's Quadlet unit and the compose
+	// files are sized to cover it.
+	srv.Shutdown()
+	slog.Info("shutdown complete")
 }
 
 func initDataDir(dataDir string) error {
