@@ -77,6 +77,30 @@ func TestFromSourceDockerfilesNameTheirVariant(t *testing.T) {
 	}
 }
 
+// vllmctl must run under tini, not as PID 1: orphaned vLLM workers reparent to
+// PID 1, and vllmctl only waits on the children its exec.Cmds track, so as
+// PID 1 it would leave them as zombies for the container's lifetime.
+func TestDockerfilesRunVllmctlUnderTini(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "Dockerfile.*"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Dockerfiles found: %v", err)
+	}
+	want := `ENTRYPOINT ["/usr/local/bin/tini", "--", "vllmctl",`
+	for _, f := range files {
+		body, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		s := string(body)
+		if !strings.Contains(s, want) {
+			t.Errorf("%s: ENTRYPOINT does not run vllmctl under tini", f)
+		}
+		if !strings.Contains(s, "COPY --from=tini-fetch /sbin/tini-static /usr/local/bin/tini") {
+			t.Errorf("%s: does not install tini at /usr/local/bin/tini", f)
+		}
+	}
+}
+
 func TestRadianceGroupsAndOptions(t *testing.T) {
 	d, ok := Get("radiance")
 	if !ok {

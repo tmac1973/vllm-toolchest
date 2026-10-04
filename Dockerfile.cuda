@@ -6,6 +6,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o vllmctl ./cmd/vllmctl
 
+# ── tini (PID 1) ──────────────────────────────────────────────────────────
+# vllmctl must not be PID 1. vLLM workers left behind when a server exits are
+# reparented to PID 1, and vllmctl only waits on the children its exec.Cmds
+# track, so they would sit as zombies for the container's lifetime. tini
+# reaps them and forwards signals to vllmctl. Alpine's tini-static is a
+# static binary, so it runs on any base, and apk picks the build's arch.
+FROM docker.io/library/alpine:3.22 AS tini-fetch
+RUN apk add --no-cache tini-static && /sbin/tini-static --version
+
 # ── Stage 2: vLLM runtime (NVIDIA CUDA) ────────────────────────────
 FROM docker.io/nvidia/cuda:12.8.1-devel-ubuntu24.04
 
@@ -58,6 +67,7 @@ ENV VLLMCTL_IMAGE_VARIANT=cuda-source
 
 # ── Go management binary ──────────────────────────────────────────
 COPY --from=go-builder /app/vllmctl /usr/local/bin/vllmctl
+COPY --from=tini-fetch /sbin/tini-static /usr/local/bin/tini
 
 # ── Data directories ──────────────────────────────────────────────
 RUN mkdir -p /data/config /data/models
@@ -76,4 +86,4 @@ VOLUME ["/data"]
 EXPOSE 3000
 EXPOSE 8000
 
-ENTRYPOINT ["vllmctl", "--config", "/data/config/vllmctl.yaml"]
+ENTRYPOINT ["/usr/local/bin/tini", "--", "vllmctl", "--config", "/data/config/vllmctl.yaml"]
