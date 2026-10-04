@@ -90,7 +90,7 @@ func TestAServerThatComesUpLateIsNotLeftMarkedFailed(t *testing.T) {
 	var healthy atomic.Bool
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
-	go m.waitForReady()
+	go m.waitForReady(m.run)
 	waitForOverdue(t, m, 2*time.Second)
 
 	// The engine finishes loading well after the deadline.
@@ -111,7 +111,7 @@ func TestASlowStartIsNotReportedAsAnError(t *testing.T) {
 	var healthy atomic.Bool
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
-	go m.waitForReady()
+	go m.waitForReady(m.run)
 	waitForOverdue(t, m, 2*time.Second)
 
 	st := m.GetStatus()
@@ -138,7 +138,7 @@ func TestAnOverdueStartCannotBeStartedOver(t *testing.T) {
 	var healthy atomic.Bool
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
-	go m.waitForReady()
+	go m.waitForReady(m.run)
 	waitForOverdue(t, m, 2*time.Second)
 
 	err := m.Start("org/other", "/nowhere", nil, nil)
@@ -158,7 +158,7 @@ func TestAStartTheEngineGaveUpOnIsNotCalledSlow(t *testing.T) {
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
 	m.streamOutput(io.NopCloser(strings.NewReader(
-		"(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above.\n")))
+		"(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above.\n")), m.run)
 
 	st := m.GetStatus()
 	if !st.StartFailed || !strings.Contains(st.Notice, "failed to start") {
@@ -166,7 +166,7 @@ func TestAStartTheEngineGaveUpOnIsNotCalledSlow(t *testing.T) {
 	}
 
 	// Still so once the deadline passes: the failure outranks the lateness.
-	go m.waitForReady()
+	go m.waitForReady(m.run)
 	time.Sleep(200 * time.Millisecond)
 	st = m.GetStatus()
 	if !st.StartFailed || st.Overdue || strings.Contains(st.Notice, "Nothing has failed") {
@@ -179,7 +179,7 @@ func TestReadyBeforeTheDeadlineNeverReportsAnError(t *testing.T) {
 	healthy.Store(true)
 	m := readyHarness(t, &healthy, 10*time.Second)
 
-	go m.waitForReady()
+	go m.waitForReady(m.run)
 
 	waitForState(t, m, StateRunning, 2*time.Second)
 	if e := m.GetStatus().Error; e != "" {
@@ -194,7 +194,7 @@ func TestTheWatchStopsWhenTheProcessIsGone(t *testing.T) {
 	m := readyHarness(t, &healthy, time.Hour)
 
 	done := make(chan struct{})
-	go func() { m.waitForReady(); close(done) }()
+	go func() { m.waitForReady(m.run); close(done) }()
 
 	// waitForExit would do this for real; set it directly so the test does not
 	// depend on process teardown timing.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,16 +124,17 @@ func TestARestartedEngineIsMeasuredFromZero(t *testing.T) {
 
 // End to end: a running engine, its metrics endpoint, and the panel's store.
 func TestAPollRecordsWhatTheEngineReports(t *testing.T) {
-	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/metrics" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Write([]byte(engineMetricsSample))
-	}))
-	defer metrics.Close()
+	// The metrics endpoint stands in for the engine on the engine's port, so
+	// it has to come up after the fake engine is started: Start refuses a
+	// port something else is already listening on.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
 
-	s := newTestServer(t, metrics.URL)
+	s := newTestServer(t, "http://"+addr)
 	mgr := process.NewManager(s.cfg.VLLMHost, s.cfg.VLLMPort, 0)
 	s.process = mgr
 	watch := &engineTimingWatch{}
@@ -144,6 +146,19 @@ func TestAPollRecordsWhatTheEngineReports(t *testing.T) {
 	}
 
 	startFakeEngine(t, mgr, "acme/model", "INFO:     Application startup complete.")
+
+	metrics := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(engineMetricsSample))
+	}))
+	if metrics.Listener, err = net.Listen("tcp", addr); err != nil {
+		t.Fatal(err)
+	}
+	metrics.Start()
+	defer metrics.Close()
 	deadline := time.Now().Add(5 * time.Second)
 	for mgr.GetStatus().State != process.StateRunning && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)

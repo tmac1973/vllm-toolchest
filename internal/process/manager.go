@@ -72,13 +72,22 @@ var DefaultLauncher = Launcher{Bin: "vllm", Args: []string{"serve"}}
 
 // Manager manages a single vLLM process.
 type Manager struct {
+	// lifecycle serialises Start and Stop against each other. Without it a
+	// Start could run while a Stop was still waiting for the old server to
+	// exit, and the old server's exit was then recorded against the new one;
+	// see waitForExit.
+	lifecycle sync.Mutex
+
 	mu      sync.RWMutex
 	cmd     *exec.Cmd
 	state   State
 	modelID string
 	// args is the flag list the running process was launched with; see Status.
-	args       []string
-	pid        int
+	args []string
+	pid  int
+	// run numbers each launch, so that the goroutines watching one cannot
+	// write state that belongs to the next.
+	run        int
 	startedAt  time.Time
 	lastError  string
 	cancelFunc context.CancelFunc
@@ -94,6 +103,13 @@ type Manager struct {
 	// pollInterval is how often /health is checked. A field so tests do not
 	// wait two seconds per state transition; nothing else sets it.
 	pollInterval time.Duration
+	// stopGrace is how long the server has to exit on SIGTERM, killWait how
+	// long the group then has to go after SIGKILL, and portWait how long a
+	// freshly reaped server's port gets to be released. Fields for the same
+	// reason as pollInterval.
+	stopGrace time.Duration
+	killWait  time.Duration
+	portWait  time.Duration
 
 	// Log ring buffer
 	logMu  sync.Mutex
@@ -132,6 +148,9 @@ func NewManager(vllmHost string, vllmPort int, startupTimeout time.Duration) *Ma
 		launcher:       DefaultLauncher,
 		startupTimeout: startupTimeout,
 		pollInterval:   2 * time.Second,
+		stopGrace:      30 * time.Second,
+		killWait:       10 * time.Second,
+		portWait:       5 * time.Second,
 		logBuf:         make([]string, 0, 5000),
 		logMax:         5000,
 		subs:           make(map[chan string]struct{}),
@@ -181,11 +200,29 @@ func (m *Manager) GetStatus() Status {
 
 // Start launches vLLM with the given model path and config flags.
 func (m *Manager) Start(modelID, modelPath string, args []string, env []string) error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+
 	m.mu.Lock()
-	if m.state == StateRunning || m.state == StateStarting {
+	if m.state != StateStopped && m.state != StateError {
+		state := m.state
 		m.mu.Unlock()
-		return fmt.Errorf("vLLM is already running (state: %s)", m.state)
+		return fmt.Errorf("vLLM is already running (state: %s)", state)
 	}
+	stale := m.pid
+	m.mu.Unlock()
+
+	if err := m.clearStale(stale); err != nil {
+		m.mu.Lock()
+		m.state = StateError
+		m.lastError = err.Error()
+		m.mu.Unlock()
+		return err
+	}
+
+	m.mu.Lock()
+	m.run++
+	run := m.run
 	m.state = StateStarting
 	m.modelID = modelID
 	m.args = append([]string(nil), args...)
@@ -266,15 +303,39 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.mu.Unlock()
 
 	// Stream logs
-	go m.streamOutput(stdout)
-	go m.streamOutput(stderr)
+	go m.streamOutput(stdout, run)
+	go m.streamOutput(stderr, run)
 
 	// Wait for process in background
-	go m.waitForExit(cmd, cancel)
+	go m.waitForExit(cmd, cancel, run)
 
 	// Poll for readiness
-	go m.waitForReady()
+	go m.waitForReady(run)
 
+	return nil
+}
+
+// clearStale makes sure nothing is left of a previous run before a new one
+// binds the port: the recorded process group is reaped if any of it is still
+// running, and the port must then be free.
+//
+// The recorded group is reaped rather than refused. It is provably ours, the
+// state has already said it is not running, and it is holding the GPUs the
+// new start needs -- refusing would only hand the operator the same kill to
+// do by hand. A port held by anything else is refused: that is not ours to
+// kill, and vLLM would only fail on it with "Address already in use" after
+// spending a minute importing torch.
+func (m *Manager) clearStale(pgid int) error {
+	if groupAlive(pgid) {
+		slog.Warn("a vLLM process group from a previous run is still running; reaping it before starting", "pgid", pgid)
+		if err := terminateGroup(pgid, m.stopGrace, m.killWait); err != nil {
+			return fmt.Errorf("a previous vLLM is still running and could not be stopped: %w", err)
+		}
+	}
+	if !waitUntil(func() bool { return !portInUse(m.vllmPort) }, m.portWait) {
+		return fmt.Errorf("port %d is already in use by a process vllmctl did not start "+
+			"(or no longer tracks); stop it, or restart the container, before starting vLLM", m.vllmPort)
+	}
 	return nil
 }
 
@@ -284,62 +345,48 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 // GPU memory and tearing down NCCL. Only if that does not finish in time does
 // this escalate to SIGKILL. Either way the whole group is signalled, not just
 // the process we launched -- see the comment in Start.
+//
+// It also stops a recorded group the state says is not running. That is the
+// state being wrong, not the server being gone: on compute a server stayed up
+// for fifteen minutes, holding the port and all four GPUs, under a status of
+// "stopped", and Stop refusing on the strength of that status left no way to
+// clear it short of restarting the container.
+//
+// Stop returns once nothing in the group is running. If something survives
+// SIGKILL the state is error, not stopped, and the pid stays recorded so a
+// later Stop or Start can try again.
 func (m *Manager) Stop() error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+
 	m.mu.Lock()
-	if m.state != StateRunning && m.state != StateStarting {
-		m.mu.Unlock()
-		return fmt.Errorf("vLLM is not running (state: %s)", m.state)
+	state := m.state
+	pgid := m.pid
+	cancel := m.cancelFunc
+	if state != StateRunning && state != StateStarting {
+		if state == StateStopping || !groupAlive(pgid) {
+			m.mu.Unlock()
+			return fmt.Errorf("vLLM is not running (state: %s)", state)
+		}
+		slog.Warn("stopping a vLLM process group the status had lost track of", "pgid", pgid, "state", state)
 	}
 	m.state = StateStopping
-	cancel := m.cancelFunc
-	pgid := m.pid
 	m.mu.Unlock()
 
-	if pgid > 0 {
-		if err := killProcessGroup(pgid, syscall.SIGTERM); err != nil {
-			slog.Warn("signalling vLLM process group", "pgid", pgid, "error", err)
-		}
+	err := terminateGroup(pgid, m.stopGrace, m.killWait)
+	if cancel != nil {
+		cancel()
 	}
 
-	// finish sweeps up anything in the group that outlived the leader, then
-	// releases the context.
-	finish := func() {
-		if pgid > 0 {
-			// Only sweep while the group still exists, so a group id recycled
-			// after everything exited cannot be signalled by mistake.
-			if killProcessGroup(pgid, 0) == nil {
-				slog.Info("reaping vLLM workers that outlived the server", "pgid", pgid)
-				killProcessGroup(pgid, syscall.SIGKILL)
-			}
-		}
-		if cancel != nil {
-			cancel()
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		m.state = StateError
+		m.lastError = err.Error()
+		return err
 	}
-
-	deadline := time.After(30 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			slog.Warn("vLLM did not exit on SIGTERM; killing the process group", "pgid", pgid)
-			finish()
-			m.mu.Lock()
-			m.state = StateStopped
-			m.mu.Unlock()
-			return nil
-		case <-ticker.C:
-			m.mu.RLock()
-			state := m.state
-			m.mu.RUnlock()
-			if state == StateStopped || state == StateError {
-				finish()
-				return nil
-			}
-		}
-	}
+	m.state = StateStopped
+	return nil
 }
 
 // killProcessGroup signals every process in the group led by pid. Signal 0
@@ -352,8 +399,11 @@ func killProcessGroup(pid int, sig syscall.Signal) error {
 }
 
 // Restart stops and starts vLLM with the same model.
+//
+// Only a live server is stopped first. Start accepts a stopped or errored
+// manager as it is, and reaps anything left of the last run itself.
 func (m *Manager) Restart(modelID, modelPath string, args []string, env []string) error {
-	if m.GetStatus().State != StateStopped {
+	if st := m.GetStatus().State; st == StateRunning || st == StateStarting {
 		if err := m.Stop(); err != nil {
 			return err
 		}
@@ -400,7 +450,7 @@ func (m *Manager) UnsubscribeLogs(ch chan string) {
 	m.subMu.Unlock()
 }
 
-func (m *Manager) streamOutput(r io.ReadCloser) {
+func (m *Manager) streamOutput(r io.ReadCloser, run int) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 256*1024)
 	for scanner.Scan() {
@@ -413,14 +463,16 @@ func (m *Manager) streamOutput(r io.ReadCloser) {
 
 		if advice.Ready(line) {
 			m.mu.Lock()
-			if m.state == StateStarting {
+			if m.run == run && m.state == StateStarting {
 				m.state = StateRunning
 			}
 			m.mu.Unlock()
 		}
 		if advice.StartFailed(line) {
 			m.mu.Lock()
-			m.startFailed = true
+			if m.run == run {
+				m.startFailed = true
+			}
 			m.mu.Unlock()
 		}
 	}
@@ -549,14 +601,33 @@ func (m *Manager) appendLog(line string) {
 	m.subMu.Unlock()
 }
 
-func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc) {
+// waitForExit records how a run ended -- if it is still the current run.
+//
+// That condition is how a live server came to be reported as stopped. On
+// compute a Stop was sent and, while it waited for the old server to exit, a
+// Start was accepted for the same model; Start refused only "running" and
+// "starting", and the state was "stopping". The new server came up. Then the
+// old one's Wait returned and this function, seeing a state that was no longer
+// "stopping", wrote "stopped" over the new run. Stop saw that, swept the old
+// group, and returned. What was left was a status of "stopped" naming the new
+// server's pid while that server held the port and every GPU, a Stop that
+// refused to touch it, and a next Start that died on "Address already in use".
+//
+// Start and Stop are now serialised, so that interleaving cannot recur, but a
+// run's watcher still has no business writing another run's state.
+func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc, run int) {
 	err := cmd.Wait()
 	cancel()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.state == StateStopping {
+	if m.run != run {
+		slog.Info("a replaced vLLM run exited", "pid", cmd.Process.Pid, "error", err)
+		return
+	}
+	// Stop may already have finished: it waits on the processes, not on this.
+	if m.state == StateStopping || m.state == StateStopped {
 		m.state = StateStopped
 		return
 	}
@@ -591,7 +662,7 @@ func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc) {
 // The health GET carries its own timeout. With http.Get's default of none, a
 // request issued just before the deadline could hang past it, and the loop
 // would sit in that call rather than ever polling again.
-func (m *Manager) waitForReady() {
+func (m *Manager) waitForReady(run int) {
 	healthURL := fmt.Sprintf("http://%s:%d/health", m.vllmHost, m.vllmPort)
 	client := &http.Client{Timeout: 5 * time.Second}
 
@@ -603,7 +674,7 @@ func (m *Manager) waitForReady() {
 		select {
 		case <-deadline:
 			m.mu.Lock()
-			if m.state == StateStarting {
+			if m.run == run && m.state == StateStarting {
 				m.overdue = true
 				slog.Warn("vLLM is taking longer than the startup timeout; still polling",
 					"model", m.modelID, "timeout", m.startupTimeout)
@@ -612,13 +683,14 @@ func (m *Manager) waitForReady() {
 
 		case <-ticker.C:
 			m.mu.RLock()
-			state := m.state
+			state, current := m.state, m.run == run
 			m.mu.RUnlock()
 
 			// Anything but starting means there is nothing left to wait for:
 			// the process exited, is being stopped, or the log stream already
-			// saw it come up.
-			if state != StateStarting {
+			// saw it come up. Nor is there once another run has replaced this
+			// one; its own watcher is polling.
+			if !current || state != StateStarting {
 				return
 			}
 
@@ -632,7 +704,7 @@ func (m *Manager) waitForReady() {
 			}
 
 			m.mu.Lock()
-			if m.state == StateStarting {
+			if m.run == run && m.state == StateStarting {
 				if m.overdue {
 					slog.Info("vLLM came up after the startup timeout",
 						"model", m.modelID, "after", time.Since(m.startedAt).Truncate(time.Second))
