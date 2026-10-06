@@ -68,6 +68,14 @@ func (s *Service) ActiveRunID() (string, bool) {
 }
 
 // ActiveJobID returns the ID of the in-flight job, if any.
+// Busy reports whether a run or a job is in flight, when SubmitJob and
+// StartRun would refuse.
+func (s *Service) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeRun != nil || s.activeJob != nil
+}
+
 func (s *Service) ActiveJobID() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

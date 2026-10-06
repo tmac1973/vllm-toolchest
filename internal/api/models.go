@@ -365,13 +365,36 @@ func envBlockWarning(env string) string {
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
+	// The buttons swap the whole card out. A refusal goes to the card's
+	// config slot instead, or the card would be replaced by the message.
+	if isHTMX(r) {
+		w.Header().Set("HX-Retarget", "#config-"+safeID(r.URL.Query().Get("id")))
+		w.Header().Set("HX-Reswap", "innerHTML")
+	}
+	m, ok := s.modelFromQuery(w, r)
+	if !ok {
+		return
+	}
+	id := m.ID
 	// Removing the registry entry and deleting tens of gigabytes are separate
 	// decisions, so the caller has to say which one it meant.
 	keepFiles := r.URL.Query().Get("keep_files") == "true"
-	if err := s.registry.Delete(id, !keepFiles); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if reason := s.registry.ReadOnly(); reason != "" {
+		s.fail(w, r, http.StatusConflict, "models.json "+reason+" — nothing was removed.")
 		return
+	}
+	if why := s.openInEngine(m); why != "" {
+		s.fail(w, r, http.StatusConflict, why+" Stop the server before removing it.")
+		return
+	}
+	if err := s.registry.Delete(id, !keepFiles); err != nil {
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if isHTMX(r) {
+		// Removed: the card goes, as the buttons asked.
+		w.Header().Del("HX-Retarget")
+		w.Header().Del("HX-Reswap")
 	}
 	// Nothing should still be pointed at a model that is gone.
 	if s.cfg.ActiveModel == id {

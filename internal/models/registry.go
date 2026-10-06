@@ -450,6 +450,13 @@ func (r *Registry) Delete(id string, deleteFiles bool) error {
 	// failed delete would leave the files on disk with nothing pointing at
 	// them.
 	if deleteFiles && m.LocalPath != "" {
+		// A model is a directory under the root, never the root itself or
+		// the data directory. Whatever registered such a path, deleting it
+		// would take every model -- or every setting -- with it.
+		switch filepath.Clean(m.LocalPath) {
+		case filepath.Clean(r.modelsDir), filepath.Clean(r.dataDir), "/":
+			return fmt.Errorf("refusing to delete %s: it is not one model's directory", m.LocalPath)
+		}
 		if err := os.RemoveAll(m.LocalPath); err != nil {
 			return fmt.Errorf("delete model files: %w", err)
 		}

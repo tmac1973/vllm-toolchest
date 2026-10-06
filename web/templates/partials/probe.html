@@ -49,7 +49,6 @@
 
 {{define "probe_apply"}}<button class="secondary outline" style="padding:0.1rem 0.5rem;"
        hx-post="/api/benchmarks/probe-context/apply"
-       hx-vals='{{.}}'
-       hx-ext="json-enc">apply</button>{{end}}
+       hx-vals='{{.}}'>apply</button>{{end}}
 
 {{define "probe_started"}}<p>Started probe <code>{{.ProbeID}}</code> for <code>{{.ModelID}}</code>. <a href="#" hx-get="/api/benchmarks/probe-context/{{.ProbeID}}/progress" hx-target="#probe-progress" hx-swap="innerHTML" hx-trigger="every 3s">Refresh progress</a></p>{{end}}

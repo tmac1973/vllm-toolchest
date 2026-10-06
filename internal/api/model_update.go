@@ -9,6 +9,7 @@ import (
 	"regexp"
 
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 )
 
 // commitSHA is a full git commit id, the only form of revision accepted from
@@ -35,6 +36,27 @@ func transferStatus(err error) int {
 // transferBlocker is why a transfer into modelID cannot start right now, or
 // "" when it can. The update panel shows it in place of its button and
 // startTransfer enforces it, so the two cannot disagree.
+// openInEngine says why m's files are open in the engine -- it is the model
+// being served or starting, or a draft that model uses -- or "" when they
+// are not.
+func (s *Server) openInEngine(m *models.Model) string {
+	st := s.process.GetStatus()
+	if !st.State.Live() {
+		return ""
+	}
+	if st.ModelID == m.ID {
+		return "This model is being served."
+	}
+	if m.IsDraft() {
+		for _, user := range s.draftUsers(m) {
+			if user.ID == st.ModelID {
+				return fmt.Sprintf("This draft is in use by %s, which is being served.", displayNameOf(user))
+			}
+		}
+	}
+	return ""
+}
+
 func (s *Server) transferBlocker(modelID string, plan huggingface.Plan) string {
 	if m, registered := s.registry.Get(modelID); registered {
 		// Downloads always land under the models directory. A model
@@ -46,18 +68,8 @@ func (s *Server) transferBlocker(modelID string, plan huggingface.Plan) string {
 		// The engine has the checkpoint open. Nothing is swapped in until the
 		// whole update has arrived, but that last step would still change the
 		// files under a running server.
-		if st := s.process.GetStatus(); st.State.Live() {
-			if st.ModelID == modelID {
-				return "This model is being served. Stop the server before updating its files."
-			}
-			// A draft is open in the engine of whichever model is using it.
-			if m.IsDraft() {
-				for _, user := range s.draftUsers(m) {
-					if user.ID == st.ModelID {
-						return fmt.Sprintf("This draft is in use by %s, which is being served. Stop the server before updating its files.", displayNameOf(user))
-					}
-				}
-			}
+		if why := s.openInEngine(m); why != "" {
+			return why + " Stop the server before updating its files."
 		}
 	}
 	// -1 means free space is unknown, which gates nothing; see newHFModelDetail.
@@ -75,6 +87,9 @@ func (s *Server) transferBlocker(modelID string, plan huggingface.Plan) string {
 //
 // An empty revision means the repo as it stands now.
 func (s *Server) startTransfer(ctx context.Context, modelID, revision string, removeStale bool) (string, error) {
+	if err := huggingface.CheckModelID(modelID); err != nil {
+		return "", &transferError{http.StatusBadRequest, err.Error()}
+	}
 	if revision != "" && !commitSHA.MatchString(revision) {
 		return "", &transferError{http.StatusBadRequest, "revision must be a full commit id"}
 	}

@@ -235,26 +235,26 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ModelID == "" || req.Preset == "" {
-		http.Error(w, "model_id and preset are required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id and preset are required")
 		return
 	}
 
 	model, ok := s.registry.Get(req.ModelID)
 	if !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 
 	preset, ok := benchmark.LookupPreset(req.Preset)
 	if !ok {
-		http.Error(w, "unknown preset: "+req.Preset, http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "unknown preset: "+req.Preset)
 		return
 	}
 
 	// Service must be running and serving this model.
 	status := s.process.GetStatus()
 	if status.State != process.StateRunning {
-		http.Error(w, "vLLM is not running; start the service before benchmarking", http.StatusConflict)
+		s.fail(w, r, http.StatusConflict, "vLLM is not running; start the service before benchmarking")
 		return
 	}
 	if status.ModelID != "" && status.ModelID != req.ModelID {
@@ -268,7 +268,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	// path as the model identifier unless --served-model-name was set.
 	servedName, err := s.discoverServedName(req.ModelID)
 	if err != nil {
-		http.Error(w, "could not discover vLLM served model name: "+err.Error(), http.StatusBadGateway)
+		s.fail(w, r, http.StatusBadGateway, "could not discover vLLM served model name: "+err.Error())
 		return
 	}
 
@@ -294,7 +294,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.bench.Save(run); err != nil {
-		http.Error(w, "failed to save run: "+err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, "failed to save run: "+err.Error())
 		return
 	}
 
@@ -318,10 +318,10 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 			slog.Error("failed to record a benchmark run that did not start", "id", run.ID, "error", serr)
 		}
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 

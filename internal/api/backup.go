@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,7 +69,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capped as a whole, with room for the form fields around the file, so
+	// an oversized upload is refused rather than spooled to disk.
+	r.Body = http.MaxBytesReader(w, r.Body, restoreFileLimit+64<<10)
 	if err := r.ParseMultipartForm(restoreFileLimit); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			fail(http.StatusRequestEntityTooLarge, "the upload is too large to be a backup")
+			return
+		}
 		fail(http.StatusBadRequest, "invalid upload: "+err.Error())
 		return
 	}
@@ -89,9 +98,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, restoreFileLimit))
+	// One byte over the limit is read so that a file cut short at it is
+	// refused, not parsed as whatever its first ten megabytes say.
+	data, err := io.ReadAll(io.LimitReader(file, restoreFileLimit+1))
 	if err != nil {
 		fail(http.StatusBadRequest, "reading upload: "+err.Error())
+		return
+	}
+	if len(data) > restoreFileLimit {
+		fail(http.StatusRequestEntityTooLarge, "the upload is too large to be a backup")
 		return
 	}
 

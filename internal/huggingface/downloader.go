@@ -195,6 +195,9 @@ type Request struct {
 // of a two-file update is out of two and not out of forty.
 func (d *Downloader) Start(req Request) (string, error) {
 	modelID := req.ModelID
+	if err := CheckModelID(modelID); err != nil {
+		return "", err
+	}
 	id := DownloadID(modelID)
 
 	for _, f := range req.Files {
@@ -395,16 +398,25 @@ func (d *Downloader) DiscardParts(modelID string) error {
 	return nil
 }
 
-// checkedModelDir is modelDir for callers that delete things.
-func (d *Downloader) checkedModelDir(modelID string) (string, error) {
-	// modelDir falls back to joining whatever it is given, so an empty or
-	// traversing id resolves to the models root — and this would then delete
-	// every model on the box. Require the owner/name shape it actually writes.
+// CheckModelID refuses anything but the owner/name shape a Hub repository
+// has. A model's directory is the id joined onto the models root, so an id
+// that is empty, has one part or three, or climbs with "." or ".." would
+// read, write -- and, on delete, remove -- somewhere other than its own
+// directory: "acme/.." is the models root itself.
+func CheckModelID(modelID string) error {
 	owner, name, ok := strings.Cut(modelID, "/")
 	if !ok || owner == "" || name == "" ||
-		strings.Contains(owner, "/") || strings.Contains(name, "/") ||
+		strings.Contains(name, "/") || strings.ContainsRune(modelID, '\\') ||
 		owner == "." || owner == ".." || name == "." || name == ".." {
-		return "", fmt.Errorf("not a model id: %q", modelID)
+		return fmt.Errorf("not a model id: %q", modelID)
+	}
+	return nil
+}
+
+// checkedModelDir is modelDir for callers that delete things.
+func (d *Downloader) checkedModelDir(modelID string) (string, error) {
+	if err := CheckModelID(modelID); err != nil {
+		return "", err
 	}
 
 	dir := d.modelDir(modelID)

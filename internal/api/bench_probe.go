@@ -72,25 +72,25 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.ModelID == "" {
-		http.Error(w, "model_id is required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id is required")
 		return
 	}
 	if _, ok := s.registry.Get(req.ModelID); !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 
 	// Main vLLM must be stopped — the probe spawns vLLM repeatedly and
 	// needs the GPU's VRAM to itself.
 	if state := s.process.GetStatus().State; state.Live() {
-		http.Error(w, "stop the main vLLM process before probing", http.StatusConflict)
+		s.fail(w, r, http.StatusConflict, "stop the main vLLM process before probing")
 		return
 	}
 
 	s.probe.mu.Lock()
 	if s.probe.active != nil {
 		s.probe.mu.Unlock()
-		http.Error(w, ErrProbeAlreadyActive.Error(), http.StatusConflict)
+		s.fail(w, r, http.StatusConflict, ErrProbeAlreadyActive.Error())
 		return
 	}
 
@@ -233,17 +233,24 @@ type applyProbeRequest struct {
 // tuple onto the model's saved config in the registry.
 func (s *Server) handleApplyProbe(w http.ResponseWriter, r *http.Request) {
 	var req applyProbeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
 		return
 	}
+	// The result table's Apply button posts its values as a form.
+	if !isJSON {
+		req.ModelID = r.FormValue("model_id")
+		req.MaxModelLen, _ = strconv.Atoi(r.FormValue("max_model_len"))
+		req.GPUMemoryUtilization, _ = strconv.ParseFloat(r.FormValue("gpu_memory_utilization"), 64)
+		req.MaxNumSeqs, _ = strconv.Atoi(r.FormValue("max_num_seqs"))
+	}
 	if req.ModelID == "" || req.MaxModelLen <= 0 {
-		http.Error(w, "model_id and max_model_len (>0) are required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id and max_model_len (>0) are required")
 		return
 	}
 	m, ok := s.registry.Get(req.ModelID)
 	if !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 	m.VLLMConfig.MaxModelLen = req.MaxModelLen
@@ -254,7 +261,7 @@ func (s *Server) handleApplyProbe(w http.ResponseWriter, r *http.Request) {
 		m.VLLMConfig.MaxNumSeqs = req.MaxNumSeqs
 	}
 	if err := s.registry.Register(m); err != nil {
-		http.Error(w, "save model: "+err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, "save model: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

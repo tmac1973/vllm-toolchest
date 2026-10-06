@@ -403,6 +403,13 @@ func (s *Store) DeleteJob(id string, disposition DeleteDisposition) error {
 	if id == AdhocJobID {
 		return errors.New("cannot delete the synthetic ad-hoc job")
 	}
+	// Checked before anything changes: the filter below works in place, so
+	// refusing after it would leave the job list rearranged.
+	switch disposition {
+	case DeleteCascade, DeleteOrphan, "":
+	default:
+		return fmt.Errorf("unknown delete disposition: %q", disposition)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -431,14 +438,12 @@ func (s *Store) DeleteJob(id string, disposition DeleteDisposition) error {
 			runs = append(runs, r)
 		}
 		s.runs = runs
-	case DeleteOrphan, "":
+	default: // DeleteOrphan, ""
 		for i := range s.runs {
 			if s.runs[i].JobID == id {
 				s.runs[i].JobID = AdhocJobID
 			}
 		}
-	default:
-		return fmt.Errorf("unknown delete disposition: %q", disposition)
 	}
 	return s.save()
 }

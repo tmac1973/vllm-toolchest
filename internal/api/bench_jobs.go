@@ -219,6 +219,12 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 	if !s.validateJobRequest(w, r, req) {
 		return
 	}
+	// Checked before the edit is saved: saved and then refused, the job
+	// would sit pending with its new definition and nothing to run it.
+	if s.benchSvc.Busy() {
+		s.fail(w, r, http.StatusConflict, benchmark.ErrRunAlreadyActive.Error())
+		return
+	}
 
 	updated, err := s.bench.UpdateJobDefinition(id, benchmark.JobDefinition{
 		Name:        req.Name,
@@ -272,7 +278,13 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	job, err := s.bench.GetJob(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, err.Error())
+		return
+	}
+	// As for an edit: refused after the reset was saved, the job would be
+	// left pending with nothing to run it.
+	if s.benchSvc.Busy() {
+		s.fail(w, r, http.StatusConflict, benchmark.ErrRunAlreadyActive.Error())
 		return
 	}
 
@@ -285,7 +297,7 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if count == 0 {
-		http.Error(w, "no failed or skipped cells to retry", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "no failed or skipped cells to retry")
 		return
 	}
 
@@ -293,16 +305,16 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 	job.StartedAt = time.Time{}
 	job.FinishedAt = time.Time{}
 	if err := s.bench.SaveJob(*job); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	if err := s.benchSvc.SubmitJob(*job); err != nil {
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
