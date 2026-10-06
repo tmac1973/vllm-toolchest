@@ -468,6 +468,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMPort            int
 		HasAPIKey           bool
 		HasHFToken          bool
+		SecretMask          string
 		DefaultDtype        string
 		GPUMemoryUtil       float64
 		MaxNumSeqs          int
@@ -504,6 +505,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMPort:            c.VLLMPort,
 		HasAPIKey:           c.APIKey != "",
 		HasHFToken:          c.HFToken != "",
+		SecretMask:          secretMask,
 		DefaultDtype:        c.DefaultDtype,
 		GPUMemoryUtil:       c.GPUMemoryUtil,
 		MaxNumSeqs:          c.MaxNumSeqs,

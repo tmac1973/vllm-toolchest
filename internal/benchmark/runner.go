@@ -207,7 +207,7 @@ func (r *Runner) runInternal(ctx context.Context, run *BenchmarkRun, cfg RunnerC
 			result, err := r.runOneTest(ctx, cfg.VLLMURL, cfg.ServedName, promptTokens, cfg.Preset.GenTokens, rep)
 			if err != nil {
 				lastErr = err
-				slog.Error("benchmark test failed", "prompt_tokens", promptTokens, "rep", rep, "error", err)
+				slog.Warn("benchmark test failed", "prompt_tokens", promptTokens, "rep", rep, "error", err)
 				continue
 			}
 			slog.Info("benchmark result",
@@ -308,7 +308,9 @@ func (r *Runner) sendCompletionStream(ctx context.Context, vllmURL, model string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		// Bounded: the body can echo the whole prompt back, and this error
+		// is logged.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 

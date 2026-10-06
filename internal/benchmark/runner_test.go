@@ -291,10 +291,3 @@ func TestRunnerCancellation(t *testing.T) {
 		t.Fatalf("expected failed (cancelled), got %s", final.Status)
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

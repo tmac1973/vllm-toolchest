@@ -6,3 +6,13 @@ __pycache__/
 /data/
 *.log
 .models/
+
+# Secrets. .env.example is the template and stays tracked.
+.env.*
+!.env.example
+*.pem
+*.key
+# `make run` reads this; it holds the HF token and API key.
+/config.yaml
+# Backup exports can carry the same secrets.
+vllm-toolchest-backup-*.json

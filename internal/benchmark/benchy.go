@@ -87,7 +87,14 @@ func BuildBenchyArgs(c BenchyConfig) []string {
 // of the uvx command for disclosure to the user. Used by the About modal
 // and persisted on each run so the exact command that produced a result
 // is forever reproducible.
+//
+// A real API key is shown as "***": the string is logged and rendered in the
+// UI. The "EMPTY" placeholder is shown as is, since it is no secret and the
+// command reads truer with it.
 func FormatBenchyCommand(c BenchyConfig) string {
+	if c.APIKey != "" && c.APIKey != "EMPTY" {
+		c.APIKey = "***"
+	}
 	var b strings.Builder
 	b.WriteString("uvx")
 	for _, a := range BuildBenchyArgs(c) {

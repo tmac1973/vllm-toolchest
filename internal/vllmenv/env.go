@@ -13,13 +13,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
@@ -338,23 +338,10 @@ func (e Env) runProbe(timeout time.Duration, script string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, e.Python, "-c", script)
+	// Importing vLLM spawns children of its own; see procgroup for why the
+	// whole group goes on timeout.
+	cmd := procgroup.Command(ctx, syscall.SIGKILL, 5*time.Second, e.Python, "-c", script)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
-
-	// Importing vLLM spawns children of its own. Two problems follow from
-	// that, and both bite exactly when the probe has gone wrong:
-	//
-	//  - Killing only the direct child orphans the rest, and an orphan that
-	//    reached the GPU keeps a HIP context (and its VRAM) alive. Putting the
-	//    probe in its own process group lets us signal the whole tree.
-	//  - Output() waits for EOF on the stdout pipe, which any surviving
-	//    grandchild holds open. Without WaitDelay the call blocks long past
-	//    the timeout it was given.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = 5 * time.Second
 
 	return cmd.Output()
 }

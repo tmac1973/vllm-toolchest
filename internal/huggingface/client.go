@@ -681,8 +681,8 @@ func (c *Client) getJSON(ctx context.Context, u string, v any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 403 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("access denied (HTTP 403) — is this a gated model? %s", string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("access denied (HTTP 403) — is this a gated model? %s", strings.TrimSpace(string(body)))
 	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)

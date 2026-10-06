@@ -28,6 +28,8 @@ type Downloader struct {
 	onComplete    CompletionFunc
 	// baseURL is the Hub's origin. Only ever the real one outside tests.
 	baseURL string
+	// httpClient fetches the files. See newDownloadClient.
+	httpClient *http.Client
 
 	mu     sync.Mutex
 	active map[string]*download
@@ -40,8 +42,19 @@ func NewDownloader(dataDir, modelsDir, token string) *Downloader {
 		token:         token,
 		maxConcurrent: 3,
 		baseURL:       baseURL,
+		httpClient:    newDownloadClient(),
 		active:        make(map[string]*download),
 	}
+}
+
+// newDownloadClient has no overall Timeout, unlike the API client: a weight
+// shard can take an hour to arrive, and a Timeout covers reading the body.
+// What it does bound is waiting for the Hub to answer at all, so a request
+// to a hung server fails instead of sitting in the queue forever.
+func newDownloadClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 60 * time.Second
+	return &http.Client{Transport: t}
 }
 
 // SetBaseURL points the downloader at a different origin, for tests.
@@ -559,7 +572,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existingSize))
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := d.httpClient.Do(req)
 		if err != nil {
 			d.updateFileState(dl, f.Filename, existingSize, "failed")
 			return fmt.Errorf("download %s: %w", f.Filename, err)

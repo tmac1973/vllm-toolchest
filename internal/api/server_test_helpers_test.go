@@ -29,9 +29,6 @@ func newTestServer(t *testing.T, backendURL string) *Server {
 		VLLMHost: u.Hostname(),
 		VLLMPort: port,
 	}
-	// Pre-create the config subdirectory the Store writes into.
-	_ = filepath.Join(dir, "config")
-
 	s := &Server{
 		cfg:      cfg,
 		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),

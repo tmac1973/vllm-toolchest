@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -23,7 +24,9 @@ func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 		}
 
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != s.cfg.APIKey {
+		// Constant time, so response timing says nothing about how much of
+		// a guess was right.
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.APIKey)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":{"message":"invalid API key","type":"auth_error"}}`,
 				http.StatusUnauthorized)

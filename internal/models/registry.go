@@ -458,8 +458,13 @@ func (r *Registry) Delete(id string, deleteFiles bool) error {
 		return fmt.Errorf("model not found: %s", id)
 	}
 
+	// The entry goes only once its files are gone. Dropping it after a
+	// failed delete would leave the files on disk with nothing pointing at
+	// them.
 	if deleteFiles && m.LocalPath != "" {
-		os.RemoveAll(m.LocalPath)
+		if err := os.RemoveAll(m.LocalPath); err != nil {
+			return fmt.Errorf("delete model files: %w", err)
+		}
 	}
 
 	delete(r.models, id)

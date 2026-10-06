@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 type JobState string
@@ -302,10 +302,9 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	m.appendLog(fmt.Sprintf("[tuner] shapes: %s", strings.Join(shapeStrs, ", ")))
 	m.appendLog(fmt.Sprintf("[tuner] output dir: %s", m.TunedDir()))
 
-	cmd := exec.CommandContext(ctx, python, args...)
-
 	// Put the tuner in its own process group and tear the whole group down on
-	// cancel.
+	// cancel. SIGTERM first; if the group will not take the hint, Go
+	// force-kills after the wait.
 	//
 	// CommandContext on its own kills the direct child -- python -- and
 	// nothing else. The ROCm workers it spawned keep running, holding
@@ -317,15 +316,7 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	// model would not launch at 0.97.
 	//
 	// internal/process has always done this; the tuner never did.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	// If the group will not take the hint, Go force-kills after this.
-	cmd.WaitDelay = 10 * time.Second
+	cmd := procgroup.Command(ctx, syscall.SIGTERM, 10*time.Second, python, args...)
 
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",

@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -71,6 +72,21 @@ func TestFormatBenchyCommandQuotesSpaces(t *testing.T) {
 	}
 	if !strings.Contains(cmd, `"model with spaces"`) {
 		t.Errorf("expected quoted spaces in command, got %s", cmd)
+	}
+}
+
+// The command string is logged and shown in the UI, so a real key must not
+// appear in it, while the argv benchy actually gets still carries it.
+func TestFormatBenchyCommandRedactsAPIKey(t *testing.T) {
+	c := BenchyConfig{
+		BaseURL: "x", APIKey: "sk-real", ServedModelName: "m",
+		PromptSizes: []int{1}, GenSizes: []int{1}, SaveResultPath: "/tmp/x",
+	}
+	if cmd := FormatBenchyCommand(c); strings.Contains(cmd, "sk-real") {
+		t.Errorf("command shows the key: %s", cmd)
+	}
+	if !slices.Contains(BuildBenchyArgs(c), "sk-real") {
+		t.Error("argv lost the key")
 	}
 }
 
