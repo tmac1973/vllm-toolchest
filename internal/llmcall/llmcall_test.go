@@ -60,7 +60,7 @@ var schema = map[string]any{"type": "object"}
 
 func ask(t *testing.T, e *engine) (answer, error) {
 	var out answer
-	err := (&Client{}).JSON(context.Background(), e.server(t), "helper", "form", schema,
+	err := (&Client{}).JSON(context.Background(), Endpoint{BaseURL: e.server(t)}, "helper", "form", schema,
 		[]Message{{Role: "user", Content: "read this"}}, &out)
 	return out, err
 }
@@ -130,7 +130,7 @@ func TestJSONErrors(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	var out answer
-	if err := (&Client{}).JSON(ctx, slow.URL, "m", "f", schema, nil, &out); err == nil || time.Since(start) > time.Second {
+	if err := (&Client{}).JSON(ctx, Endpoint{BaseURL: slow.URL}, "m", "f", schema, nil, &out); err == nil || time.Since(start) > time.Second {
 		t.Errorf("a cancelled call took %s and returned %v", time.Since(start), err)
 	}
 }

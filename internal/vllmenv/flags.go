@@ -3,7 +3,6 @@ package vllmenv
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -51,7 +50,7 @@ func (e Env) serveHelp(timeout time.Duration, arg string) (string, error) {
 
 	bin, args := e.ServeCommand(arg, nil)
 	cmd := procgroup.Command(ctx, syscall.SIGKILL, 5*time.Second, bin, args...)
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = append(procgroup.Environ(), "PYTHONUNBUFFERED=1")
 
 	// argparse writes help to stdout; some launchers wrap it and write to
 	// stderr. Both are read.

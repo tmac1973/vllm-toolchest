@@ -195,6 +195,7 @@ func (f *fakeJobEnv) loads() []loadEvent {
 
 func (f *fakeJobEnv) CurrentMetrics() monitor.Metrics { return monitor.Metrics{} }
 func (f *fakeJobEnv) VLLMURL() string                 { return f.vllmURL }
+func (f *fakeJobEnv) VLLMAPIKey() string              { return "" }
 func (f *fakeJobEnv) HFToken() string                 { return "" }
 func (f *fakeJobEnv) HFCacheDir() string              { return "" }
 func (f *fakeJobEnv) VLLMVersion() string             { return f.vllmVersion }

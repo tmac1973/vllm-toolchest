@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"syscall"
 	"time"
@@ -90,7 +89,7 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 	// the direct child would leave them holding VRAM for the next attempt,
 	// and Wait blocked on the log pipe they keep open.
 	cmd := procgroup.Command(cmdCtx, syscall.SIGKILL, 10*time.Second, bin, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(procgroup.Environ(), env...)
 
 	var logBuf safeBuffer
 	cmd.Stdout = &logBuf

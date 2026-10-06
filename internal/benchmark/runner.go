@@ -3,6 +3,7 @@ package benchmark
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,7 @@ type RunnerConfig struct {
 	Run         BenchmarkRun
 	Preset      Preset
 	VLLMURL     string // e.g. "http://127.0.0.1:8000"
+	APIKey      string // what the engine requires on /v1; "" for none
 	ServedName  string // model identifier vLLM responds to ("model" field in /v1/chat/completions)
 	MaxModelLen int    // for skip-rule when prompt_tokens+gen_tokens exceeds the model's context
 
@@ -99,7 +101,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunnerConfig, progress chan<- Prog
 			send("error", run.Error, 0)
 			return
 		}
-		_, warmupErr = r.sendCompletionStream(ctx, cfg.VLLMURL, cfg.ServedName, 64, 16, 0)
+		_, warmupErr = r.sendCompletionStream(ctx, cfg, 64, 16, 0)
 		if warmupErr == nil {
 			break
 		}
@@ -146,7 +148,7 @@ func (r *Runner) runBenchy(ctx context.Context, run *BenchmarkRun, cfg RunnerCon
 
 	results, cmdStr, err := runLlamaBenchy(ctx, BenchyConfig{
 		BaseURL:         cfg.VLLMURL + "/v1",
-		APIKey:          "EMPTY",
+		APIKey:          cmp.Or(cfg.APIKey, "EMPTY"),
 		ServedModelName: cfg.ServedName,
 		Tokenizer:       cfg.HFRepoID,
 		PromptSizes:     cfg.Preset.PromptTokens,
@@ -214,7 +216,7 @@ func (r *Runner) runInternal(ctx context.Context, run *BenchmarkRun, cfg RunnerC
 					promptTokens, cfg.Preset.GenTokens, rep, cfg.Preset.Repetitions),
 				pct)
 
-			result, err := r.runOneTest(ctx, cfg.VLLMURL, cfg.ServedName, promptTokens, cfg.Preset.GenTokens, rep)
+			result, err := r.runOneTest(ctx, cfg, promptTokens, cfg.Preset.GenTokens, rep)
 			if err != nil {
 				lastErr = err
 				slog.Warn("benchmark test failed", "prompt_tokens", promptTokens, "rep", rep, "error", err)
@@ -245,8 +247,8 @@ func (r *Runner) runInternal(ctx context.Context, run *BenchmarkRun, cfg RunnerC
 
 // runOneTest sends a single streaming chat completion and parses its
 // timing into a BenchmarkResult.
-func (r *Runner) runOneTest(ctx context.Context, vllmURL, model string, promptTokens, genTokens, rep int) (*BenchmarkResult, error) {
-	timings, err := r.sendCompletionStream(ctx, vllmURL, model, promptTokens, genTokens, rep)
+func (r *Runner) runOneTest(ctx context.Context, cfg RunnerConfig, promptTokens, genTokens, rep int) (*BenchmarkResult, error) {
+	timings, err := r.sendCompletionStream(ctx, cfg, promptTokens, genTokens, rep)
 	if err != nil {
 		return nil, err
 	}
@@ -291,10 +293,10 @@ type streamTimings struct {
 // TTFT from the first SSE chunk. vLLM honors stream_options.include_usage
 // and emits a final chunk with the usage block, which we use for accurate
 // token counts.
-func (r *Runner) sendCompletionStream(ctx context.Context, vllmURL, model string, promptTokens, genTokens, rep int) (*streamTimings, error) {
+func (r *Runner) sendCompletionStream(ctx context.Context, cfg RunnerConfig, promptTokens, genTokens, rep int) (*streamTimings, error) {
 	prompt := buildPrompt(promptTokens, rep)
 	reqBody, _ := json.Marshal(map[string]any{
-		"model":       model,
+		"model":       cfg.ServedName,
 		"messages":    []map[string]string{{"role": "user", "content": prompt}},
 		"max_tokens":  genTokens,
 		"temperature": 0.0,
@@ -304,11 +306,14 @@ func (r *Runner) sendCompletionStream(ctx context.Context, vllmURL, model string
 		},
 	})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, vllmURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.VLLMURL+"/v1/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
 	req.Header.Set("Accept", "text/event-stream")
 
 	client := &http.Client{Timeout: 15 * time.Minute}

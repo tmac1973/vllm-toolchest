@@ -258,6 +258,14 @@ func (s *Server) buildRouter() chi.Router {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// /api has no login: anyone who can reach this port is trusted, as
+		// the README says. What it must not do is take orders from a web
+		// page in someone's browser, which could otherwise post a restore
+		// that replaces the HF token and API key. A state-changing request
+		// the browser marks as cross-origin is refused; scripts and curl
+		// send no such marks and are unaffected. /v1 is left out on purpose:
+		// browser chat front-ends call it cross-origin, and it has its key.
+		r.Use(http.NewCrossOriginProtection().Handler)
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/gpu-map", s.handleGPUMap)
 		r.Get("/arch-registry", s.handleArchRegistry)

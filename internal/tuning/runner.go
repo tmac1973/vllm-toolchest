@@ -275,7 +275,7 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	// internal/process has always done this; the tuner never did.
 	cmd := procgroup.Command(ctx, syscall.SIGTERM, 10*time.Second, python, args...)
 
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(procgroup.Environ(),
 		"PYTHONUNBUFFERED=1",
 		// tqdm updates its bar with \r overwrites many times per second.
 		// Throttle so we get a useful progress line in the UI without a

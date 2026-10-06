@@ -297,6 +297,25 @@ Things worth knowing as a client:
   sampling of its own: the launch's `--override-generation-config` where it sets
   a value, the checkpoint's `generation_config.json` where it does not.
 
+## Security
+
+vllm-toolchest has no login. Put the UI port (`VLLMCTL_PORT`, 3000) on a
+network you trust: anyone who can reach it can start and stop models, change
+settings, and read or replace the HF token and API key through backup and
+restore.
+
+- **API key.** With `VLLMCTL_API_KEY` (or the key in Settings) set, every `/v1`
+  request needs `Authorization: Bearer <key>`, both through the proxy on
+  `VLLMCTL_PORT` and on vLLM's own port (`VLLMCTL_INFERENCE_PORT`, 8000), which
+  is started requiring the same key. A key changed in Settings reaches vLLM's
+  port at its next start; the proxy accepts the new key straight away.
+- **Cross-site requests.** A state-changing `/api` request that a browser marks
+  as coming from another site is refused, so a web page you visit cannot drive
+  the UI or post a restore. Scripts and `curl` are unaffected, and so is `/v1`,
+  which browser chat front-ends call cross-origin on purpose.
+- **Secrets on disk.** The config file holding the token and key is written
+  owner-only (`0600`). A backup exported with secrets holds them in plain text.
+
 ## Development
 
 ```bash

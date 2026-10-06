@@ -341,7 +341,7 @@ func (e Env) runProbe(timeout time.Duration, script string) ([]byte, error) {
 	// Importing vLLM spawns children of its own; see procgroup for why the
 	// whole group goes on timeout.
 	cmd := procgroup.Command(ctx, syscall.SIGKILL, 5*time.Second, e.Python, "-c", script)
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = append(procgroup.Environ(), "PYTHONUNBUFFERED=1")
 
 	return cmd.Output()
 }

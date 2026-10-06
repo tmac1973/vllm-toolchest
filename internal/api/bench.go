@@ -302,6 +302,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		Run:         run,
 		Preset:      preset,
 		VLLMURL:     s.vllmBaseURL(),
+		APIKey:      s.process.EngineAPIKey(),
 		ServedName:  servedName,
 		MaxModelLen: model.VLLMConfig.MaxModelLen,
 		HFRepoID:    model.ID,
@@ -669,8 +670,15 @@ func displayNameOf(m *models.Model) string {
 // model that is loaded rather than fail on the name.
 func (s *Server) discoverServedName(modelID string) (string, error) {
 	url := s.vllmBaseURL() + "/v1/models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	if key := s.process.EngineAPIKey(); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

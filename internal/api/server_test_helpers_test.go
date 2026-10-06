@@ -10,6 +10,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // newTestServer constructs a minimal *Server suitable for testing the
@@ -33,6 +34,7 @@ func newTestServer(t *testing.T, backendURL string) *Server {
 		cfg:      cfg,
 		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		monitor:  monitor.New(0),
+		process:  process.NewManager(u.Hostname(), port, 0),
 	}
 	s.bench = benchmark.NewStore(dir)
 	s.benchSvc = benchmark.NewService(s.bench)

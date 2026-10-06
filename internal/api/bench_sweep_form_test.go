@@ -250,6 +250,7 @@ func (e *stubJobEnv) EnsureModelLoaded(ctx context.Context, _ string, _ benchmar
 }
 func (e *stubJobEnv) CurrentMetrics() monitor.Metrics { return monitor.Metrics{} }
 func (e *stubJobEnv) VLLMURL() string                 { return "http://127.0.0.1:1" }
+func (e *stubJobEnv) VLLMAPIKey() string              { return "" }
 func (e *stubJobEnv) HFToken() string                 { return "" }
 func (e *stubJobEnv) HFCacheDir() string              { return "" }
 func (e *stubJobEnv) VLLMVersion() string             { return "" }

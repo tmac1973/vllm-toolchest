@@ -197,6 +197,11 @@ func (e *jobEnv) CurrentMetrics() monitor.Metrics {
 	return e.s.monitor.Current()
 }
 
+// VLLMAPIKey returns the key the running engine requires on /v1.
+func (e *jobEnv) VLLMAPIKey() string {
+	return e.s.process.EngineAPIKey()
+}
+
 // VLLMURL returns the base URL the runner targets.
 func (e *jobEnv) VLLMURL() string {
 	return e.s.vllmBaseURL()

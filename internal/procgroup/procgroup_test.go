@@ -68,3 +68,16 @@ func TestKillBeforeStartIsANoOp(t *testing.T) {
 		t.Fatalf("Kill on an unstarted command: %v", err)
 	}
 }
+
+func TestEnvironDropsOurSecretsOnly(t *testing.T) {
+	t.Setenv("VLLMCTL_API_KEY", "sk-ours")
+	t.Setenv("VLLMCTL_HF_TOKEN", "hf_ours")
+	t.Setenv("HF_TOKEN", "hf_shared")
+	env := strings.Join(Environ(), "\n")
+	if strings.Contains(env, "sk-ours") || strings.Contains(env, "hf_ours") {
+		t.Error("a vllmctl secret reached the child environment")
+	}
+	if !strings.Contains(env, "HF_TOKEN=hf_shared") {
+		t.Error("HF_TOKEN, which vLLM reads, was dropped")
+	}
+}

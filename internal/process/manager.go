@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -92,7 +91,10 @@ type Manager struct {
 	modelID string
 	// args is the flag list the running process was launched with; see Status.
 	args []string
-	pid  int
+	// apiKey is the key the running process requires on /v1, from the
+	// VLLM_API_KEY it was launched with; see EngineAPIKey.
+	apiKey string
+	pid    int
 	// run numbers each launch, so that the goroutines watching one cannot
 	// write state that belongs to the next.
 	run        int
@@ -226,6 +228,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.state = StateStarting
 	m.modelID = modelID
 	m.args = append([]string(nil), args...)
+	m.apiKey = envValue(env, "VLLM_API_KEY")
 	m.lastError = ""
 	m.overdue = false
 	m.startFailed = false
@@ -272,7 +275,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	// long Wait blocks on the output pipes: a surviving grandchild holds
 	// them open, and without it the reaper never returns.
 	cmd := procgroup.Command(ctx, syscall.SIGKILL, 10*time.Second, launcher.Bin, cmdArgs...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(procgroup.Environ(), env...)
 
 	// Capture stdout and stderr through pipes we own, not StdoutPipe. Wait
 	// closes a StdoutPipe as soon as the process exits, so reading one while
@@ -867,6 +870,28 @@ func SplitFlags(s string) []string {
 	}
 	flush()
 	return out
+}
+
+// EngineAPIKey is the key the current engine requires on its /v1 routes, or
+// "" when it requires none. It is the key the engine was started with, which
+// is not the configured one after a change in Settings until the next start;
+// whatever calls the engine directly must send this one.
+func (m *Manager) EngineAPIKey() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.apiKey
+}
+
+// envValue is name's value in env, the last occurrence winning as it does
+// for os/exec.
+func envValue(env []string, name string) string {
+	v := ""
+	for _, kv := range env {
+		if k, val, ok := strings.Cut(kv, "="); ok && k == name {
+			v = val
+		}
+	}
+	return v
 }
 
 // BuildEnv constructs environment variables for the vLLM process.

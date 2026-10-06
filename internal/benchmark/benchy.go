@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 // LlamaBenchyReport is the top-level JSON object llama-benchy writes when
@@ -170,19 +172,17 @@ func runLlamaBenchy(ctx context.Context, c BenchyConfig) ([]LlamaBenchyResult, s
 	slog.Info("running llama-benchy", "command", cmdStr)
 
 	cmd := exec.CommandContext(ctx, "uvx", args...)
-	if c.HFToken != "" || c.HFHome != "" {
-		env := os.Environ()
-		if c.HFToken != "" {
-			env = append(env, "HF_TOKEN="+c.HFToken)
-		}
-		if c.HFHome != "" {
-			if err := os.MkdirAll(c.HFHome, 0o755); err != nil {
-				return nil, cmdStr, fmt.Errorf("create HF_HOME dir %q: %w", c.HFHome, err)
-			}
-			env = append(env, "HF_HOME="+c.HFHome)
-		}
-		cmd.Env = env
+	env := procgroup.Environ()
+	if c.HFToken != "" {
+		env = append(env, "HF_TOKEN="+c.HFToken)
 	}
+	if c.HFHome != "" {
+		if err := os.MkdirAll(c.HFHome, 0o755); err != nil {
+			return nil, cmdStr, fmt.Errorf("create HF_HOME dir %q: %w", c.HFHome, err)
+		}
+		env = append(env, "HF_HOME="+c.HFHome)
+	}
+	cmd.Env = env
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

@@ -34,15 +34,22 @@ func (c *Client) http() *http.Client {
 	return &http.Client{Timeout: 5 * time.Minute}
 }
 
-// JSON asks the engine at baseURL for an answer constrained to schema and
-// decodes it into out.
+// Endpoint is an OpenAI-compatible engine: its origin, and the key its /v1
+// routes require, if any.
+type Endpoint struct {
+	BaseURL string
+	APIKey  string
+}
+
+// JSON asks the engine at ep for an answer constrained to schema and decodes
+// it into out.
 //
 // Two recoveries are tried, once each. An engine too old for response_format's
 // json_schema, which answers 400 naming it, is asked again with the older
 // guided_json spelling -- two of the images here pin vLLM 0.23. And an answer
 // that does not decode is asked for once more, with the instruction to answer
 // with the JSON object only.
-func (c *Client) JSON(ctx context.Context, baseURL, model, schemaName string,
+func (c *Client) JSON(ctx context.Context, ep Endpoint, model, schemaName string,
 	schema map[string]any, msgs []Message, out any) error {
 	body := map[string]any{
 		"model":       model,
@@ -58,12 +65,12 @@ func (c *Client) JSON(ctx context.Context, baseURL, model, schemaName string,
 		},
 	}
 
-	content, err := c.complete(ctx, baseURL, body)
+	content, err := c.complete(ctx, ep, body)
 	var old *oldEngineError
 	if errors.As(err, &old) {
 		delete(body, "response_format")
 		body["guided_json"] = schema
-		content, err = c.complete(ctx, baseURL, body)
+		content, err = c.complete(ctx, ep, body)
 	}
 	if err != nil {
 		return err
@@ -76,7 +83,7 @@ func (c *Client) JSON(ctx context.Context, baseURL, model, schemaName string,
 		Message{Role: "assistant", Content: content},
 		Message{Role: "user", Content: "Answer again with only the JSON object."})
 	body["messages"] = retry
-	if content, err = c.complete(ctx, baseURL, body); err != nil {
+	if content, err = c.complete(ctx, ep, body); err != nil {
 		return err
 	}
 	if err := decode(content, out); err != nil {
@@ -91,17 +98,20 @@ type oldEngineError struct{ body string }
 
 func (e *oldEngineError) Error() string { return "the engine does not accept json_schema: " + e.body }
 
-func (c *Client) complete(ctx context.Context, baseURL string, body map[string]any) (string, error) {
+func (c *Client) complete(ctx context.Context, ep Endpoint, body map[string]any) (string, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(baseURL, "/")+"/v1/chat/completions", bytes.NewReader(data))
+		strings.TrimRight(ep.BaseURL, "/")+"/v1/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if ep.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+ep.APIKey)
+	}
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return "", err

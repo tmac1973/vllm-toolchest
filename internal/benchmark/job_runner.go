@@ -42,6 +42,9 @@ type JobEnv interface {
 	// http://localhost:8000).
 	VLLMURL() string
 
+	// VLLMAPIKey returns the key the engine requires on /v1, or "".
+	VLLMAPIKey() string
+
 	// HFToken / HFCacheDir are forwarded to llama-benchy so the tokenizer
 	// download is authenticated and cached across cells.
 	HFToken() string
@@ -275,6 +278,7 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 		Run:         run,
 		Preset:      preset,
 		VLLMURL:     s.env.VLLMURL(),
+		APIKey:      s.env.VLLMAPIKey(),
 		ServedName:  info.ServedName,
 		MaxModelLen: cfg.MaxModelLen,
 		HFRepoID:    info.HFRepoID,

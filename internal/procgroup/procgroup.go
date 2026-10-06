@@ -13,10 +13,38 @@ package procgroup
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// ownSecrets are vllmctl's own credentials, which reach it through the
+// container environment. No child needs them under these names: the engine
+// is handed its key as VLLM_API_KEY, and HF_TOKEN, which vLLM and the Hub
+// tools read, is a separate name and is passed through.
+var ownSecrets = []string{"VLLMCTL_API_KEY=", "VLLMCTL_HF_TOKEN="}
+
+// Environ is os.Environ without vllmctl's own secrets, the base environment
+// for every child it starts.
+func Environ() []string {
+	env := os.Environ()
+	out := env[:0:0]
+	for _, kv := range env {
+		secret := false
+		for _, prefix := range ownSecrets {
+			if strings.HasPrefix(kv, prefix) {
+				secret = true
+				break
+			}
+		}
+		if !secret {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
 
 // Command is exec.CommandContext with the child placed in a new process
 // group. When ctx is done the whole group gets sig. If the child has still

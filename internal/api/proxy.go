@@ -20,6 +20,17 @@ func (s *Server) newProxyHandler() http.Handler {
 	// rather than the non-streaming ones that happen to come this way. See
 	// engine_timings.go.
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	// The client's key has been checked against the configured one by
+	// apiKeyAuth. The engine requires the key it was started with, which
+	// differs after a change in Settings until the next start, so that is
+	// the one sent on.
+	direct := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		direct(r)
+		if key := s.process.EngineAPIKey(); key != "" {
+			r.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		respondJSONStatus(w, http.StatusBadGateway, openAIError("vLLM is not available: "+err.Error(), "proxy_error"))
 	}

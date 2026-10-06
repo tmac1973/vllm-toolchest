@@ -27,7 +27,7 @@
         </label>
     </div>
     <div class="grid">
-        <label title="If set, all /v1/* API requests must include this as a Bearer token in the Authorization header. Leave blank for no authentication.">API Key
+        <label title="If set, all /v1/* API requests must include this as a Bearer token in the Authorization header, on this port and on vLLM's own inference port. A change applies to vLLM's port from its next start. Leave blank for no authentication.">API Key
             <input type="password" name="api_key" value="{{if .HasAPIKey}}{{.SecretMask}}{{end}}" placeholder="Leave blank for no auth">
         </label>
         <label title="HuggingFace API token for downloading gated models (Llama, Mistral, Gemma, etc.). Get one at huggingface.co/settings/tokens">HuggingFace Token
