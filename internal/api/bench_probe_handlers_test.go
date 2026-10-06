@@ -186,10 +186,10 @@ func TestProbeApplyLeavesOmittedValuesAlone(t *testing.T) {
 	}
 }
 
-// The Apply button is htmx with hx-ext="json-enc", but no page loads the
-// json-enc extension (web/templates/layout.html loads htmx and htmx-sse
-// only). htmx therefore posts the hx-vals form-encoded, the handler insists on
-// JSON, and every click is a 400 that htmx does not display.
+// The Apply button posts its hx-vals form-encoded, as htmx does without an
+// encoding extension. The handler once insisted on JSON (the button named
+// json-enc, which no page loads), and every click was a 400 htmx did not
+// display.
 func TestProbeApplyAcceptsWhatTheApplyButtonSends(t *testing.T) {
 	s := prbServer(t)
 	form := url.Values{"model_id": {bhModel}, "max_model_len": {"12345"}}

@@ -2,12 +2,11 @@ package models
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // hfMetaVersion is bumped whenever ParseHFConfig learns to read a new field.
@@ -381,19 +380,30 @@ func detectToolParserFromArch(archs []string) string {
 }
 
 func detectToolParser(template string) string {
+	// Qwen's <tool_call> wraps two different formats. Qwen3.5 and Qwen3
+	// Coder put XML inside it (<function=name><parameter=...>), which the
+	// XML parsers read; Qwen 2.5 and Qwen3, thinking variants included, put
+	// Hermes-style JSON inside it. <think> says nothing about which: plain
+	// Qwen3's template has it and calls in JSON. The XML marker does.
+	if strings.Contains(template, "<tool_call>") && strings.Contains(template, "<function=") {
+		if strings.Contains(template, "<think>") {
+			return "qwen3_xml" // Qwen3.5: XML calls after a thinking block
+		}
+		return "qwen3_coder"
+	}
+
 	patterns := []struct {
 		pattern *regexp.Regexp
 		parser  string
 	}{
-		// Qwen3-XML emits tool calls wrapped in <think>...</think> blocks
-		// then XML; matching both markers in the same template is a strong
-		// indicator the model is a Qwen3 thinking variant even when the
-		// arch field doesn't make it obvious.
-		{regexp.MustCompile(`<think>[\s\S]*<tool_call>|<tool_call>[\s\S]*<think>`), "qwen3_xml"},
 		{regexp.MustCompile(`<\|?tool_call\|?>`), "hermes"},
 		{regexp.MustCompile(`\[TOOL_CALLS\]|\[AVAILABLE_TOOLS\]`), "mistral"},
 		{regexp.MustCompile(`<function=`), "granite"},
-		{regexp.MustCompile(`<\|python_tag\|>`), "pythonic"},
+		// Llama 3.x. <|python_tag|> only prefixes its built-in ipython tools
+		// (brave_search, wolfram_alpha); the tools a client defines are
+		// called in JSON, which llama3_json parses. Llama 4, the family that
+		// does call tools pythonically, is caught by its architecture first.
+		{regexp.MustCompile(`<\|python_tag\|>`), "llama3_json"},
 		{regexp.MustCompile(`<\|plugin\|>`), "internlm"},
 		{regexp.MustCompile(`"type":\s*"function"`), "llama3_json"},
 		{regexp.MustCompile(`tool_calls`), "hermes"},
@@ -502,8 +512,8 @@ func detectToolParserFromName(modelID string) string {
 func DetectVision(modelDir string, hfCfg HFConfig) VisionMeta {
 	v := VisionMeta{}
 
-	if fsutil.Exists(filepath.Join(modelDir, "processor_config.json")) ||
-		fsutil.Exists(filepath.Join(modelDir, "preprocessor_config.json")) {
+	if processesImages(filepath.Join(modelDir, "processor_config.json")) ||
+		processesImages(filepath.Join(modelDir, "preprocessor_config.json")) {
 		v.IsVisionModel = true
 		return v
 	}
@@ -533,6 +543,29 @@ func DetectVision(modelDir string, hfCfg HFConfig) VisionMeta {
 	return v
 }
 
+// processesImages reports a processor config that handles images. Having one
+// is not enough: audio models (Whisper, Qwen2-Audio) ship a
+// preprocessor_config.json for their feature extractor. One that handles
+// images says so in its keys -- image_processor_type, image_mean,
+// image_token, vision_feature_select_strategy -- which an audio-only one
+// never has.
+func processesImages(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return false
+	}
+	for key := range raw {
+		if k := strings.ToLower(key); strings.Contains(k, "image") || strings.Contains(k, "vision") {
+			return true
+		}
+	}
+	return false
+}
+
 // ParseGenDefaults reads generation_config.json.
 func ParseGenDefaults(modelDir string) GenDefaults {
 	g := GenDefaults{}
@@ -540,21 +573,40 @@ func ParseGenDefaults(modelDir string) GenDefaults {
 	if err != nil {
 		return g
 	}
-	var raw struct {
-		Temperature       *float64 `json:"temperature"`
-		TopP              *float64 `json:"top_p"`
-		TopK              *int     `json:"top_k"`
-		RepetitionPenalty *float64 `json:"repetition_penalty"`
-		MaxNewTokens      *int     `json:"max_new_tokens"`
+	// Each field is read on its own: one value of an unexpected type -- a
+	// top_k written as 20.0, a temperature as a string -- costs that value,
+	// not every default the file states.
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return g
 	}
-	if json.Unmarshal(data, &raw) == nil {
-		g.Temperature = raw.Temperature
-		g.TopP = raw.TopP
-		g.TopK = raw.TopK
-		g.RepetitionPenalty = raw.RepetitionPenalty
-		g.MaxNewTokens = raw.MaxNewTokens
-	}
+	g.Temperature = genFloat(raw["temperature"])
+	g.TopP = genFloat(raw["top_p"])
+	g.TopK = genInt(raw["top_k"])
+	g.RepetitionPenalty = genFloat(raw["repetition_penalty"])
+	g.MaxNewTokens = genInt(raw["max_new_tokens"])
 	return g
+}
+
+// genFloat is a generation_config number, or nil when it is absent, null or
+// not a number.
+func genFloat(v json.RawMessage) *float64 {
+	var f *float64
+	if len(v) == 0 || json.Unmarshal(v, &f) != nil {
+		return nil
+	}
+	return f
+}
+
+// genInt is a generation_config count. A whole number written as a float
+// (20.0) is read as the integer it is; a fractional one is not a count.
+func genInt(v json.RawMessage) *int {
+	f := genFloat(v)
+	if f == nil || *f != math.Trunc(*f) {
+		return nil
+	}
+	n := int(*f)
+	return &n
 }
 
 func bytesPerParam(method string, bits, groupSize int) float64 {
