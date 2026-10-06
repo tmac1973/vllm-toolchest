@@ -36,10 +36,12 @@ var (
 	}
 )
 
-// Each expected list is worked out by hand from DeriveShapes' documented
-// matmuls -- Q (heads*hd/tp, h), KV (kv*hd/tp, h), O (h, heads*hd/tp),
-// gate/up (inter/tp, h), down (h, inter/tp) -- then deduplicated, filtered to
-// multiples of the block and sorted by N then K.
+// Each expected list is worked out by hand from vLLM's layer layout, as
+// DeriveShapes documents it -- QKV ((heads/tp + 2*kv_per_rank)*hd, h), O (h,
+// heads*hd/tp), gate+up (2*inter/tp, h), down (h, inter/tp), the MLP pair
+// only where the model has a dense MLP -- then filtered to multiples of the
+// block and sorted by N then K. Qwen3-30B-A3B is MoE in every layer, so it
+// has attention shapes only.
 func TestDeriveShapesSplitsAttentionAndMLPAcrossRanks(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -49,59 +51,59 @@ func TestDeriveShapesSplitsAttentionAndMLPAcrossRanks(t *testing.T) {
 		want           []Shape
 	}{
 		{
-			// Q 32*128=4096, KV 4*128=512, inter 6144: nothing is split.
+			// QKV (32+2*4)*128 = 5120; O (2048, 32*128).
 			name: "Qwen3-30B-A3B tp1", cfg: qwen3MoE, tp: 1, blockN: 128, blockK: 128,
-			want: []Shape{{512, 2048}, {2048, 4096}, {2048, 6144}, {4096, 2048}, {6144, 2048}},
+			want: []Shape{{2048, 4096}, {5120, 2048}},
 		},
 		{
-			// Q 2048 and O 2048 coincide at (2048,2048) and are tuned once;
-			// KV 4 heads split as 2 per rank = 256.
+			// 16 query heads and 2 KV heads per rank: (16+4)*128 = 2560.
 			name: "Qwen3-30B-A3B tp2", cfg: qwen3MoE, tp: 2, blockN: 128, blockK: 128,
-			want: []Shape{{256, 2048}, {2048, 2048}, {2048, 3072}, {3072, 2048}},
+			want: []Shape{{2048, 2048}, {2560, 2048}},
 		},
 		{
-			// One KV head per rank: 128.
+			// One KV head per rank: (8+2)*128 = 1280.
 			name: "Qwen3-30B-A3B tp4", cfg: qwen3MoE, tp: 4, blockN: 128, blockK: 128,
-			want: []Shape{{128, 2048}, {1024, 2048}, {1536, 2048}, {2048, 1024}, {2048, 1536}},
+			want: []Shape{{1280, 2048}, {2048, 1024}},
 		},
 		{
-			// 4 KV heads do not divide over 8 ranks, so vLLM replicates them
-			// and KV keeps its tp=1 shape (512,2048) -- which here is also
-			// Q's shape (32*128/8 = 512), so it appears once.
+			// 4 KV heads over 8 ranks are replicated, one per rank:
+			// (4+2)*128 = 768.
 			name: "Qwen3-30B-A3B tp8 replicates KV", cfg: qwen3MoE, tp: 8, blockN: 128, blockK: 128,
-			want: []Shape{{512, 2048}, {768, 2048}, {2048, 512}, {2048, 768}},
+			want: []Shape{{768, 2048}, {2048, 512}},
 		},
 		{
-			// With a 512 block, inter/8 = 768 is not a multiple and the
-			// kernel never sees gate/up or down: they are not tuned.
+			// With a 512 block, QKV's 768 is not a multiple and the kernel
+			// never sees it: it is not tuned.
 			name: "Qwen3-30B-A3B tp8 block512 drops unaligned", cfg: qwen3MoE, tp: 8, blockN: 512, blockK: 512,
-			want: []Shape{{512, 2048}, {2048, 512}},
+			want: []Shape{{2048, 512}},
 		},
 		{
-			// A non-square block filters N and K separately: (128,2048)
-			// fails N%256, (2048,1024) and (2048,1536) pass K%128.
+			// A non-square block filters N and K separately: 1280 passes
+			// N%256 and 1024 passes K%128.
 			name: "Qwen3-30B-A3B tp4 block256x128", cfg: qwen3MoE, tp: 4, blockN: 256, blockK: 128,
-			want: []Shape{{1024, 2048}, {1536, 2048}, {2048, 1024}, {2048, 1536}},
+			want: []Shape{{1280, 2048}, {2048, 1024}},
 		},
 		{
-			// Q and O are both (4096,4096) at tp=1.
+			// QKV (32+16)*128 = 6144; gate+up 2*14336 = 28672.
 			name: "Llama-3.1-8B tp1 derives head_dim", cfg: llama31_8B, tp: 1, blockN: 128, blockK: 128,
-			want: []Shape{{1024, 4096}, {4096, 4096}, {4096, 14336}, {14336, 4096}},
+			want: []Shape{{4096, 4096}, {4096, 14336}, {6144, 4096}, {28672, 4096}},
 		},
 		{
+			// QKV (16+2*4)*128 = 3072; gate+up 2*14336/2 = 14336.
 			name: "Llama-3.1-8B tp2", cfg: llama31_8B, tp: 2, blockN: 128, blockK: 128,
-			want: []Shape{{512, 4096}, {2048, 4096}, {4096, 2048}, {4096, 7168}, {7168, 4096}},
+			want: []Shape{{3072, 4096}, {4096, 2048}, {4096, 7168}, {14336, 4096}},
 		},
 		{
-			// tp=3 truncates 4096/3 and 14336/3 to unaligned widths, and 8 KV
-			// heads replicate: only the replicated KV shape is left.
-			name: "Llama-3.1-8B tp3 keeps only aligned shapes", cfg: llama31_8B, tp: 3, blockN: 128, blockK: 128,
-			want: []Shape{{1024, 4096}},
+			// vLLM refuses 32 heads over 3 ranks, and the MLP widths divide
+			// to unaligned ones: there is nothing to tune.
+			name: "Llama-3.1-8B tp3 has nothing aligned", cfg: llama31_8B, tp: 3, blockN: 128, blockK: 128,
+			want: []Shape{},
 		},
 		{
-			// The explicit head_dim gives Q 4096 wide against a 2560 hidden.
+			// The explicit head_dim gives QKV (32+16)*128 = 6144 against a
+			// 2560 hidden, and O a K of 4096.
 			name: "Qwen3-4B tp1 explicit head_dim", cfg: qwen3_4B, tp: 1, blockN: 128, blockK: 128,
-			want: []Shape{{1024, 2560}, {2560, 4096}, {2560, 9728}, {4096, 2560}, {9728, 2560}},
+			want: []Shape{{2560, 4096}, {2560, 9728}, {6144, 2560}, {19456, 2560}},
 		},
 	}
 	for _, c := range cases {
@@ -126,8 +128,9 @@ func TestDeriveShapesReturnsNothingWithoutAHiddenSize(t *testing.T) {
 // fallbacks are 4*hidden, MHA (kv = heads) and hidden/heads.
 func TestDeriveShapesFillsMissingFieldsWithTheirConventionalDefaults(t *testing.T) {
 	cfg := models.HFConfig{HiddenSize: 1024, NumAttentionHeads: 8}
-	// head_dim 128, kv 8 -> Q = KV = O = (1024,1024); inter 4096.
-	want := []Shape{{1024, 1024}, {1024, 4096}, {4096, 1024}}
+	// head_dim 128, kv 8: QKV (8+16)*128 = 3072, O (1024,1024); inter 4096:
+	// gate+up 8192, down (1024,4096).
+	want := []Shape{{1024, 1024}, {1024, 4096}, {3072, 1024}, {8192, 1024}}
 	if got := DeriveShapes(cfg, 1, 128, 128); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -151,7 +154,6 @@ func TestDeriveShapesTreatsANonPositiveTPAsOne(t *testing.T) {
 // as (18432*2 // tp, 7168) for that reason. A config tuned at the unfused N
 // is never looked up.
 func TestGateAndUpAreTunedAtTheFusedWidthVLLMRuns(t *testing.T) {
-	t.Skip("known bug: DeriveShapes emits unfused gate/up and q/k/v widths vLLM never looks up")
 	got := DeriveShapes(llama31_8B, 1, 128, 128)
 	want := Shape{N: 2 * 14336, K: 4096}
 	for _, s := range got {
@@ -167,7 +169,6 @@ func TestGateAndUpAreTunedAtTheFusedWidthVLLMRuns(t *testing.T) {
 // own config files. intermediate_size is unused, so (6144,2048) and
 // (2048,6144) are tuned for a layer the model does not have.
 func TestAnAllMoEModelIsNotTunedForADenseMLPItDoesNotHave(t *testing.T) {
-	t.Skip("known bug: DeriveShapes ignores NumExperts and tunes an unused intermediate_size")
 	for _, s := range DeriveShapes(qwen3MoE, 1, 128, 128) {
 		if s.N == 6144 || s.K == 6144 {
 			t.Errorf("dense MLP shape %v tuned for an all-MoE model", s)
@@ -336,5 +337,21 @@ func TestInstallTunedConfigsDefaultsTheConfigsDir(t *testing.T) {
 	_, warn, err := InstallTunedConfigs(dataDir, "dev", "")
 	if err != nil || !strings.Contains(warn, DefaultVLLMConfigsDir) {
 		t.Errorf("warn=%q err=%v, want a skip naming the default dir", warn, err)
+	}
+}
+
+// An MoE model with leading dense layers and a shared expert runs a dense MLP
+// at both widths: DeepSeek-V3's first three layers at intermediate_size 18432,
+// and its shared expert at 2048. vLLM's own tuner lists the dense gate_up as
+// (18432*2 // tp, 7168). Attention is left out: DeepSeek's is MLA, which
+// these shapes do not describe.
+func TestAnMoEModelsDenseLayersAndSharedExpertAreTuned(t *testing.T) {
+	cfg := models.HFConfig{
+		HiddenSize: 7168, IntermediateSize: 18432, NumExperts: 256, MoEIntermediate: 2048,
+		DenseLayers: 3, SharedExpertInter: 2048,
+	}
+	want := []Shape{{512, 7168}, {4608, 7168}, {7168, 256}, {7168, 2304}}
+	if got := DeriveShapes(cfg, 8, 128, 128); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

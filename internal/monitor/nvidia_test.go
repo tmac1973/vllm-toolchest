@@ -103,12 +103,25 @@ func TestNvidiaCollectReportsAFailingNvidiaSMI(t *testing.T) {
 	}
 }
 
-// The row guard is len(fields) < 6 but power.draw is fields[6], so a row of
-// exactly six fields indexes past the end and panics the monitor goroutine.
+// A row short of the seven columns asked for is skipped. The guard was once
+// one short of the last index read, and a six-field row panicked the server.
 func TestNvidiaCollectSurvivesARowMissingTheLastField(t *testing.T) {
-	t.Skip("known bug: nvidia.go guards len(fields) < 6 then reads fields[6]; a six-field row panics")
 	fakeNvidiaSMI(t, "0, NVIDIA L4, 5, 300, 23034, 40\n")
 	if _, err := (&nvidiaBackend{}).Collect(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The name is the one free-text column, and a ", " inside it must not shift
+// the numbers after it.
+func TestNvidiaCollectReadsANameWithACommaInIt(t *testing.T) {
+	fakeNvidiaSMI(t, "1, NVIDIA RTX 6000 Ada, 48GB, 7, 1024, 49140, 51, 88.5\n")
+	gpus, err := (&nvidiaBackend{}).Collect()
+	if err != nil || len(gpus) != 1 {
+		t.Fatalf("got %+v, %v", gpus, err)
+	}
+	g := gpus[0]
+	if g.Name != "NVIDIA RTX 6000 Ada, 48GB" || g.UtilPercent != 7 || g.VRAMTotalMB != 49140 || g.PowerW != 88.5 {
+		t.Errorf("parsed %+v", g)
 	}
 }
