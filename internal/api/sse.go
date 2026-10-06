@@ -44,8 +44,8 @@ func (s *SSEWriter) SendData(data string) error {
 // One data field, not two. A second, empty "data:" used to follow, and the SSE
 // spec joins an event's data fields with a newline — so the browser received
 // "<line>\n" rather than "<line>", and every consumer appends its own newline
-// on top. The result was a blank line between every log line in the server and
-// tuning panes, and doubled blank lines wherever vLLM emitted one.
+// on top. The result was a blank line between every log line in the log
+// panes, and doubled blank lines wherever vLLM emitted one.
 func (s *SSEWriter) SendLine(data string) error {
 	return s.SendData(data)
 }

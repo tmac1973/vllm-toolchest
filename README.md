@@ -133,8 +133,8 @@ the checkpoints published for it move together and often, so it follows
 - `install`, `rebuild` and `pull` ask the registry where the tag points now.
   `quick` never does, so the engine changes when you ask and not as a side
   effect of rebuilding the UI.
-- The vLLM version and the ref the FP8 tuner script is fetched from are read
-  out of the image that was pulled, not stated in the manifest.
+- The vLLM version is read out of the image that was pulled, not stated in
+  the manifest.
 - The image that was in use before a move is kept, and the move prints the
   command that goes back to it:
   `VLLMCTL_BASE_IMAGE=<previous> ./setup.sh pull`. Going back sticks through

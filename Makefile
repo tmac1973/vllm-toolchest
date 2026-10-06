@@ -1,6 +1,6 @@
 .PHONY: build run dev docker docker-rebuild up down \
 	docker-amd docker-nvidia up-amd down-amd up-nvidia down-nvidia \
-	logs shell test js-test py-test reload clean env-example
+	logs shell test js-test reload clean env-example
 
 # ─── Variant + vendor ───────────────────────────────────────────────
 # setup.sh writes the chosen variant and its vendor to .env; read both from
@@ -94,13 +94,8 @@ logs:
 shell:
 	docker exec -it vllm-toolchest bash
 
-test: js-test py-test
+test: js-test
 	go test ./...
-
-# The tuner wrapper's search-space rule; needs neither torch nor a GPU.
-py-test:
-	@command -v python3 >/dev/null 2>&1 || { echo "py-test: python3 not installed, skipping"; exit 0; }
-	@python3 -m unittest discover -s scripts -p 'test_*.py'
 
 # The visualize page's chart logic runs against a node harness rather than a
 # browser — the parts worth testing are decisions about the data, not drawing.

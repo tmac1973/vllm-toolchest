@@ -1346,9 +1346,9 @@ load_env_ports() {
 #   - Nothing would ever pull it again. A tag that exists locally satisfies
 #     the build, so the image would be whatever the tag meant on the day it
 #     was first fetched.
-#   - The vLLM pin and the tuner ref describe what is inside one release. The
-#     build checks the first and fetches a script by the second, so both have
-#     to be read from the image that was pulled, not written down beforehand.
+#   - The vLLM pin describes what is inside one release, and the build checks
+#     it, so it has to be read from the image that was pulled, not written
+#     down beforehand.
 #   - There would be no way back. When a new release breaks a model, the one
 #     that worked has to still be on disk and have a name.
 #
@@ -1372,26 +1372,17 @@ variant_pin_from_image() {
     [[ "$(variant_field "$BUILD_VARIANT" VLLM_PIN)" == "image" ]]
 }
 
-# vllm_refs_from_version VERSION prints "<pin> <tuner-ref>" for the version
-# string an installed vLLM reports. The pin is the release it belongs to; the
-# tuner ref is the commit it was built from, when the version says.
+# vllm_pin_from_version VERSION prints the pin for the version string an
+# installed vLLM reports: the release it belongs to.
 #
 #   0.29.0                      -> v0.29.0
-#   0.29.0.dev0+g2bdbbc8080     -> v0.29.0 2bdbbc8080
-#   0.29.0.dev0+g2bdbbc8.d20260 -> v0.29.0 2bdbbc8
-#
-# A build between releases reports a version with no tag behind it, which is
-# why the commit matters: that is the only ref the tuner script can be fetched
-# from that is sure to match.
-vllm_refs_from_version() {
-    local v="$1" release commit=""
-    release="${v%%+*}"
+#   0.29.0.dev0+g2bdbbc8080     -> v0.29.0
+#   0.28.1.post1                -> v0.28.1
+vllm_pin_from_version() {
+    local release="${1%%+*}"
     release="${release%%.dev*}"
     release="${release%%.post*}"
-    if [[ "$v" == *+* && "${v#*+}" =~ (^|\.)g([0-9a-f]{7,40})($|\.) ]]; then
-        commit="${BASH_REMATCH[2]}"
-    fi
-    printf 'v%s %s\n' "$release" "$commit"
+    printf 'v%s\n' "$release"
 }
 
 # image_upstream_ref IMAGE prints the registry reference that names IMAGE by
@@ -1424,24 +1415,12 @@ tracked_upstream_ref() {
     printf '%s@%s\n' "$repo" "$digest"
 }
 
-# tuner_ref_fetchable REF: can the tuner benchmark be fetched from REF?
-# Answers yes when it cannot find out, so a host with no curl or no network
-# gets the build's own, louder failure instead of a quiet fallback.
-tuner_ref_fetchable() {
-    need_cmd curl || return 0
-    local code
-    code="$(curl -s -o /dev/null -m 20 -w '%{http_code}' \
-        "https://raw.githubusercontent.com/vllm-project/vllm/$1/benchmarks/kernels/benchmark_w8a8_block_fp8.py" 2>/dev/null)" || return 0
-    [[ "$code" != "404" ]]
-}
-
 # What ensure_base_image found out, for write_env_file to record.
 BASE_UPSTREAM_REF=""   # repo@sha256:… of the base in use
 BASE_PREVIOUS=""       # the base in use before this one, still on disk
 BASE_VLLM_VERSION=""   # the vLLM version the base reports
 BASE_RELEASE=""        # the base's own release number, where it has one
 RESOLVED_VLLM_PIN=""
-RESOLVED_TUNER_REF=""
 TRACKED_BASE=""
 
 # resolve_tracked_base MODE SRC settles which image a tracking variant builds
@@ -1528,28 +1507,17 @@ read_base_image_facts() {
     BASE_RELEASE="$(sed -n 's/^release=//p' <<<"$out" | head -1)"
 }
 
-# resolve_pin_from_image turns what the base reports into the two build
-# inputs the manifest would otherwise have stated.
+# resolve_pin_from_image turns what the base reports into the pin the
+# manifest would otherwise have stated.
 resolve_pin_from_image() {
-    local img="$1" refs
+    local img="$1"
     read_base_image_facts "$img"
     [[ -n "$BASE_VLLM_VERSION" ]] || fatal "Could not read the vLLM version out of ${img}.
        ${BUILD_VARIANT} declares VARIANT_VLLM_PIN='image', so the pin comes from
        the base itself. Check VARIANT_VENV_ROOT, or state the pin in the manifest."
 
-    refs="$(vllm_refs_from_version "$BASE_VLLM_VERSION")"
-    RESOLVED_VLLM_PIN="${refs%% *}"
-    RESOLVED_TUNER_REF="${refs#* }"
-    if [[ -n "$RESOLVED_TUNER_REF" ]] && ! tuner_ref_fetchable "$RESOLVED_TUNER_REF"; then
-        # A commit that only exists in the image author's fork. The release it
-        # was cut from is the same minor, which is as close as the build's own
-        # assertion asks for.
-        warn "vLLM commit ${RESOLVED_TUNER_REF} is not in vllm-project/vllm;"
-        warn "taking the tuner script from ${RESOLVED_VLLM_PIN} instead."
-        RESOLVED_TUNER_REF=""
-    fi
+    RESOLVED_VLLM_PIN="$(vllm_pin_from_version "$BASE_VLLM_VERSION")"
     export VLLMCTL_VLLM_PIN="$RESOLVED_VLLM_PIN"
-    export VLLMCTL_TUNER_REF="$RESOLVED_TUNER_REF"
 }
 
 # prune_tracked_bases removes this variant's older local base images, keeping
@@ -1821,6 +1789,8 @@ write_env_file() {
     # group is derived from the chosen variant's manifest and rewritten on
     # every install, so hand-editing them does not stick. Change the manifest,
     # or override VLLMCTL_BASE_IMAGE in the environment for a one-off build.
+    # VLLMCTL_TUNER_REF is no longer written, but stays listed so a value an
+    # older install left in .env is dropped rather than kept as the user's.
     local managed=(
         VLLMCTL_PORT VLLMCTL_INFERENCE_PORT VLLMCTL_VARIANT VLLMCTL_MODELS_DIR
         VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
@@ -1854,19 +1824,15 @@ write_env_file() {
         [[ -n "$_base" ]]  && echo "VLLMCTL_BASE_IMAGE=${_base}"
         [[ -n "$_venv" ]]  && echo "VLLMCTL_VENV_ROOT=${_venv}"
         [[ -n "$_stamp" ]] && echo "VLLMCTL_STAMP_FILE=${_stamp}"
-        # "main" is the from-source marker, not a tag to pin a prebuilt base
-        # against, so it is not written through.
-        local _tref
-        _tref="$(variant_field "$BUILD_VARIANT" TUNER_REF)"
         # "image" means the pin is whatever the base carries, which
         # ensure_base_image read out of it. Written through like any other so
         # that a build run outside this script uses the same values.
         if [[ "$_pin" == "image" ]]; then
             _pin="$RESOLVED_VLLM_PIN"
-            _tref="$RESOLVED_TUNER_REF"
         fi
+        # "main" is the from-source marker, not a tag to pin a prebuilt base
+        # against, so it is not written through.
         [[ -n "$_pin" && "$_pin" != "main" ]] && echo "VLLMCTL_VLLM_PIN=${_pin}"
-        [[ -n "$_tref" ]] && echo "VLLMCTL_TUNER_REF=${_tref}"
 
         # What a variant that follows a moving tag resolved it to. These are
         # a record, not inputs: VLLMCTL_BASE_IMAGE above is what gets built

@@ -44,24 +44,18 @@ type Env struct {
 	// vLLM install was found.
 	VenvRoot string
 
-	// Python is the interpreter to run tuner/probe subprocesses with.
+	// Python is the interpreter to run probe subprocesses with.
 	// Falls back to "python" when no venv was located.
 	Python string
 
 	// SitePackages is the venv's site-packages directory.
 	SitePackages string
 
-	// BlockFP8ConfigsDir is where vLLM looks up tuned block-FP8 GEMM configs.
-	BlockFP8ConfigsDir string
-
 	// Launcher is the argv prefix that starts a server. On a generic image
 	// this is ["vllm", "serve"]; on radiance it is the radiance entrypoint,
 	// which prints the startup banner, optionally applies NUMA binding, and
 	// then execs `vllm serve` with the same arguments.
 	Launcher []string
-
-	// TunerScript is the fp8 tuning wrapper, empty when not installed.
-	TunerScript string
 
 	// HasBitsAndBytes reports whether the bitsandbytes package is installed.
 	//
@@ -78,9 +72,9 @@ type Env struct {
 // own declared root, then every other variant's, then the two historical
 // defaults.
 //
-// The wide net is deliberate. Getting this wrong means every tuned-kernel
-// path, the bitsandbytes check and the tuner all silently target the wrong
-// interpreter, so it is worth probing a few directories that will not exist.
+// The wide net is deliberate. Getting this wrong means the probes and the
+// bitsandbytes check all silently target the wrong interpreter, so it is
+// worth probing a few directories that will not exist.
 func venvCandidates(d variants.Descriptor, known bool) []string {
 	var c []string
 	add := func(v string) {
@@ -172,8 +166,6 @@ func Detect() Env {
 		}
 		e.VenvRoot = root
 		e.SitePackages = sp
-		e.BlockFP8ConfigsDir = filepath.Join(sp,
-			"vllm/model_executor/layers/quantization/utils/configs")
 		e.HasBitsAndBytes = fsutil.Exists(filepath.Join(sp, "bitsandbytes"))
 		if py := filepath.Join(root, "bin/python"); isExecutable(py) {
 			e.Python = py
@@ -188,10 +180,6 @@ func Detect() Env {
 	// happens when vllmctl is run against a stock image.
 	if known && len(d.Launcher) > 0 && isExecutable(d.Launcher[0]) {
 		e.Launcher = d.Launcher
-	}
-
-	if p := "/opt/vllm-tuner/tune_fp8_wrapper.py"; fsutil.Exists(p) {
-		e.TunerScript = p
 	}
 
 	return e

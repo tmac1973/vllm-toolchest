@@ -681,8 +681,7 @@ func compressedTensorsBits(groups map[string]json.RawMessage, format string) (in
 //
 // Only a "block" strategy counts. The other strategies name the axis the
 // scales apply over -- "tensor", "channel", "group", "token" -- and none of
-// them reaches the block-FP8 kernel, so treating them as blockwise would
-// promise a tuning win that cannot happen.
+// them is a blockwise scheme.
 func compressedTensorsBlockSize(groups map[string]json.RawMessage) []int {
 	for _, raw := range groups {
 		var grp struct {

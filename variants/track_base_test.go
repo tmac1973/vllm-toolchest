@@ -129,13 +129,11 @@ func (b *trackBed) point(tag, id string) {
 }
 
 // run sources setup.sh, points it at the fake runtime and runs a snippet for
-// the rdna4-clav variant. The tuner-ref reachability probe is stubbed: it is
-// a network call, and what it decides is tested on its own.
+// the rdna4-clav variant.
 func (b *trackBed) run(environ []string, snippet string) string {
 	b.t.Helper()
 	prelude := ". ./setup.sh\n" +
-		"CONTAINER_CMD=./fakectl\nBUILD_VARIANT=rdna4-clav\nGPU_VENDOR=rocm\n" +
-		"tuner_ref_fetchable() { [[ \"$1\" != " + unreachableCommit + " ]]; }\n"
+		"CONTAINER_CMD=./fakectl\nBUILD_VARIANT=rdna4-clav\nGPU_VENDOR=rocm\n"
 	cmd := exec.Command("bash", "-c", prelude+snippet)
 	cmd.Dir = b.dir
 	cmd.Env = append(os.Environ(), "FAKE_STATE="+b.state)
@@ -146,8 +144,6 @@ func (b *trackBed) run(environ []string, snippet string) string {
 	}
 	return string(out)
 }
-
-const unreachableCommit = "0123456789ab"
 
 // sourceSetupSh runs a snippet against the real setup.sh, for the functions
 // that need neither a runtime nor an .env.
@@ -205,7 +201,7 @@ func wantEnv(t *testing.T, env map[string]string, want map[string]string) {
 }
 
 // The three things a bare ":latest" would get wrong, in one pass: the image
-// is pulled, the pin and the tuner ref come out of it, and what it resolved to
+// is pulled, the pin comes out of it, and what it resolved to
 // is on record under a name that does not move.
 func TestTrackedBaseIsResolvedAndRecorded(t *testing.T) {
 	b := newTrackBed(t)
@@ -217,7 +213,6 @@ func TestTrackedBaseIsResolvedAndRecorded(t *testing.T) {
 		"VLLMCTL_BASE_IMAGE":   newAlias,
 		"VLLMCTL_BASE_DIGEST":  "docker.io/tcclaviger/vllm@sha256:" + newBase,
 		"VLLMCTL_VLLM_PIN":     "v0.29.0",
-		"VLLMCTL_TUNER_REF":    "2bdbbc8080",
 		"VLLMCTL_BASE_VLLM":    "0.29.0.dev0+g2bdbbc8080",
 		"VLLMCTL_BASE_RELEASE": "29.06.1",
 	})
@@ -240,7 +235,6 @@ func TestRefreshPullsEvenWhenTheTagIsAlreadyLocal(t *testing.T) {
 	wantEnv(t, env, map[string]string{
 		"VLLMCTL_BASE_IMAGE":    newAlias,
 		"VLLMCTL_VLLM_PIN":      "v0.29.0",
-		"VLLMCTL_TUNER_REF":     "2bdbbc8080",
 		"VLLMCTL_BASE_PREVIOUS": oldAlias,
 	})
 	// The way back has to be on disk, and the operator has to be told its name.
@@ -269,7 +263,6 @@ func TestQuickStaysOnTheRecordedBase(t *testing.T) {
 	wantEnv(t, b.env(), map[string]string{
 		"VLLMCTL_BASE_IMAGE":   oldAlias,
 		"VLLMCTL_VLLM_PIN":     "v0.27.0",
-		"VLLMCTL_TUNER_REF":    "55c98e370a",
 		"VLLMCTL_BASE_RELEASE": "28.04.9",
 		"VLLMCTL_BASE_DIGEST":  "docker.io/tcclaviger/vllm@sha256:" + oldBase,
 	})
@@ -354,7 +347,6 @@ func TestAnInstallFromBeforeTrackingStaysWhereItWas(t *testing.T) {
 	wantEnv(t, env, map[string]string{
 		"VLLMCTL_BASE_IMAGE": pinned,
 		"VLLMCTL_VLLM_PIN":   "v0.27.0",
-		"VLLMCTL_TUNER_REF":  "55c98e370a",
 		"HF_TOKEN":           "keepme",
 	})
 	if strings.Contains(b.calls(), "pull "+clavTag) {
@@ -367,44 +359,22 @@ func TestAnInstallFromBeforeTrackingStaysWhereItWas(t *testing.T) {
 	}
 }
 
-// A commit that exists only in the image author's fork cannot be fetched from
-// vllm-project/vllm. The release it was cut from is the same minor, which is
-// as close as the build's own assertion asks for.
-func TestAForkOnlyCommitFallsBackToTheRelease(t *testing.T) {
-	b := newTrackBed(t)
-	const forked = "dddddddddddd4444444444444444444444444444444444444444444444444444"
-	b.publish(forked, "0.29.0.dev0+g"+unreachableCommit, "29.07.0")
-	b.point(clavTag, forked)
-
-	b.build("refresh")
-
-	env := b.env()
-	wantEnv(t, env, map[string]string{"VLLMCTL_VLLM_PIN": "v0.29.0"})
-	if ref, set := env["VLLMCTL_TUNER_REF"]; set {
-		t.Errorf("VLLMCTL_TUNER_REF=%q for a commit that is not upstream; the build would 404 on it", ref)
-	}
-}
-
-// The pin is what the build asserts and the tuner ref is what it fetches, so
-// the rule that derives them is the one TestPinIsAFetchableRefOrTunerRefIsSet
-// asks a manifest author to apply by hand.
-func TestVersionsBecomePinAndTunerRef(t *testing.T) {
-	for _, tc := range []struct{ version, pin, ref string }{
-		{"0.29.0", "v0.29.0", ""},
-		{"0.29.0.dev0+g2bdbbc8080", "v0.29.0", "2bdbbc8080"},
-		{"0.27.0.dev0+g55c98e370a", "v0.27.0", "55c98e370a"},
-		{"0.23.1.dev1+g9ddef7117", "v0.23.1", "9ddef7117"},
+// The pin is the release a reported version belongs to: what the build
+// asserts, and the rule TestPinIsARelease asks a manifest author to apply by
+// hand.
+func TestVersionsBecomeAPin(t *testing.T) {
+	for _, tc := range []struct{ version, pin string }{
+		{"0.29.0", "v0.29.0"},
+		{"0.29.0.dev0+g2bdbbc8080", "v0.29.0"},
+		{"0.23.1.dev1+g9ddef7117", "v0.23.1"},
 		// setuptools-scm appends the date to a dirty tree.
-		{"0.29.0.dev0+g2bdbbc8.d20260928", "v0.29.0", "2bdbbc8"},
-		{"0.28.1.post1", "v0.28.1", ""},
-		// A local version that is not a commit names nothing fetchable.
-		{"0.28.0+rocm72", "v0.28.0", ""},
-		{"0.23.1rc0", "v0.23.1rc0", ""},
+		{"0.29.0.dev0+g2bdbbc8.d20260928", "v0.29.0"},
+		{"0.28.1.post1", "v0.28.1"},
+		{"0.28.0+rocm72", "v0.28.0"},
+		{"0.23.1rc0", "v0.23.1rc0"},
 	} {
-		out := strings.TrimRight(sourceSetupSh(t, "vllm_refs_from_version '"+tc.version+"'\n"), "\n")
-		pin, ref, _ := strings.Cut(out, " ")
-		if pin != tc.pin || ref != tc.ref {
-			t.Errorf("%s -> pin %q ref %q, want pin %q ref %q", tc.version, pin, ref, tc.pin, tc.ref)
+		if got := strings.TrimRight(sourceSetupSh(t, "vllm_pin_from_version '"+tc.version+"'\n"), "\n"); got != tc.pin {
+			t.Errorf("%s -> pin %q, want %q", tc.version, got, tc.pin)
 		}
 	}
 }

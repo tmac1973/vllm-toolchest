@@ -19,8 +19,8 @@ services:
       dockerfile: ${VLLMCTL_DOCKERFILE:-Dockerfile.rocm}
       args:
         # Prebuilt variants. BASE_IMAGE and VLLM_VERSION move together: the
-        # tuner benchmark script is fetched from the vLLM tag the base was
-        # built against, and the build fails if the image disagrees.
+        # build fails if the image's vLLM is not the release the manifest
+        # pins.
         #
         # Fully qualified on purpose. Podman resolves an unqualified name
         # against its unqualified-search-registries, which on Fedora/RHEL
@@ -31,7 +31,6 @@ services:
         VENV_ROOT: "${VLLMCTL_VENV_ROOT:-/opt/vllm}"
         STAMP_FILE: "${VLLMCTL_STAMP_FILE:-}"
         VLLM_VERSION: "${VLLMCTL_VLLM_PIN:-v0.27.1}"
-        TUNER_REF: "${VLLMCTL_TUNER_REF:-}"
 
         # From-source variants only. Harmless to the prebuilt Dockerfile,
         # which does not declare them: an unconsumed build arg is a warning,

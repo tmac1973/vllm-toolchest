@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,7 +21,6 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
-	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 	"github.com/tmac1973/vllm-toolchest/web"
 )
@@ -38,9 +38,12 @@ type Server struct {
 	bench      *benchmark.Store
 	benchSvc   *benchmark.Service
 	probe      *probeManager
-	tuner      *tuning.Manager
-	vllmEnv    vllmenv.Env
-	version    string
+	// probedDevice is the GPU name vLLM reports, set once the boot probe
+	// lands; see deviceName.
+	deviceMu     sync.RWMutex
+	probedDevice string
+	vllmEnv      vllmenv.Env
+	version      string
 
 	// gpuInvOverride fixes the GPU inventory the fit calculation is judged
 	// against. Nil in production, where it comes from the monitor.
@@ -106,9 +109,6 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 	s.benchSvc = benchmark.NewService(s.bench)
 	s.benchSvc.SetJobEnv(newJobEnv(s))
 	s.probe = newProbeManager(s)
-	s.tuner = tuning.NewManager(cfg.DataDir, cfg.DeviceNameSuffix(), env.TunerScript, s.process)
-	s.tuner.SetPython(env.Python)
-	s.tuner.SetConfigsDir(env.BlockFP8ConfigsDir)
 
 	reg.Maintenance()
 	go s.watchEngineTimings()
@@ -192,7 +192,6 @@ func (s *Server) initTemplates() {
 		"server.html",
 		"benchmarks.html",
 		"visualize.html",
-		"tuning.html",
 		"settings.html",
 		"help.html",
 	}
@@ -249,7 +248,6 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/server", s.handleServerPage)
 	r.Get("/benchmarks", s.handleBenchmarksPage)
 	r.Get("/benchmarks/visualize", s.handleVisualizePage)
-	r.Get("/tuning", s.handleTuningPage)
 	r.Get("/settings", s.handleSettingsPage)
 	r.Get("/help", s.handleHelpPage)
 
@@ -367,13 +365,6 @@ func (s *Server) buildRouter() chi.Router {
 		r.Route("/monitor", func(r chi.Router) {
 			r.Get("/", s.handleMonitorStatus)
 			r.Get("/stream", s.handleMonitorStream)
-		})
-		r.Route("/tuning", func(r chi.Router) {
-			r.Get("/status", s.handleTuningStatus)
-			r.Post("/start", s.handleStartTuning)
-			r.Post("/cancel", s.handleCancelTuning)
-			r.Get("/logs", s.handleTuningLogs)
-			r.Get("/log-stream", s.handleTuningLogStream)
 		})
 	})
 
@@ -670,21 +661,21 @@ func (s *Server) renderPartial(w io.Writer, name string, data any) {
 	}
 }
 
-// SetDeviceName updates the GPU device name tuned kernel configs are keyed by,
-// once the boot-time probe has resolved what the running vLLM reports.
+// SetDeviceName records the GPU device name, once the boot-time probe has
+// resolved what the running vLLM reports.
 func (s *Server) SetDeviceName(name string) {
-	if s.tuner != nil {
-		s.tuner.SetDeviceName(name)
-	}
+	s.deviceMu.Lock()
+	s.probedDevice = name
+	s.deviceMu.Unlock()
 }
 
-// deviceName is the live device name: the tuner holds the probed value, and
-// the config's architecture-derived one is the fallback before the probe lands.
+// deviceName is the live device name: the probed value, with the config's
+// architecture-derived one as the fallback before the probe lands.
 func (s *Server) deviceName() string {
-	if s.tuner != nil {
-		if n := s.tuner.DeviceName(); n != "" {
-			return n
-		}
+	s.deviceMu.RLock()
+	defer s.deviceMu.RUnlock()
+	if s.probedDevice != "" {
+		return s.probedDevice
 	}
 	return s.cfg.DeviceNameSuffix()
 }
