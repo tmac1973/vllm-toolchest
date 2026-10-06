@@ -103,6 +103,7 @@ test: js-test
 js-test:
 	@command -v node >/dev/null 2>&1 || { echo "js-test: node not installed, skipping"; exit 0; }
 	@node web/jstest/viz_test.js
+	@node web/jstest/log_panel_test.js
 
 # ─── Dev: rebuild Go binary and inject into running container ───────
 # Compiles on host, copies into container, restarts the process.
