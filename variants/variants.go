@@ -128,10 +128,6 @@ type Descriptor struct {
 	// for a from-source build, or PinFromImage when it is read out of the
 	// base at build time.
 	VLLMPin string
-	// TunerRef is the git ref the tuner benchmark script is fetched from,
-	// when the pin is not itself one. A base built between releases reports
-	// a version with no tag behind it.
-	TunerRef string
 
 	GFXTargets []string
 	HostArch   string
@@ -400,7 +396,6 @@ func parse(id string, src string) (Descriptor, error) {
 		Dockerfile:     kv["VARIANT_DOCKERFILE"],
 		NeedsFlatten:   kv["VARIANT_NEEDS_FLATTEN"] == "1",
 		VLLMPin:        kv["VARIANT_VLLM_PIN"],
-		TunerRef:       kv["VARIANT_TUNER_REF"],
 		GFXTargets:     strings.Fields(kv["VARIANT_GFX_TARGETS"]),
 		HostArch:       kv["VARIANT_HOST_ARCH"],
 		VenvRoot:       kv["VARIANT_VENV_ROOT"],
@@ -582,7 +577,7 @@ func groupKnobs(kv map[string]string, knobs []Knob) []Group {
 
 // PinFromImage is the VARIANT_VLLM_PIN value meaning the pin is not stated:
 // setup.sh reads the vLLM version out of the base image and derives the pin
-// and the tuner ref from that.
+// from that.
 const PinFromImage = "image"
 
 // TracksBase reports whether the variant follows a base tag that moves.
@@ -616,9 +611,6 @@ func (d Descriptor) Validate() error {
 	if d.VLLMPin == PinFromImage {
 		if d.BaseImage == "" {
 			return fmt.Errorf("VARIANT_VLLM_PIN='%s' but there is no VARIANT_BASE_IMAGE to read it from", PinFromImage)
-		}
-		if d.TunerRef != "" {
-			return fmt.Errorf("VARIANT_TUNER_REF is set, but VARIANT_VLLM_PIN='%s' reads the tuner ref out of the base as well", PinFromImage)
 		}
 	}
 

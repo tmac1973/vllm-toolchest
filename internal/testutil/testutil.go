@@ -12,7 +12,7 @@ import (
 
 // WriteScript writes body as an executable /bin/sh script in a fresh temp
 // directory and returns its path. body is everything after the #! line. It
-// stands in for vLLM, the tuner or any other child a test needs to start.
+// stands in for vLLM or any other child a test needs to start.
 func WriteScript(t testing.TB, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fake")

@@ -306,11 +306,6 @@ func TestValidateRejects(t *testing.T) {
 			"no VARIANT_BASE_IMAGE to read it from",
 		},
 		{
-			"a tuner ref beside a pin read from the image",
-			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:1.0'\nVARIANT_VLLM_PIN='image'\nVARIANT_TUNER_REF='abc1234'\n",
-			"reads the tuner ref out of the base as well",
-		},
-		{
 			"bad tier",
 			"VARIANT_ID='t'\nVARIANT_LABEL='T'\nVARIANT_TIER='probably fine'\nKNOBS=''\n",
 			"not tested, community or experimental",

@@ -15,7 +15,6 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/api"
 	"github.com/tmac1973/vllm-toolchest/internal/config"
-	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 )
 
@@ -71,11 +70,6 @@ func main() {
 
 	slog.Info("vLLM environment", "variant", env.Variant, "venv", env.VenvRoot,
 		"launcher", strings.Join(env.Launcher, " "), "variant_version", env.VariantVersion)
-
-	// Hot-link any operator-tuned kernel configs into vLLM's site-packages
-	// so vLLM picks them up on next launch. No-op when nothing's been tuned
-	// or when running outside the container.
-	installTuned(cfg.DataDir, cfg.DeviceNameSuffix(), env)
 
 	srv := api.NewServerWithEnv(cfg, env, version)
 
@@ -133,7 +127,6 @@ func initDataDir(dataDir string) error {
 	dirs := []string{
 		filepath.Join(dataDir, "config"),
 		filepath.Join(dataDir, "models"),
-		filepath.Join(dataDir, "tuned-kernels"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -141,21 +134,6 @@ func initDataDir(dataDir string) error {
 		}
 	}
 	return nil
-}
-
-// installTuned links operator-tuned kernel configs into vLLM's config dir.
-func installTuned(dataDir, deviceName string, env vllmenv.Env) {
-	if deviceName == "" {
-		return
-	}
-	n, warn, err := tuning.InstallTunedConfigs(dataDir, deviceName, env.BlockFP8ConfigsDir)
-	if err != nil {
-		slog.Warn("install tuned kernel configs", "error", err)
-		return
-	}
-	if n > 0 {
-		slog.Info("installed tuned kernel configs", "count", n, "device", deviceName, "warnings", warn)
-	}
 }
 
 // archFromDeviceName extracts the gfx target from a device name that encodes
@@ -287,11 +265,9 @@ func resolveSupportedArchs(cfg *config.Config, env vllmenv.Env, srv *api.Server)
 // The name cannot be derived from the gfx target. On a gfx1201 build the
 // generic image patches get_device_name to return "AMD-gfx1201", while the
 // radiance image leaves it reporting "AMD_Radeon_R9700"; on any other target
-// no patch applies and vLLM reports whatever the driver says. Tuning against
-// the wrong one writes correctly-formatted JSON that vLLM never reads,
-// silently.
+// no patch applies and vLLM reports whatever the driver says.
 //
-// The result is handed to the tuner (which guards it with its own mutex) and
+// The result is handed to the server (which guards it with its own mutex) and
 // written to a cache file rather than back into the shared Config: the HTTP
 // handlers mutate that config, and this runs concurrently with them.
 func resolveDeviceName(cfg *config.Config, env vllmenv.Env, srv *api.Server) {
@@ -318,7 +294,4 @@ func resolveDeviceName(cfg *config.Config, env vllmenv.Env, srv *api.Server) {
 	if err := writeCachedDeviceName(cfg.DataDir, cfg.GPUArch, name); err != nil {
 		slog.Warn("could not cache device name", "error", err)
 	}
-	// Tuned configs are keyed by device name, so the corrected name may make
-	// previously-unlinkable results linkable.
-	installTuned(cfg.DataDir, name, env)
 }

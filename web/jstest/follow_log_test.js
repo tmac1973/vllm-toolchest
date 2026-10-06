@@ -2,8 +2,8 @@
 // with its buffer's backlog and then fed by a live stream.
 //
 // The order those two arrive in is not under the page's control. The
-// backlog must never land on top of lines that streamed in first -- the
-// tuning page used to assign it over them -- so each order is driven here by
+// backlog must never land on top of lines that streamed in first -- a log
+// page once assigned it over them -- so each order is driven here by
 // hand, with a stub EventSource and a fetch whose answer the test releases.
 
 const fs = require('fs');

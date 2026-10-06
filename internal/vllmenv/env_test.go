@@ -41,11 +41,6 @@ func TestDetectFindsVenvViaOverride(t *testing.T) {
 	if want := filepath.Join(root, "bin", "python"); e.Python != want {
 		t.Errorf("Python = %q, want %q", e.Python, want)
 	}
-	wantCfg := filepath.Join(root, "lib/python3.12/site-packages",
-		"vllm/model_executor/layers/quantization/utils/configs")
-	if e.BlockFP8ConfigsDir != wantCfg {
-		t.Errorf("BlockFP8ConfigsDir = %q, want %q", e.BlockFP8ConfigsDir, wantCfg)
-	}
 }
 
 // The two images ship different Python minor versions over time, so the venv
@@ -60,7 +55,7 @@ func TestDetectMatchesAnyPython3Minor(t *testing.T) {
 }
 
 // A directory that looks like a venv but has no vLLM in it must not be taken:
-// otherwise the tuner would symlink configs into a package that isn't there.
+// otherwise every probe would run against a package that isn't there.
 func TestDetectSkipsVenvWithoutVLLM(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "empty")
 	if err := os.MkdirAll(filepath.Join(root, "lib/python3.12/site-packages"), 0o755); err != nil {
@@ -168,8 +163,7 @@ func TestStampVersion(t *testing.T) {
 	}
 }
 
-// The venv is where every tuned-kernel path, the bitsandbytes check and the
-// tuner all point. Probing must cover the running variant's declared root and
+// The venv is where the probes and the bitsandbytes check all point. Probing must cover the running variant's declared root and
 // every other one, because an operator who overrides the variant should still
 // end up with a working install.
 func TestVenvCandidatesCoverEveryDeclaredRoot(t *testing.T) {

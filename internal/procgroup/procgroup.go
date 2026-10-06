@@ -3,9 +3,8 @@
 // child.
 //
 // vLLM and the tools built on it are never one process: importing vLLM forks
-// an EngineCore and per-rank workers, and the ROCm tuner forks workers of its
-// own. Those are grandchildren. Killing only the direct child orphans them,
-// and an orphan that reached the GPU keeps its context -- and its VRAM --
+// an EngineCore and per-rank workers. Those are grandchildren. Killing only
+// the direct child orphans them, and an orphan that reached the GPU keeps its context -- and its VRAM --
 // alive, so the next start fails on free memory with nothing on screen
 // saying why. A new group is what makes kill(-pgid) safe: the workers inherit
 // it, and vllmctl, which is not in it, is not signalled.

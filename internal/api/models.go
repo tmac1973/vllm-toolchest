@@ -9,7 +9,6 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
-	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 )
 
 // modelRow is one card on the models page.
@@ -35,22 +34,13 @@ type modelRow struct {
 	// SearchText is what the filter box matches against, lowercased once here
 	// rather than on every keystroke.
 	SearchText string
-	// Tunable reports whether kernel tuning could do anything for this model:
-	// a block-quantized FP8 checkpoint with at least one shape the block
-	// kernel will take. Derived from the model alone, deliberately — the
-	// button appears for a property of the checkpoint, not for the state of
-	// the tuner, and the start endpoint rejects a second concurrent job.
-	Tunable bool
-	// TunableShapes is how many distinct matmul shapes tuning would measure,
-	// shown in the button's tooltip so the cost is visible before clicking.
-	TunableShapes int
 	// Autoconfigurable is a model autoconfigure can propose a config for:
 	// not a draft, not missing its files.
 	Autoconfigurable bool
 
 	// Draft marks a drafter for speculative decoding. It is listed because
 	// it is on disk and can be updated or removed, and it is not something
-	// to activate, configure or tune.
+	// to activate or configure.
 	Draft bool
 	// DraftMethod is the speculative method it is used with, for the badge.
 	DraftMethod string
@@ -133,7 +123,7 @@ func (s *Server) modelRows() []modelRow {
 		}
 		if m.IsDraft() {
 			// None of what follows describes a draft: it has no launch
-			// config of its own, so no VRAM figure, tools badge or tuning.
+			// config of its own, so no VRAM figure or tools badge.
 			row.Draft = true
 			row.DraftMethod = m.HFConfig.Draft.Method
 			row.VRAM = vramLabel{}
@@ -147,16 +137,6 @@ func (s *Server) modelRows() []modelRow {
 		}
 		if m.ToolUse.HasToolSupport {
 			row.ToolParser = m.ToolUse.ToolCallParser
-		}
-		// Same test the Tuning page applies, so the two pages cannot disagree
-		// about which models are worth tuning.
-		if m.Quantization.IsBlockFP8() {
-			tp := m.VLLMConfig.TensorParallelSize
-			if tp < 1 {
-				tp = 1
-			}
-			row.TunableShapes = len(tuning.DeriveShapes(m.HFConfig, tp, 128, 128))
-			row.Tunable = row.TunableShapes > 0
 		}
 		// Only worth flagging while something is actually running: with the
 		// server stopped, Start will pick up the choice anyway.

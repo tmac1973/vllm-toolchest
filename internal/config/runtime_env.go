@@ -250,11 +250,10 @@ func (e EnvSet) Validate() error {
 // launched with the container environment plus these values appended, and the
 // later entry wins, so anything set here overrides what the image exports.
 var riskyEnvVars = map[string]string{
-	"HIP_VISIBLE_DEVICES":  "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
-	"ROCR_VISIBLE_DEVICES": "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
-	"CUDA_VISIBLE_DEVICES": "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
-	"HSA_OVERRIDE_GFX_VERSION": "only needed for GPUs ROCm doesn't support natively; on a supported card it selects kernels built for a different architecture, " +
-		"and it also changes the device name vLLM uses to look up tuned kernel configs, so the Tuning tab's output stops being found",
+	"HIP_VISIBLE_DEVICES":          "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
+	"ROCR_VISIBLE_DEVICES":         "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
+	"CUDA_VISIBLE_DEVICES":         "hides GPUs from vLLM, so tensor parallel size and the GPU indices shown on the dashboard stop agreeing with what the engine sees",
+	"HSA_OVERRIDE_GFX_VERSION":     "only needed for GPUs ROCm doesn't support natively; on a supported card it selects kernels built for a different architecture",
 	"HF_HOME":                      "moves the HuggingFace cache this tool downloads into and scans; models already downloaded become invisible to the Models page",
 	"HF_HUB_CACHE":                 "moves the HuggingFace cache this tool downloads into and scans; models already downloaded become invisible to the Models page",
 	"VLLM_TARGET_DEVICE":           "selects the backend vLLM is compiled for; it is read at build time, so setting it at runtime cannot change anything",

@@ -251,14 +251,7 @@ RUN git clone --depth 1 -b ${VLLM_VERSION} \
     echo "building vLLM with MAX_JOBS=$MAX_JOBS" && \
     pip wheel --no-build-isolation --no-deps -w /tmp/vllm-wheel . && \
     pip install --no-cache-dir /tmp/vllm-wheel/*.whl && \
-    mkdir -p /opt/vllm-tuner && \
-    cp /tmp/vllm/benchmarks/kernels/benchmark_w8a8_block_fp8.py /opt/vllm-tuner/ && \
     rm -rf /tmp/vllm /tmp/vllm-wheel /tmp/rocm_vllm_patches.py
-
-# ── Kernel-tuning wrapper ─────────────────────────────────────────
-# The Go side spawns `python /opt/vllm-tuner/tune_fp8_wrapper.py …` and
-# the wrapper imports `benchmark_w8a8_block_fp8` from the same dir.
-COPY scripts/tune_fp8_wrapper.py /opt/vllm-tuner/tune_fp8_wrapper.py
 
 # Verify the install. `import vllm` cannot complete on this builder, and that
 # is not a defect in the wheel: vllm/__init__.py imports env_override, which

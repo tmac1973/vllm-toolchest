@@ -74,9 +74,6 @@ func (s *Server) engineBusy() string {
 			return "A context probe is running."
 		}
 	}
-	if s.tuner != nil && s.tuner.ActiveJob() != nil {
-		return "Kernel tuning is running."
-	}
 	if s.lease.heldBy() != "" {
 		return "Autoconfigure is reading a model card."
 	}

@@ -97,13 +97,13 @@ func TestSendLineSeparatesEvents(t *testing.T) {
 func TestSendEventCarriesTheEventName(t *testing.T) {
 	w := httptest.NewRecorder()
 	sse, _ := NewSSEWriter(w)
-	sse.SendEvent("done", "tuning job ended")
+	sse.SendEvent("done", "job ended")
 
 	frame := w.Body.String()
 	if !strings.HasPrefix(frame, "event: done\n") {
 		t.Errorf("missing event name: %q", frame)
 	}
-	if got := browserData(frame); got != "tuning job ended" {
+	if got := browserData(frame); got != "job ended" {
 		t.Errorf("data = %q", got)
 	}
 }

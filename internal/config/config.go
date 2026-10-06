@@ -97,14 +97,13 @@ type Config struct {
 	// Defaults to the GPU_ARCH env var the Dockerfile sets at build time.
 	GPUArch string `yaml:"gpu_arch"`
 
-	// VLLMDeviceName is the exact string vLLM interpolates into tuned-kernel
-	// filenames. Left empty it is probed from the running vLLM at boot and
-	// cached here; the GPUArch-derived value is only a last-resort fallback.
+	// VLLMDeviceName is the name vLLM gives this GPU, shown on the Settings
+	// page. Left empty it is probed from the running vLLM at boot and cached
+	// here; the GPUArch-derived value is only a last-resort fallback.
 	//
-	// This must not be guessed: the generic image patches get_device_name to
-	// return "AMD-gfx1201", while the radiance image leaves it reporting the
-	// marketing name ("AMD_Radeon_R9700"). Tuning against the wrong one
-	// produces correctly-formatted files vLLM never reads.
+	// It is not guessed: the generic image patches get_device_name to return
+	// "AMD-gfx1201", while the radiance image leaves it reporting the
+	// marketing name ("AMD_Radeon_R9700").
 	VLLMDeviceName string `yaml:"vllm_device_name"`
 
 	// Knobs holds the image-variant feature switches, keyed by variant id
@@ -394,9 +393,8 @@ func applyKnobEnvOverrides(cfg *Config) {
 	}
 }
 
-// DeviceNameSuffix is the value vLLM expects in tuned kernel config
-// filenames (e.g. "AMD-gfx1201" on the generic image, "AMD_Radeon_R9700" on
-// radiance).
+// DeviceNameSuffix is the name vLLM gives this GPU (e.g. "AMD-gfx1201" on the
+// generic image, "AMD_Radeon_R9700" on radiance), shown on the Settings page.
 //
 // A name probed from the running vLLM always wins. The GPUArch-derived value
 // is the fallback, and is only correct on images carrying kyuz0's RDNA4 patch
