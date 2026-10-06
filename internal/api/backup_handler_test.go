@@ -274,23 +274,22 @@ func TestARestoreRefusesAnOversizedFile(t *testing.T) {
 	s := bkpServer(t)
 	before := s.cfg.MaxNumSeqs
 
-	// Garbage past the limit: refused because what was read does not parse.
+	// Garbage past the limit: refused for its size.
 	junk := bytes.Repeat([]byte("x"), restoreFileLimit+1)
 	rec := bkpRestore(t, s, junk, false, bkpAllSections...)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("oversized junk: status %d, want 400", rec.Code)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized junk: status %d, want 413", rec.Code)
 	}
 	bkpJSONError(t, rec)
 
-	// A real backup padded past the limit. The handler truncates rather than
-	// refuses, so the valid prefix parses and is applied.
+	// A real backup padded past the limit must be refused, not cut at the
+	// limit and its valid prefix applied.
 	t.Run("valid prefix", func(t *testing.T) {
-		t.Skip("production bug: handleRestore truncates an oversized upload with io.LimitReader instead of refusing it, so a valid backup padded past restoreFileLimit is applied (backup.go handleRestore)")
 		f := []byte(`{"version": 2, "settings": {"max_num_seqs": 99}}`)
 		padded := append(f, bytes.Repeat([]byte(" "), restoreFileLimit)...)
 		rec := bkpRestore(t, s, padded, false, bkpAllSections...)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("status %d, want 400", rec.Code)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("status %d, want 413", rec.Code)
 		}
 		if s.cfg.MaxNumSeqs != before {
 			t.Errorf("an oversized file was applied: max_num_seqs=%d", s.cfg.MaxNumSeqs)

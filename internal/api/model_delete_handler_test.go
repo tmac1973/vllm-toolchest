@@ -117,7 +117,6 @@ func TestDeletingAModelFromAReadOnlyRegistryKeepsEverything(t *testing.T) {
 	// handleDiscardPending answers this case with 409 so the refusal is not
 	// read as a missing entry; delete answers 404 "not found".
 	t.Run("status", func(t *testing.T) {
-		t.Skip("production bug: handleDeleteModel maps every registry error to 404, so a read-only refusal reads as 'model not found' (models.go handleDeleteModel)")
 		if rec.Code != http.StatusConflict {
 			t.Errorf("status %d, want 409", rec.Code)
 		}

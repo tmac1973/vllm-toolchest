@@ -112,7 +112,6 @@ func TestEditingAJobRewritesAndResubmitsIt(t *testing.T) {
 // caller is told 409 yet the job has already changed and now sits "pending"
 // with nothing to ever run it.
 func TestEditingAJobWhileAnotherRunsLeavesItUntouched(t *testing.T) {
-	t.Skip("production bug: handleUpdateJob persists the edit before SubmitJob refuses it (bench_jobs.go:223-243)")
 	s := newGoldenServer(t, goldenEnvGeneric)
 	bhSaveJob(t, s, bhJob("idle", benchmark.JobStatusCompleted))
 	bhStartActiveJob(t, s, "busy")
@@ -195,7 +194,6 @@ func TestRetryingResetsOnlyFailedAndSkippedCells(t *testing.T) {
 // saves the reset cells and a pending status before SubmitJob refuses, so the
 // job sits "pending" forever while the caller was told 409.
 func TestRetryingWhileAnotherJobRunsLeavesTheJobUntouched(t *testing.T) {
-	t.Skip("production bug: handleRetryFailedCells saves the reset job before SubmitJob refuses it (bench_jobs.go:292-307)")
 	s := newGoldenServer(t, goldenEnvGeneric)
 	job := bhJob("idle", benchmark.JobStatusFailed)
 	job.Cells[0].Status = benchmark.CellStatusFailed
@@ -276,7 +274,6 @@ func TestDeletingAJobOrphansOrCascadesItsRuns(t *testing.T) {
 // disposition, so the 400 comes back with the job already gone (and the
 // removal reaches disk on the next unrelated save).
 func TestDeletingAJobWithAnUnknownDispositionKeepsTheJob(t *testing.T) {
-	t.Skip("production bug: Store.DeleteJob drops the job before rejecting the disposition (benchmark/store.go:410-440)")
 	s := newGoldenServer(t, goldenEnvGeneric)
 	bhSaveJob(t, s, bhJob("j1", benchmark.JobStatusCompleted))
 

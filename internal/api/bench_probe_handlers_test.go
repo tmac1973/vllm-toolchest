@@ -114,7 +114,6 @@ func TestProbeStartIsRefusedWhileAnotherProbeRuns(t *testing.T) {
 // a refusal sent with http.Error leaves the form sitting there with no
 // reason given. Every other benchmark form answers htmx through s.fail.
 func TestProbeStartRefusalIsVisibleToHTMX(t *testing.T) {
-	t.Skip("production gap: handleStartContextProbe refuses with http.Error, not s.fail (bench_probe.go:74-94)")
 	s := prbServer(t)
 	w := prbStart(s, "application/x-www-form-urlencoded", "model_id=", true)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "model_id is required") {
@@ -192,7 +191,6 @@ func TestProbeApplyLeavesOmittedValuesAlone(t *testing.T) {
 // only). htmx therefore posts the hx-vals form-encoded, the handler insists on
 // JSON, and every click is a 400 that htmx does not display.
 func TestProbeApplyAcceptsWhatTheApplyButtonSends(t *testing.T) {
-	t.Skip("production bug: Apply posts form-encoded (json-enc is never loaded) and handleApplyProbe only reads JSON (bench_probe.go:236)")
 	s := prbServer(t)
 	form := url.Values{"model_id": {bhModel}, "max_model_len": {"12345"}}
 	w := prbApply(s, "application/x-www-form-urlencoded", form.Encode(), true)

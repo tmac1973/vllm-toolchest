@@ -259,9 +259,6 @@ func TestHFDownloadRefusesAMissingModelID(t *testing.T) {
 // owner/name shape must not start a transfer, and above all one that climbs
 // out of the models directory must not write there.
 func TestHFDownloadRefusesAMalformedModelID(t *testing.T) {
-	t.Skip("production bug: handleHFDownload validates only that model_id is non-empty; " +
-		"\"acme/../../escape\" downloads into <data_dir>/escape, outside the models directory, " +
-		"and \"noslash\" or \"a/b/c\" start transfers too (hf.go handleHFDownload, model_update.go startTransfer)")
 
 	for _, id := range []string{"acme/../../escape", "../escape", "noslash", "a/b/c", "acme/.."} {
 		t.Run(id, func(t *testing.T) {
