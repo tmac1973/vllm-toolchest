@@ -1,9 +1,9 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -59,35 +59,15 @@ type createJobRequest struct {
 }
 
 // handleCreateJob persists a new batch job and dispatches it.
-// jobFail reports a rejected job submission. htmx does not swap a non-2xx
-// response, so an htmx caller given http.Error sees nothing at all — the
-// button clicks, the form sits there, and the reason is only in the network
-// tab. It gets 200 and the error partial instead; everything else keeps real
-// status codes.
-func (s *Server) jobFail(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	if isHTMX(r) {
-		respondHTML(w)
-		s.renderPartial(w, "error_message", msg)
-		return
-	}
-	http.Error(w, msg, status)
-}
-
 // parseJobRequest reads a job definition from JSON or the form. Shared by
 // create and update so the two cannot drift on what a field means.
 func (s *Server) parseJobRequest(w http.ResponseWriter, r *http.Request) (createJobRequest, bool) {
 	var req createJobRequest
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jobFail(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return req, false
-		}
-	} else {
-		if err := r.ParseForm(); err != nil {
-			s.jobFail(w, r, http.StatusBadRequest, "invalid form")
-			return req, false
-		}
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return req, false
+	}
+	if !isJSON {
 		req.Name = r.FormValue("name")
 		req.Description = r.FormValue("description")
 		req.ModelIDs = r.Form["model_ids"]
@@ -106,7 +86,7 @@ func (s *Server) parseJobRequest(w http.ResponseWriter, r *http.Request) (create
 			}
 			values, err := benchmark.ParseSweepValues(f, raw)
 			if err != nil {
-				s.jobFail(w, r, http.StatusBadRequest, err.Error())
+				s.fail(w, r, http.StatusBadRequest, err.Error())
 				return req, false
 			}
 			if len(values) > 0 {
@@ -122,11 +102,11 @@ func (s *Server) parseJobRequest(w http.ResponseWriter, r *http.Request) (create
 // problem. Shared by create and update for the same reason as the parse.
 func (s *Server) validateJobRequest(w http.ResponseWriter, r *http.Request, req createJobRequest) bool {
 	if len(req.ModelIDs) == 0 {
-		s.jobFail(w, r, http.StatusBadRequest, "at least one model is required")
+		s.fail(w, r, http.StatusBadRequest, "at least one model is required")
 		return false
 	}
 	if len(req.Presets) == 0 {
-		s.jobFail(w, r, http.StatusBadRequest, "at least one preset is required")
+		s.fail(w, r, http.StatusBadRequest, "at least one preset is required")
 		return false
 	}
 	if req.Name == "" {
@@ -135,21 +115,17 @@ func (s *Server) validateJobRequest(w http.ResponseWriter, r *http.Request, req 
 
 	for _, m := range req.ModelIDs {
 		if _, ok := s.registry.Get(m); !ok {
-			s.jobFail(w, r, http.StatusBadRequest, "model not registered: "+m)
+			s.fail(w, r, http.StatusBadRequest, "model not registered: "+m)
 			return false
 		}
 	}
 	if err := benchmark.ValidateSweeps(req.Sweeps); err != nil {
-		s.jobFail(w, r, http.StatusBadRequest, err.Error())
+		s.fail(w, r, http.StatusBadRequest, err.Error())
 		return false
 	}
-	presetSet := map[string]bool{}
-	for _, p := range benchmark.Presets() {
-		presetSet[p.Name] = true
-	}
 	for _, p := range req.Presets {
-		if !presetSet[p] {
-			s.jobFail(w, r, http.StatusBadRequest, "unknown preset: "+p)
+		if _, ok := benchmark.LookupPreset(p); !ok {
+			s.fail(w, r, http.StatusBadRequest, "unknown preset: "+p)
 			return false
 		}
 	}
@@ -187,19 +163,21 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.bench.SaveJob(job); err != nil {
-		s.jobFail(w, r, http.StatusInternalServerError, "save job: "+err.Error())
+		s.fail(w, r, http.StatusInternalServerError, "save job: "+err.Error())
 		return
 	}
 
 	if err := s.benchSvc.SubmitJob(job); err != nil {
 		// Roll the job back to failed so the UI doesn't show it forever-pending.
 		job.Status = benchmark.JobStatusFailed
-		_ = s.bench.SaveJob(job)
+		if serr := s.bench.SaveJob(job); serr != nil {
+			slog.Error("failed to record a benchmark job that did not start", "id", job.ID, "error", serr)
+		}
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			s.jobFail(w, r, http.StatusConflict, err.Error())
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -230,7 +208,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == benchmark.AdhocJobID {
-		s.jobFail(w, r, http.StatusBadRequest, "the Ad-Hoc Runs list is not a job that can be edited")
+		s.fail(w, r, http.StatusBadRequest, "the Ad-Hoc Runs list is not a job that can be edited")
 		return
 	}
 
@@ -239,6 +217,12 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.validateJobRequest(w, r, req) {
+		return
+	}
+	// Checked before the edit is saved: saved and then refused, the job
+	// would sit pending with its new definition and nothing to run it.
+	if s.benchSvc.Busy() {
+		s.fail(w, r, http.StatusConflict, benchmark.ErrRunAlreadyActive.Error())
 		return
 	}
 
@@ -251,16 +235,16 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 		Sweeps:      req.Sweeps,
 	})
 	if err != nil {
-		s.jobFail(w, r, http.StatusNotFound, err.Error())
+		s.fail(w, r, http.StatusNotFound, err.Error())
 		return
 	}
 
 	if err := s.benchSvc.SubmitJob(*updated); err != nil {
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			s.jobFail(w, r, http.StatusConflict, err.Error())
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		s.jobFail(w, r, http.StatusInternalServerError, err.Error())
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -294,7 +278,13 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	job, err := s.bench.GetJob(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, err.Error())
+		return
+	}
+	// As for an edit: refused after the reset was saved, the job would be
+	// left pending with nothing to run it.
+	if s.benchSvc.Busy() {
+		s.fail(w, r, http.StatusConflict, benchmark.ErrRunAlreadyActive.Error())
 		return
 	}
 
@@ -307,7 +297,7 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if count == 0 {
-		http.Error(w, "no failed or skipped cells to retry", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "no failed or skipped cells to retry")
 		return
 	}
 
@@ -315,16 +305,16 @@ func (s *Server) handleRetryFailedCells(w http.ResponseWriter, r *http.Request) 
 	job.StartedAt = time.Time{}
 	job.FinishedAt = time.Time{}
 	if err := s.bench.SaveJob(*job); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	if err := s.benchSvc.SubmitJob(*job); err != nil {
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

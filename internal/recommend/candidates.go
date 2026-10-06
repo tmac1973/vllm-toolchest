@@ -208,7 +208,7 @@ func leastWeightGB(s *huggingface.Safetensors) (float64, bool) {
 // compute, to be dropped one by one after their configs were fetched.
 func coarseFilter(pool []huggingface.ModelSearchResult, p Profile) []huggingface.ModelSearchResult {
 	cards := float64(p.Inventory.Count) * p.Inventory.PerCardGB
-	ram := max(0, 0.9*p.HostRAMGB-7*float64(p.Inventory.Count)-5)
+	ram := max(0, models.OffloadHostRAMGB(p.HostRAMGB, p.Inventory.Count))
 	return slices.DeleteFunc(slices.Clone(pool), func(r huggingface.ModelSearchResult) bool {
 		gb, ok := leastWeightGB(r.Safetensors)
 		if !ok {
@@ -292,7 +292,7 @@ func servable(r huggingface.ModelSearchResult) bool {
 // cards and the RAM together is left out before the fit.
 func fetchFeatured(ctx context.Context, hub Hub, p Profile) []huggingface.ModelSearchResult {
 	var out []huggingface.ModelSearchResult
-	ram := max(0, 0.9*p.HostRAMGB-7*float64(p.Inventory.Count)-5)
+	ram := max(0, models.OffloadHostRAMGB(p.HostRAMGB, p.Inventory.Count))
 	bound := float64(p.Inventory.Count)*p.Inventory.PerCardGB + ram
 	for _, author := range p.Featured {
 		batch, err := hub.Candidates(ctx, huggingface.CandidateQuery{Author: author, Sort: "downloads", Limit: 100})

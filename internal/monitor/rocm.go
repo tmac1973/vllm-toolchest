@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,7 +47,7 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) < 2 {
-		return nil, fmt.Errorf("rocm-smi: unexpected output")
+		return nil, errors.New("rocm-smi: unexpected output")
 	}
 
 	header := strings.Split(lines[0], ",")
@@ -69,7 +70,7 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 	// fallback — consistent by construction — takes over.
 	busCol, ok := colIdx["PCI Bus"]
 	if !ok {
-		return nil, fmt.Errorf("rocm-smi: no PCI Bus column")
+		return nil, errors.New("rocm-smi: no PCI Bus column")
 	}
 
 	// KFD-ordered devices: position N is the GPU vLLM addresses as N.
@@ -86,7 +87,7 @@ func (r *rocmBackend) collectROCmSMI() ([]GPUInfo, error) {
 		}
 
 		if busCol >= len(fields) {
-			return nil, fmt.Errorf("rocm-smi: row without PCI Bus field")
+			return nil, errors.New("rocm-smi: row without PCI Bus field")
 		}
 		bdf := strings.ToLower(strings.TrimSpace(fields[busCol]))
 		idx, ok := byBDF[bdf]
@@ -203,7 +204,7 @@ func (r *rocmBackend) collectSysfs() ([]GPUInfo, error) {
 	}
 
 	if len(gpus) == 0 {
-		return nil, fmt.Errorf("no AMD GPUs found in sysfs")
+		return nil, errors.New("no AMD GPUs found in sysfs")
 	}
 	return gpus, nil
 }

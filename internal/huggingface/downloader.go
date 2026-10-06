@@ -28,6 +28,8 @@ type Downloader struct {
 	onComplete    CompletionFunc
 	// baseURL is the Hub's origin. Only ever the real one outside tests.
 	baseURL string
+	// httpClient fetches the files. See newDownloadClient.
+	httpClient *http.Client
 
 	mu     sync.Mutex
 	active map[string]*download
@@ -40,8 +42,19 @@ func NewDownloader(dataDir, modelsDir, token string) *Downloader {
 		token:         token,
 		maxConcurrent: 3,
 		baseURL:       baseURL,
+		httpClient:    newDownloadClient(),
 		active:        make(map[string]*download),
 	}
+}
+
+// newDownloadClient has no overall Timeout, unlike the API client: a weight
+// shard can take an hour to arrive, and a Timeout covers reading the body.
+// What it does bound is waiting for the Hub to answer at all, so a request
+// to a hung server fails instead of sitting in the queue forever.
+func newDownloadClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 60 * time.Second
+	return &http.Client{Transport: t}
 }
 
 // SetBaseURL points the downloader at a different origin, for tests.
@@ -100,9 +113,6 @@ type download struct {
 	status    string
 	errMsg    string
 	startedAt time.Time
-
-	subMu sync.Mutex
-	subs  map[chan DownloadProgress]struct{}
 }
 
 type fileState struct {
@@ -110,18 +120,6 @@ type fileState struct {
 	size       int64
 	downloaded int64
 	status     string
-}
-
-func (dl *download) broadcast() {
-	progress := dl.getProgress()
-	dl.subMu.Lock()
-	for ch := range dl.subs {
-		select {
-		case ch <- progress:
-		default:
-		}
-	}
-	dl.subMu.Unlock()
 }
 
 func (dl *download) getProgress() DownloadProgress {
@@ -197,6 +195,9 @@ type Request struct {
 // of a two-file update is out of two and not out of forty.
 func (d *Downloader) Start(req Request) (string, error) {
 	modelID := req.ModelID
+	if err := CheckModelID(modelID); err != nil {
+		return "", err
+	}
 	id := DownloadID(modelID)
 
 	for _, f := range req.Files {
@@ -216,7 +217,7 @@ func (d *Downloader) Start(req Request) (string, error) {
 			d.mu.Unlock()
 			return id, nil // already downloading
 		}
-		// A settled entry lingers for 30s so late subscribers can read its
+		// A settled entry lingers for 30s so a late progress poll can read its
 		// final state. Resuming inside that window has to replace it, or the
 		// resume silently becomes a no-op that returns the dead download's id.
 		delete(d.active, id)
@@ -254,7 +255,6 @@ func (d *Downloader) Start(req Request) (string, error) {
 		totalBytes: totalBytes,
 		status:     "downloading",
 		startedAt:  time.Now(),
-		subs:       make(map[chan DownloadProgress]struct{}),
 	}
 	d.active[id] = dl
 	d.mu.Unlock()
@@ -340,7 +340,6 @@ func (d *Downloader) run(ctx context.Context, t *transfer, plan Plan, removeStal
 	}
 	status := dl.status
 	dl.mu.Unlock()
-	dl.broadcast()
 
 	if status == "complete" && d.onComplete != nil {
 		d.onComplete(dl.id, t.modelID, t.modelDir)
@@ -399,16 +398,25 @@ func (d *Downloader) DiscardParts(modelID string) error {
 	return nil
 }
 
-// checkedModelDir is modelDir for callers that delete things.
-func (d *Downloader) checkedModelDir(modelID string) (string, error) {
-	// modelDir falls back to joining whatever it is given, so an empty or
-	// traversing id resolves to the models root — and this would then delete
-	// every model on the box. Require the owner/name shape it actually writes.
+// CheckModelID refuses anything but the owner/name shape a Hub repository
+// has. A model's directory is the id joined onto the models root, so an id
+// that is empty, has one part or three, or climbs with "." or ".." would
+// read, write -- and, on delete, remove -- somewhere other than its own
+// directory: "acme/.." is the models root itself.
+func CheckModelID(modelID string) error {
 	owner, name, ok := strings.Cut(modelID, "/")
 	if !ok || owner == "" || name == "" ||
-		strings.Contains(owner, "/") || strings.Contains(name, "/") ||
+		strings.Contains(name, "/") || strings.ContainsRune(modelID, '\\') ||
 		owner == "." || owner == ".." || name == "." || name == ".." {
-		return "", fmt.Errorf("not a model id: %q", modelID)
+		return fmt.Errorf("not a model id: %q", modelID)
+	}
+	return nil
+}
+
+// checkedModelDir is modelDir for callers that delete things.
+func (d *Downloader) checkedModelDir(modelID string) (string, error) {
+	if err := CheckModelID(modelID); err != nil {
+		return "", err
 	}
 
 	dir := d.modelDir(modelID)
@@ -456,13 +464,11 @@ func (t *transfer) bring(ctx context.Context, f PlannedFile) error {
 	if f.State == FileUnverified {
 		id := f.Identity()
 		t.d.updateFileState(t.dl, f.Filename, 0, "verifying")
-		t.dl.broadcast()
 
 		lastBroadcast := time.Now()
 		got, err := hashFile(ctx, filepath.Join(t.modelDir, f.Filename), id, func(done int64) {
 			t.dl.setDownloaded(f.Filename, done)
 			if time.Since(lastBroadcast) > 500*time.Millisecond {
-				t.dl.broadcast()
 				lastBroadcast = time.Now()
 			}
 		})
@@ -477,7 +483,6 @@ func (t *transfer) bring(ctx context.Context, f PlannedFile) error {
 				return err
 			}
 			t.d.updateFileState(t.dl, f.Filename, f.Size, "complete")
-			t.dl.broadcast()
 			return nil
 		}
 		// Same name and same size as upstream, different bytes.
@@ -513,7 +518,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 			// A download of some other version of this file: upstream moved
 			// on while the transfer was paused. Appending to it would build
 			// a file that is neither.
-			os.Remove(partPath)
+			_ = os.Remove(partPath)
 			existingSize = 0
 		case known && rec.Verified && existingSize == f.Size:
 			return t.place(f, replacing)
@@ -559,7 +564,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existingSize))
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := d.httpClient.Do(req)
 		if err != nil {
 			d.updateFileState(dl, f.Filename, existingSize, "failed")
 			return fmt.Errorf("download %s: %w", f.Filename, err)
@@ -614,7 +619,6 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 				dl.setDownloaded(f.Filename, downloaded)
 
 				if time.Since(lastBroadcast) > 500*time.Millisecond {
-					dl.broadcast()
 					lastBroadcast = time.Now()
 				}
 			}
@@ -642,7 +646,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 		}
 		if got != id {
 			// Kept, it would be resumed from and fail the same way forever.
-			os.Remove(partPath)
+			_ = os.Remove(partPath)
 			d.updateFileState(dl, f.Filename, 0, "failed")
 			if err := t.record(func(m *Manifest) { delete(m.Parts, f.Filename) }); err != nil {
 				return err
@@ -671,7 +675,6 @@ func (t *transfer) place(f PlannedFile, replacing bool) error {
 	id := f.Identity()
 	if replacing && id != "" {
 		t.d.updateFileState(t.dl, f.Filename, f.Size, "staged")
-		t.dl.broadcast()
 		return nil
 	}
 
@@ -693,7 +696,6 @@ func (t *transfer) place(f PlannedFile, replacing bool) error {
 		size = info.Size()
 	}
 	t.d.updateFileState(t.dl, f.Filename, size, "complete")
-	t.dl.broadcast()
 	return nil
 }
 
@@ -724,7 +726,7 @@ func (t *transfer) commit(plan Plan, removeStale bool) error {
 		f, wanted := upstream[name]
 		if !wanted {
 			// A replacement for a file upstream has since dropped.
-			os.Remove(finalPath + ".part")
+			_ = os.Remove(finalPath + ".part")
 			delete(m.Parts, name)
 			continue
 		}
@@ -798,15 +800,7 @@ func (d *Downloader) updateFileState(dl *download, filename string, downloaded i
 }
 
 func (d *Downloader) cleanup(downloadID string, dl *download) {
-	// Close all subscriber channels
-	dl.subMu.Lock()
-	for ch := range dl.subs {
-		close(ch)
-		delete(dl.subs, ch)
-	}
-	dl.subMu.Unlock()
-
-	// Remove from active after a delay so late subscribers can read final state
+	// Remove from active after a delay so a late progress poll can read the final state
 	time.AfterFunc(30*time.Second, func() {
 		d.mu.Lock()
 		// Only if it is still this one: a transfer restarted inside the
@@ -847,38 +841,6 @@ func (d *Downloader) Cancel(downloadID string) error {
 	}
 	dl.cancel()
 	return nil
-}
-
-// Subscribe returns a channel receiving progress updates for a download.
-func (d *Downloader) Subscribe(downloadID string) (chan DownloadProgress, error) {
-	d.mu.Lock()
-	dl, ok := d.active[downloadID]
-	d.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no active download: %s", downloadID)
-	}
-
-	ch := make(chan DownloadProgress, 8)
-	dl.subMu.Lock()
-	dl.subs[ch] = struct{}{}
-	dl.subMu.Unlock()
-
-	// Send current state immediately
-	ch <- dl.getProgress()
-	return ch, nil
-}
-
-// Unsubscribe removes a progress subscriber.
-func (d *Downloader) Unsubscribe(downloadID string, ch chan DownloadProgress) {
-	d.mu.Lock()
-	dl, ok := d.active[downloadID]
-	d.mu.Unlock()
-	if !ok {
-		return
-	}
-	dl.subMu.Lock()
-	delete(dl.subs, ch)
-	dl.subMu.Unlock()
 }
 
 // GetProgress returns progress for a specific download, or nil if not found.

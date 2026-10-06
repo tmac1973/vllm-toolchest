@@ -3,13 +3,13 @@ package vllmenv
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 // ProbeServeFlags asks the installed vLLM which flags `serve` accepts, by
@@ -49,13 +49,8 @@ func (e Env) serveHelp(timeout time.Duration, arg string) (string, error) {
 	defer cancel()
 
 	bin, args := e.ServeCommand(arg, nil)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = 5 * time.Second
+	cmd := procgroup.Command(ctx, syscall.SIGKILL, 5*time.Second, bin, args...)
+	cmd.Env = append(procgroup.Environ(), "PYTHONUNBUFFERED=1")
 
 	// argparse writes help to stdout; some launchers wrap it and write to
 	// stderr. Both are read.

@@ -60,7 +60,7 @@ var schema = map[string]any{"type": "object"}
 
 func ask(t *testing.T, e *engine) (answer, error) {
 	var out answer
-	err := (&Client{}).JSON(context.Background(), e.server(t), "helper", "form", schema,
+	err := (&Client{}).JSON(context.Background(), Endpoint{BaseURL: e.server(t)}, "helper", "form", schema,
 		[]Message{{Role: "user", Content: "read this"}}, &out)
 	return out, err
 }
@@ -122,15 +122,24 @@ func TestJSONErrors(t *testing.T) {
 		t.Errorf("an unrelated 400: %v", err)
 	}
 
+	// An engine that never answers. Only the caller's cancellation can end
+	// the call, so its returning at all proves it was honoured; the bound
+	// just keeps a regression from hanging the suite, and is loose enough
+	// that a loaded machine cannot trip it.
+	release := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(600 * time.Millisecond)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer slow.Close()
+	defer close(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	var out answer
-	if err := (&Client{}).JSON(ctx, slow.URL, "m", "f", schema, nil, &out); err == nil || time.Since(start) > time.Second {
+	if err := (&Client{}).JSON(ctx, Endpoint{BaseURL: slow.URL}, "m", "f", schema, nil, &out); err == nil || time.Since(start) > 5*time.Second {
 		t.Errorf("a cancelled call took %s and returned %v", time.Since(start), err)
 	}
 }

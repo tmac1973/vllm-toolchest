@@ -90,10 +90,20 @@ func Presets() []Preset {
 // when the name doesn't match. Unknown presets are tolerated rather than
 // erroring so persisted runs from older versions still render.
 func GetPreset(name string) Preset {
-	for _, p := range Presets() {
-		if p.Name == name {
-			return p
-		}
+	if p, ok := LookupPreset(name); ok {
+		return p
 	}
 	return Presets()[1] // internal-standard
+}
+
+// LookupPreset returns the preset with exactly this name. Unlike GetPreset it
+// does not fall back, for validating what a caller asked for, where a silent
+// substitute would hide a typo.
+func LookupPreset(name string) (Preset, bool) {
+	for _, p := range Presets() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Preset{}, false
 }

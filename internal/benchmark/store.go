@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 var noTime time.Time
@@ -112,27 +114,14 @@ func (s *Store) ReadOnly() string {
 // that silently takes effect.
 func (s *Store) save() error {
 	if s.readOnlyReason != "" {
-		return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart",
-			s.filePath, s.readOnlyReason)
+		return fsutil.RefuseWrite(s.filePath, s.readOnlyReason)
 	}
 	bf := benchmarkFile{
 		Version: schemaVersion,
 		Jobs:    s.jobs,
 		Runs:    s.runs,
 	}
-	data, err := json.MarshalIndent(bf, "", "  ")
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(s.filePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp := s.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.filePath)
+	return fsutil.WriteJSONAtomic(s.filePath, bf)
 }
 
 // List returns all benchmark runs, newest first.
@@ -414,6 +403,13 @@ func (s *Store) DeleteJob(id string, disposition DeleteDisposition) error {
 	if id == AdhocJobID {
 		return errors.New("cannot delete the synthetic ad-hoc job")
 	}
+	// Checked before anything changes: the filter below works in place, so
+	// refusing after it would leave the job list rearranged.
+	switch disposition {
+	case DeleteCascade, DeleteOrphan, "":
+	default:
+		return fmt.Errorf("unknown delete disposition: %q", disposition)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -442,14 +438,12 @@ func (s *Store) DeleteJob(id string, disposition DeleteDisposition) error {
 			runs = append(runs, r)
 		}
 		s.runs = runs
-	case DeleteOrphan, "":
+	default: // DeleteOrphan, ""
 		for i := range s.runs {
 			if s.runs[i].JobID == id {
 				s.runs[i].JobID = AdhocJobID
 			}
 		}
-	default:
-		return fmt.Errorf("unknown delete disposition: %q", disposition)
 	}
 	return s.save()
 }

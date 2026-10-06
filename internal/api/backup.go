@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +34,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("attachment; filename=vllm-toolchest-backup-%s.json", time.Now().Format("2006-01-02")))
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // restoreFileLimit bounds the uploaded backup. Real backups are kilobytes, so
@@ -54,9 +55,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			s.renderPartial(w, "restore_report", backup.Report{Error: msg})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		fmt.Fprintf(w, `{"error": %q}`, msg)
+		respondJSONStatus(w, status, map[string]string{"error": msg})
 	}
 
 	// A restore mid-benchmark would rewrite the configs a running cell is
@@ -70,7 +69,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capped as a whole, with room for the form fields around the file, so
+	// an oversized upload is refused rather than spooled to disk.
+	r.Body = http.MaxBytesReader(w, r.Body, restoreFileLimit+64<<10)
 	if err := r.ParseMultipartForm(restoreFileLimit); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			fail(http.StatusRequestEntityTooLarge, "the upload is too large to be a backup")
+			return
+		}
 		fail(http.StatusBadRequest, "invalid upload: "+err.Error())
 		return
 	}
@@ -91,9 +98,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, restoreFileLimit))
+	// One byte over the limit is read so that a file cut short at it is
+	// refused, not parsed as whatever its first ten megabytes say.
+	data, err := io.ReadAll(io.LimitReader(file, restoreFileLimit+1))
 	if err != nil {
 		fail(http.StatusBadRequest, "reading upload: "+err.Error())
+		return
+	}
+	if len(data) > restoreFileLimit {
+		fail(http.StatusRequestEntityTooLarge, "the upload is too large to be a backup")
 		return
 	}
 
@@ -221,7 +234,9 @@ func (s *Server) restoreDeps() backup.Deps {
 // handleDiscardPending drops a pending config the operator no longer wants
 // waiting for its model.
 func (s *Server) handleDiscardPending(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 	modelID := r.FormValue("model_id")
 	// Checked first so the refusal is not reported as a missing entry.
 	if reason := s.registry.ReadOnly(); reason != "" {

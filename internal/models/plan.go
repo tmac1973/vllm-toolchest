@@ -3,12 +3,14 @@ package models
 import (
 	"fmt"
 	"math"
+
+	"github.com/tmac1973/vllm-toolchest/internal/config"
 )
 
 // PlanDefaults are the machine-wide settings a plan starts from.
 type PlanDefaults struct {
 	// GPUMemoryUtilization is the fraction of each card vLLM may claim. Zero
-	// or out of range means vLLM's own 0.90.
+	// or out of range means config.DefaultGPUMemoryUtil.
 	GPUMemoryUtilization float64
 	// MaxNumSeqs is the batch cap. It is not sized from memory: the KV cache
 	// is shared, so the cap limits how many requests run at once, not how
@@ -17,9 +19,7 @@ type PlanDefaults struct {
 }
 
 func (d PlanDefaults) normalised() PlanDefaults {
-	if d.GPUMemoryUtilization <= 0 || d.GPUMemoryUtilization > 1 {
-		d.GPUMemoryUtilization = 0.90
-	}
+	d.GPUMemoryUtilization = config.GPUUtilOrDefault(d.GPUMemoryUtilization)
 	if d.MaxNumSeqs <= 0 {
 		d.MaxNumSeqs = 16
 	}
@@ -328,10 +328,7 @@ func planWidth(in PlanInput, d PlanDefaults, tp, target int, dtype string) (p Wi
 		}
 		return WidthPlan{}, false, why
 	}
-	util := c.GPUMemoryUtilization
-	if util <= 0 || util > 1 {
-		util = 0.90
-	}
+	util := config.GPUUtilOrDefault(c.GPUMemoryUtilization)
 	o := evaluateTP(est, c, in.Inventory, tp, util)
 	measured := o.Measured && est.Source == SourceMeasured
 

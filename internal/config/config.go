@@ -12,6 +12,21 @@ import (
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
+// DefaultGPUMemoryUtil is the fraction of each card a model may claim when
+// nothing in range is configured. vllmctl always passes the value it plans
+// with (see process.BuildArgs), because vLLM's own default is not the same in
+// every version: 0.29 uses 0.92.
+const DefaultGPUMemoryUtil = 0.90
+
+// GPUUtilOrDefault returns u when it is a usable fraction, and
+// DefaultGPUMemoryUtil otherwise.
+func GPUUtilOrDefault(u float64) float64 {
+	if u <= 0 || u > 1 {
+		return DefaultGPUMemoryUtil
+	}
+	return u
+}
+
 type Config struct {
 	// Server
 	ListenAddr string `yaml:"listen_addr"`
@@ -288,7 +303,7 @@ func defaults() *Config {
 		ExternalURL:        "http://localhost:3000",
 		VLLMPort:           8000,
 		VLLMHost:           "127.0.0.1",
-		GPUMemoryUtil:      0.90,
+		GPUMemoryUtil:      DefaultGPUMemoryUtil,
 		TensorParallelSize: 1,
 		MaxNumSeqs:         16,
 		DefaultDtype:       "auto",
@@ -319,9 +334,10 @@ func applyEnvOverrides(cfg *Config) {
 	envStr(&cfg.APIKey, "VLLMCTL_API_KEY")
 	envStr(&cfg.ExternalURL, "VLLMCTL_EXTERNAL_URL")
 
-	// HF token: check both our prefix and the standard HF_TOKEN
-	envStr(&cfg.HFToken, "VLLMCTL_HF_TOKEN")
+	// HF token: the standard HF_TOKEN is read first so our own prefix wins
+	// when both are set.
 	envStr(&cfg.HFToken, "HF_TOKEN")
+	envStr(&cfg.HFToken, "VLLMCTL_HF_TOKEN")
 
 	envInt(&cfg.VLLMPort, "VLLMCTL_VLLM_PORT")
 	envStr(&cfg.VLLMHost, "VLLMCTL_VLLM_HOST")
@@ -404,10 +420,16 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The file holds the HF token and the API key in plain text, so only
+	// the owner may read it. WriteFile's mode applies only on create; an
+	// existing file is tightened explicitly.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // DefaultModelsPath is where model files live when no override is set: a

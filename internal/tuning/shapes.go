@@ -17,13 +17,23 @@ type Shape struct {
 // DeriveShapes computes the unique block-FP8 GEMM shapes a model's transformer
 // decoder layers will use under a given tensor-parallel factor.
 //
-// For each layer the relevant matmuls are:
+// For each layer the matmuls the block-FP8 kernel runs are, as vLLM lays
+// them out. vLLM fuses q, k and v into one QKVParallelLinear and gate and up
+// into one MergedColumnParallelLinear, and looks a config up by the weight's
+// own N and K -- so the fused widths are the ones to tune, and a file for an
+// unfused width is never read:
 //
-//	Q proj:    (heads * head_dim / tp,    hidden)
-//	K, V proj: (kv_heads * head_dim / tp, hidden)   (only if kv_heads % tp == 0)
-//	O proj:    (hidden,                   heads * head_dim / tp)
-//	Gate, Up:  (intermediate / tp,        hidden)
-//	Down:      (hidden,                   intermediate / tp)
+//	QKV proj:  ((heads/tp + 2*kv_per_rank) * head_dim, hidden)
+//	O proj:    (hidden, heads * head_dim / tp)
+//	Gate+Up:   (2 * intermediate / tp, hidden)
+//	Down:      (hidden, intermediate / tp)
+//
+// kv_per_rank is kv_heads/tp, or 1 when there are fewer KV heads than ranks
+// and vLLM replicates them. The MLP pair is emitted for the dense MLP only
+// when the model has one -- every layer of a dense model, the leading dense
+// layers of an MoE one -- and again at the shared expert's width when there
+// is a shared expert. Routed experts run vLLM's fused-MoE kernel, which has
+// configs of its own and is not tuned here.
 //
 // We only emit shapes where both N and K are divisible by the kernel's block
 // size (default 128) — the FP8 block kernel only fires on those, and the
@@ -63,18 +73,31 @@ func DeriveShapes(cfg models.HFConfig, tp int, blockN, blockK int) []Shape {
 		pairs[Shape{N: n, K: k}] = struct{}{}
 	}
 
-	if heads > 0 && headDim > 0 {
-		add(heads*headDim/tp, h) // Q
+	// vLLM refuses a head count the ranks do not divide, and KV heads that
+	// outnumber the ranks without dividing by them; such a split never runs.
+	if heads > 0 && headDim > 0 && heads%tp == 0 {
+		kvPerRank := 0
+		switch {
+		case kvHeads >= tp && kvHeads%tp == 0:
+			kvPerRank = kvHeads / tp
+		case kvHeads < tp:
+			kvPerRank = 1
+		}
+		if kvPerRank > 0 {
+			add((heads/tp+2*kvPerRank)*headDim, h) // QKV
+		}
 		add(h, heads*headDim/tp) // O
 	}
-	if kvHeads > 0 && headDim > 0 && kvHeads%tp == 0 {
-		add(kvHeads*headDim/tp, h) // K, V (only when GQA group is divisible)
-	} else if kvHeads > 0 && headDim > 0 {
-		// GQA groups not divisible — vLLM replicates KV heads. Same shape as tp=1.
-		add(kvHeads*headDim, h)
+	mlp := func(width int) {
+		add(2*width/tp, h) // gate+up
+		add(h, width/tp)   // down
 	}
-	add(inter/tp, h) // gate, up
-	add(h, inter/tp) // down
+	if cfg.NumExperts == 0 || cfg.DenseLayers > 0 {
+		mlp(inter)
+	}
+	if cfg.SharedExpertInter > 0 {
+		mlp(cfg.SharedExpertInter)
+	}
 
 	out := make([]Shape, 0, len(pairs))
 	for s := range pairs {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +15,8 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 type JobState string
@@ -59,16 +60,12 @@ type Manager struct {
 	mu     sync.RWMutex
 	active *Job
 
-	logMu  sync.Mutex
-	logBuf []string
-
-	subMu sync.Mutex
-	subs  map[chan string]struct{}
+	// The current job's output. Subscriptions end with each job; the log
+	// itself serves the next.
+	log *broadcast.Log
 
 	cancel context.CancelFunc
 }
-
-const logMax = 5000
 
 func NewManager(dataDir, deviceName, tunerPath string, vllmStop VLLMStopper) *Manager {
 	return &Manager{
@@ -78,8 +75,7 @@ func NewManager(dataDir, deviceName, tunerPath string, vllmStop VLLMStopper) *Ma
 		python:     "python",
 		configsDir: DefaultVLLMConfigsDir,
 		vllmStop:   vllmStop,
-		logBuf:     make([]string, 0, 256),
-		subs:       map[chan string]struct{}{},
+		log:        broadcast.NewLog(5000, 256),
 	}
 }
 
@@ -157,58 +153,21 @@ func (m *Manager) Cancel() {
 
 // LogBuffer returns a copy of recent log lines.
 func (m *Manager) LogBuffer() []string {
-	m.logMu.Lock()
-	defer m.logMu.Unlock()
-	out := make([]string, len(m.logBuf))
-	copy(out, m.logBuf)
-	return out
+	return m.log.Recent(0)
 }
 
 // Subscribe returns a channel that receives new log lines until Unsubscribe
 // is called or the job ends. The channel is buffered; slow consumers drop.
 func (m *Manager) Subscribe() chan string {
-	ch := make(chan string, 256)
-	m.subMu.Lock()
-	m.subs[ch] = struct{}{}
-	m.subMu.Unlock()
-	return ch
+	return m.log.Subscribe()
 }
 
 func (m *Manager) Unsubscribe(ch chan string) {
-	m.subMu.Lock()
-	if _, ok := m.subs[ch]; ok {
-		delete(m.subs, ch)
-		close(ch)
-	}
-	m.subMu.Unlock()
+	m.log.Unsubscribe(ch)
 }
 
 func (m *Manager) appendLog(line string) {
-	m.logMu.Lock()
-	m.logBuf = append(m.logBuf, line)
-	if len(m.logBuf) > logMax {
-		m.logBuf = m.logBuf[len(m.logBuf)-logMax:]
-	}
-	m.logMu.Unlock()
-
-	m.subMu.Lock()
-	for ch := range m.subs {
-		select {
-		case ch <- line:
-		default:
-			// slow consumer — drop
-		}
-	}
-	m.subMu.Unlock()
-}
-
-func (m *Manager) fanoutClose() {
-	m.subMu.Lock()
-	for ch := range m.subs {
-		close(ch)
-		delete(m.subs, ch)
-	}
-	m.subMu.Unlock()
+	m.log.Append(line)
 }
 
 // StartJob spawns the tuner subprocess for the given shapes. Returns the job
@@ -236,9 +195,7 @@ func (m *Manager) StartJob(modelID string, shapes []Shape, tpSize, blockN, block
 	m.active = job
 
 	// Reset log buffer for the new job.
-	m.logMu.Lock()
-	m.logBuf = m.logBuf[:0]
-	m.logMu.Unlock()
+	m.log.Clear()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -249,7 +206,7 @@ func (m *Manager) StartJob(modelID string, shapes []Shape, tpSize, blockN, block
 }
 
 func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, blockN, blockK int) {
-	defer m.fanoutClose()
+	defer m.log.EndSubscriptions()
 
 	finish := func(state JobState, errMsg string) {
 		m.mu.Lock()
@@ -302,10 +259,9 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	m.appendLog(fmt.Sprintf("[tuner] shapes: %s", strings.Join(shapeStrs, ", ")))
 	m.appendLog(fmt.Sprintf("[tuner] output dir: %s", m.TunedDir()))
 
-	cmd := exec.CommandContext(ctx, python, args...)
-
 	// Put the tuner in its own process group and tear the whole group down on
-	// cancel.
+	// cancel. SIGTERM first; if the group will not take the hint, Go
+	// force-kills after the wait.
 	//
 	// CommandContext on its own kills the direct child -- python -- and
 	// nothing else. The ROCm workers it spawned keep running, holding
@@ -317,17 +273,9 @@ func (m *Manager) runJob(ctx context.Context, job *Job, shapes []Shape, tpSize, 
 	// model would not launch at 0.97.
 	//
 	// internal/process has always done this; the tuner never did.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	// If the group will not take the hint, Go force-kills after this.
-	cmd.WaitDelay = 10 * time.Second
+	cmd := procgroup.Command(ctx, syscall.SIGTERM, 10*time.Second, python, args...)
 
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(procgroup.Environ(),
 		"PYTHONUNBUFFERED=1",
 		// tqdm updates its bar with \r overwrites many times per second.
 		// Throttle so we get a useful progress line in the UI without a

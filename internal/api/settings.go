@@ -3,10 +3,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/variants"
@@ -45,6 +47,11 @@ type settingsResponse struct {
 	VLLMDeviceName string            `json:"vllm_device_name,omitempty"`
 	Knobs          map[string]string `json:"knobs"`
 }
+
+// secretMask stands in for a stored secret in the settings form. The form
+// submits every field on any change, so the handler must read this value as
+// "unchanged", never as the new secret.
+const secretMask = "********"
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg
@@ -97,20 +104,27 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var modelsDirChanged bool
 
 	if strings.Contains(contentType, "json") {
-		var updates map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&updates)
-		applyJSONUpdates(c, updates)
+		if err := applyJSONUpdates(c, r.Body); err != nil {
+			s.fail(w, r, http.StatusBadRequest, "Invalid settings JSON: "+err.Error())
+			return
+		}
 	} else {
-		r.ParseForm()
+		if !s.parseForm(w, r) {
+			return
+		}
 		if v := r.FormValue("external_url"); v != "" {
 			c.ExternalURL = v
 		}
-		if v := r.FormValue("api_key"); v != "" {
+		if v := r.FormValue("api_key"); v == secretMask {
+			// Unchanged: the form echoes the mask back, not the key.
+		} else if v != "" {
 			c.APIKey = v
 		} else if r.Form.Has("api_key") {
 			c.APIKey = "" // explicitly cleared
 		}
-		if v := r.FormValue("hf_token"); v != "" {
+		if v := r.FormValue("hf_token"); v == secretMask {
+			// Unchanged, as for api_key.
+		} else if v != "" {
 			c.HFToken = v
 			s.hfClient.SetToken(v)
 			s.downloader.SetToken(v)
@@ -167,16 +181,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			dir := strings.TrimSpace(r.FormValue("models_dir"))
 			if dir != "" {
 				if !filepath.IsAbs(dir) {
-					settingsFail(s, w, r, "Models directory must be an absolute path.")
+					s.fail(w, r, http.StatusBadRequest, "Models directory must be an absolute path.")
 					return
 				}
 				info, err := os.Stat(dir)
 				if err != nil {
-					settingsFail(s, w, r, fmt.Sprintf("Models directory %s: %s", dir, err))
+					s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("Models directory %s: %s", dir, err))
 					return
 				}
 				if !info.IsDir() {
-					settingsFail(s, w, r, fmt.Sprintf("Models directory %s is not a directory.", dir))
+					s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("Models directory %s is not a directory.", dir))
 					return
 				}
 			}
@@ -296,27 +310,20 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// settingsFail reports a rejected settings change through whichever channel
-// the caller used. htmx does not swap a non-2xx response, so an htmx caller is
-// given 200 and the error partial; everything else gets a real status code.
-func settingsFail(s *Server, w http.ResponseWriter, r *http.Request, msg string) {
-	if isHTMX(r) {
-		respondHTML(w)
-		s.renderPartial(w, "error_message", msg)
-		return
-	}
-	http.Error(w, msg, http.StatusBadRequest)
-}
-
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	status := s.process.GetStatus()
-	health := map[string]interface{}{
+	health := map[string]any{
 		"vllm_running": status.State == "running",
 		"vllm_state":   status.State,
 	}
 
 	if status.State == "running" {
-		resp, err := http.Get(fmt.Sprintf("http://%s:%d/health", s.cfg.VLLMHost, s.cfg.VLLMPort))
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+			s.vllmBaseURL()+"/health", nil)
+		var resp *http.Response
+		if err == nil {
+			resp, err = (&http.Client{Timeout: 5 * time.Second}).Do(req)
+		}
 		if err != nil {
 			health["vllm_health"] = "unreachable"
 			health["error"] = err.Error()
@@ -339,11 +346,14 @@ func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, health)
 }
 
-func applyJSONUpdates(c interface{}, updates map[string]interface{}) {
-	// Re-marshal updates and unmarshal onto config for simple field updates
-	data, err := json.Marshal(updates)
-	if err != nil {
-		return
+// applyJSONUpdates decodes body onto a copy of c and keeps the copy only if
+// the whole body decoded, so a bad field cannot leave the config half
+// updated.
+func applyJSONUpdates(c *config.Config, body io.Reader) error {
+	next := *c
+	if err := json.NewDecoder(body).Decode(&next); err != nil {
+		return err
 	}
-	json.Unmarshal(data, c)
+	*c = next
+	return nil
 }

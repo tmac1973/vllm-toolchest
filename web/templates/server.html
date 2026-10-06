@@ -310,35 +310,18 @@
 
 <script>
 // --- Copy a button's data-copy to the clipboard, flashing a check ---
-// Falls back to a hidden textarea when the async clipboard API is unavailable,
-// which it is on plain HTTP to a LAN address — the usual way this is reached.
+// copyToClipboard (log-panel.js) handles plain HTTP, where the async
+// clipboard API is unavailable.
 var CHECK_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8l3 3 7-7"/></svg>';
 function copyFromButton(btn) {
     var text = btn.dataset.copy || '';
     // The button's own markup is the icon to restore, so the icon lives in
     // exactly one place — the template that drew it.
     var originalIcon = btn.innerHTML;
-    var flashCheck = function() {
+    copyToClipboard(text).then(function() {
         btn.innerHTML = CHECK_SVG;
         setTimeout(function(){ btn.innerHTML = originalIcon; }, 900);
-    };
-    var fallback = function() {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.top = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand('copy'); } catch (e) {}
-        document.body.removeChild(ta);
-        flashCheck();
-    };
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).then(flashCheck).catch(fallback);
-    } else {
-        fallback();
-    }
+    }).catch(function() {});
 }
 
 // --- Engine notes: the strip above the logs, and the dialog behind it ---
@@ -431,34 +414,13 @@ async function restartServer(btn) {
     }
 }
 
-(function() {
-    // --- Server log stream ---
-    // Replaces a 2s poll that re-fetched the whole buffer and reassigned it.
-    var logSSE = new EventSource('/api/service/log-stream');
-    logSSE.onmessage = function(e) {
-        var pre = document.getElementById('service-logs');
-        logPanelAppend(pre, e.data + '\n');
-        var toggle = document.querySelector('.log-tail-toggle');
-        if (toggle && toggle.checked) {
-            pre.scrollTop = pre.scrollHeight;
-        }
-    };
-    logSSE.addEventListener('done', function() {
-        logSSE.close();
+// --- Server log: what is already in the buffer, then the live stream ---
+// log-panel.js is deferred, so this waits for it.
+document.addEventListener('DOMContentLoaded', function() {
+    followLog(document.getElementById('service-logs'), {
+        streamURL: '/api/service/log-stream',
+        backlogURL: '/api/service/logs',
     });
-
-    // Seed the pane with what is already in the buffer, so opening the page
-    // mid-run shows the run rather than starting blank.
-    fetch('/api/service/logs', {headers: {'HX-Request': 'true'}})
-        .then(function(r) { return r.text(); })
-        .then(function(text) {
-            var pre = document.getElementById('service-logs');
-            if (text && !pre._rawLog) {
-                logPanelAppend(pre, text);
-                pre.scrollTop = pre.scrollHeight;
-            }
-        })
-        .catch(function() {});
-})();
+});
 </script>
 {{end}}

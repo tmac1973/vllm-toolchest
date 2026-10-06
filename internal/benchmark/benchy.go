@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 // LlamaBenchyReport is the top-level JSON object llama-benchy writes when
@@ -87,7 +89,14 @@ func BuildBenchyArgs(c BenchyConfig) []string {
 // of the uvx command for disclosure to the user. Used by the About modal
 // and persisted on each run so the exact command that produced a result
 // is forever reproducible.
+//
+// A real API key is shown as "***": the string is logged and rendered in the
+// UI. The "EMPTY" placeholder is shown as is, since it is no secret and the
+// command reads truer with it.
 func FormatBenchyCommand(c BenchyConfig) string {
+	if c.APIKey != "" && c.APIKey != "EMPTY" {
+		c.APIKey = "***"
+	}
 	var b strings.Builder
 	b.WriteString("uvx")
 	for _, a := range BuildBenchyArgs(c) {
@@ -154,7 +163,7 @@ func runLlamaBenchy(ctx context.Context, c BenchyConfig) ([]LlamaBenchyResult, s
 			return nil, "", fmt.Errorf("create result tempfile: %w", err)
 		}
 		c.SaveResultPath = f.Name()
-		f.Close()
+		_ = f.Close()
 	}
 	defer os.Remove(c.SaveResultPath)
 
@@ -163,19 +172,17 @@ func runLlamaBenchy(ctx context.Context, c BenchyConfig) ([]LlamaBenchyResult, s
 	slog.Info("running llama-benchy", "command", cmdStr)
 
 	cmd := exec.CommandContext(ctx, "uvx", args...)
-	if c.HFToken != "" || c.HFHome != "" {
-		env := os.Environ()
-		if c.HFToken != "" {
-			env = append(env, "HF_TOKEN="+c.HFToken)
-		}
-		if c.HFHome != "" {
-			if err := os.MkdirAll(c.HFHome, 0o755); err != nil {
-				return nil, cmdStr, fmt.Errorf("create HF_HOME dir %q: %w", c.HFHome, err)
-			}
-			env = append(env, "HF_HOME="+c.HFHome)
-		}
-		cmd.Env = env
+	env := procgroup.Environ()
+	if c.HFToken != "" {
+		env = append(env, "HF_TOKEN="+c.HFToken)
 	}
+	if c.HFHome != "" {
+		if err := os.MkdirAll(c.HFHome, 0o755); err != nil {
+			return nil, cmdStr, fmt.Errorf("create HF_HOME dir %q: %w", c.HFHome, err)
+		}
+		env = append(env, "HF_HOME="+c.HFHome)
+	}
+	cmd.Env = env
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

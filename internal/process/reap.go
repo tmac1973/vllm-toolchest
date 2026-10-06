@@ -130,8 +130,10 @@ func terminateGroup(pgid int, grace, killWait time.Duration) error {
 		slog.Warn("vLLM did not exit on SIGTERM; killing the process group", "pgid", pgid)
 	}
 	if groupAlive(pgid) {
-		slog.Info("reaping vLLM workers that outlived the server", "pgid", pgid)
-		killProcessGroup(pgid, syscall.SIGKILL)
+		slog.Warn("reaping vLLM workers that outlived the server", "pgid", pgid)
+		if err := killProcessGroup(pgid, syscall.SIGKILL); err != nil {
+			slog.Warn("killing vLLM process group", "pgid", pgid, "error", err)
+		}
 	}
 	if !waitUntil(func() bool { return !groupAlive(pgid) }, killWait) {
 		return fmt.Errorf("vLLM process group %d is still running after SIGKILL; "+

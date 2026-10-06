@@ -7,12 +7,11 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
-	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
 )
 
 // ErrProbeAlreadyActive is returned when a probe is requested while one is
@@ -34,10 +33,8 @@ type activeProbe struct {
 	modelID string
 	cancel  context.CancelFunc
 
-	subMu sync.Mutex
-	subs  map[chan benchmark.ProbeProgress]struct{}
-	last  *benchmark.ProbeProgress
-	done  chan struct{}
+	hub  *broadcast.Hub[benchmark.ProbeProgress]
+	done chan struct{}
 }
 
 func newProbeManager(s *Server) *probeManager {
@@ -65,38 +62,35 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req probeStartRequest
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		r.ParseForm()
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		req.ModelID = r.FormValue("model_id")
 		req.TPSize, _ = strconv.Atoi(r.FormValue("tp_size"))
 	}
 
 	if req.ModelID == "" {
-		http.Error(w, "model_id is required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id is required")
 		return
 	}
 	if _, ok := s.registry.Get(req.ModelID); !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 
 	// Main vLLM must be stopped — the probe spawns vLLM repeatedly and
 	// needs the GPU's VRAM to itself.
-	if state := s.process.GetStatus().State; state == process.StateRunning || state == process.StateStarting {
-		http.Error(w, "stop the main vLLM process before probing", http.StatusConflict)
+	if state := s.process.GetStatus().State; state.Live() {
+		s.fail(w, r, http.StatusConflict, "stop the main vLLM process before probing")
 		return
 	}
 
 	s.probe.mu.Lock()
 	if s.probe.active != nil {
 		s.probe.mu.Unlock()
-		http.Error(w, ErrProbeAlreadyActive.Error(), http.StatusConflict)
+		s.fail(w, r, http.StatusConflict, ErrProbeAlreadyActive.Error())
 		return
 	}
 
@@ -106,7 +100,7 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 		id:      probeID,
 		modelID: req.ModelID,
 		cancel:  cancel,
-		subs:    make(map[chan benchmark.ProbeProgress]struct{}),
+		hub:     broadcast.NewHub[benchmark.ProbeProgress](32),
 		done:    make(chan struct{}),
 	}
 	s.probe.active = ap
@@ -117,23 +111,9 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 	// Fan-out goroutine.
 	go func() {
 		for p := range progress {
-			p := p
-			ap.subMu.Lock()
-			ap.last = &p
-			for sub := range ap.subs {
-				select {
-				case sub <- p:
-				default:
-				}
-			}
-			ap.subMu.Unlock()
+			ap.hub.Send(p)
 		}
-		ap.subMu.Lock()
-		for sub := range ap.subs {
-			close(sub)
-			delete(ap.subs, sub)
-		}
-		ap.subMu.Unlock()
+		ap.hub.Close()
 
 		s.probe.mu.Lock()
 		s.probe.active = nil
@@ -192,19 +172,8 @@ func (s *Server) handleContextProbeProgress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	sub := make(chan benchmark.ProbeProgress, 32)
-	ap.subMu.Lock()
-	ap.subs[sub] = struct{}{}
-	last := ap.last
-	ap.subMu.Unlock()
-	defer func() {
-		ap.subMu.Lock()
-		if _, ok := ap.subs[sub]; ok {
-			delete(ap.subs, sub)
-			close(sub)
-		}
-		ap.subMu.Unlock()
-	}()
+	sub, last, hasLast := ap.hub.SubscribeLast()
+	defer ap.hub.Unsubscribe(sub)
 
 	sse, err := NewSSEWriter(w)
 	if err != nil {
@@ -212,7 +181,7 @@ func (s *Server) handleContextProbeProgress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if last != nil {
+	if hasLast {
 		payload, _ := json.Marshal(last)
 		sse.SendEvent("progress", string(payload))
 	}
@@ -264,17 +233,24 @@ type applyProbeRequest struct {
 // tuple onto the model's saved config in the registry.
 func (s *Server) handleApplyProbe(w http.ResponseWriter, r *http.Request) {
 	var req applyProbeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
 		return
 	}
+	// The result table's Apply button posts its values as a form.
+	if !isJSON {
+		req.ModelID = r.FormValue("model_id")
+		req.MaxModelLen, _ = strconv.Atoi(r.FormValue("max_model_len"))
+		req.GPUMemoryUtilization, _ = strconv.ParseFloat(r.FormValue("gpu_memory_utilization"), 64)
+		req.MaxNumSeqs, _ = strconv.Atoi(r.FormValue("max_num_seqs"))
+	}
 	if req.ModelID == "" || req.MaxModelLen <= 0 {
-		http.Error(w, "model_id and max_model_len (>0) are required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id and max_model_len (>0) are required")
 		return
 	}
 	m, ok := s.registry.Get(req.ModelID)
 	if !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 	m.VLLMConfig.MaxModelLen = req.MaxModelLen
@@ -285,7 +261,7 @@ func (s *Server) handleApplyProbe(w http.ResponseWriter, r *http.Request) {
 		m.VLLMConfig.MaxNumSeqs = req.MaxNumSeqs
 	}
 	if err := s.registry.Register(m); err != nil {
-		http.Error(w, "save model: "+err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, "save model: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -383,7 +359,7 @@ func (s *Server) handleProbeForm(w http.ResponseWriter, r *http.Request) {
 	// Probing starts its own vLLM processes, so the main one has to be out of
 	// the way first — otherwise the two fight over the same VRAM.
 	state := s.process.GetStatus().State
-	blocked := state == process.StateRunning || state == process.StateStarting
+	blocked := state.Live()
 
 	respondHTML(w)
 	s.renderPartial(w, "probe_form", struct {

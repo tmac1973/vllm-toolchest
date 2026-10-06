@@ -42,6 +42,9 @@ type JobEnv interface {
 	// http://localhost:8000).
 	VLLMURL() string
 
+	// VLLMAPIKey returns the key the engine requires on /v1, or "".
+	VLLMAPIKey() string
+
 	// HFToken / HFCacheDir are forwarded to llama-benchy so the tokenizer
 	// download is authenticated and cached across cells.
 	HFToken() string
@@ -135,7 +138,7 @@ func ExpandCells(modelIDs, presets []string, sweeps []SweepAxis) []JobCell {
 func (s *Service) runJob(ctx context.Context, job *BenchmarkJob) {
 	job.Status = JobStatusRunning
 	job.StartedAt = time.Now()
-	_ = s.store.SaveJob(*job)
+	s.saveJob(job)
 
 	// Group cell indices by (model, sweep values) in stored order.
 	//
@@ -176,14 +179,14 @@ func (s *Service) runJob(ctx context.Context, job *BenchmarkJob) {
 		info, err := s.env.ResolveModel(g.modelID)
 		if err != nil {
 			s.failCells(job, g.indices, "resolve model: "+err.Error())
-			_ = s.store.SaveJob(*job)
+			s.saveJob(job)
 			continue
 		}
 
 		overrides, err := ApplySweep(job.Overrides, g.sweep)
 		if err != nil {
 			s.failCells(job, g.indices, "sweep values: "+err.Error())
-			_ = s.store.SaveJob(*job)
+			s.saveJob(job)
 			continue
 		}
 		cfg := applyOverrides(info.Config, overrides)
@@ -194,7 +197,7 @@ func (s *Service) runJob(ctx context.Context, job *BenchmarkJob) {
 		loadCancel()
 		if err != nil {
 			s.failCells(job, g.indices, "load model: "+err.Error())
-			_ = s.store.SaveJob(*job)
+			s.saveJob(job)
 			continue
 		}
 
@@ -204,13 +207,22 @@ func (s *Service) runJob(ctx context.Context, job *BenchmarkJob) {
 				continue
 			}
 			s.runCell(ctx, job, idx, info, cfg)
-			_ = s.store.SaveJob(*job)
+			s.saveJob(job)
 		}
 	}
 
 	job.Status = jobFinalStatus(job, ctx.Err() != nil)
 	job.FinishedAt = time.Now()
-	_ = s.store.SaveJob(*job)
+	s.saveJob(job)
+}
+
+// saveJob persists the job's progress. A failure is logged rather than
+// returned: the job carries on either way, and what is lost is the record of
+// it surviving a restart, which the log at least says.
+func (s *Service) saveJob(job *BenchmarkJob) {
+	if err := s.store.SaveJob(*job); err != nil {
+		slog.Error("failed to save benchmark job", "id", job.ID, "status", job.Status, "error", err)
+	}
 }
 
 // runCell executes one cell as a benchmark run.
@@ -218,7 +230,7 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 	cell := &job.Cells[idx]
 	cell.Status = CellStatusRunning
 	cell.Attempt++
-	_ = s.store.SaveJob(*job)
+	s.saveJob(job)
 
 	preset := GetPreset(cell.Preset)
 	if preset.Name != cell.Preset {
@@ -266,6 +278,7 @@ func (s *Service) runCell(ctx context.Context, job *BenchmarkJob, idx int, info 
 		Run:         run,
 		Preset:      preset,
 		VLLMURL:     s.env.VLLMURL(),
+		APIKey:      s.env.VLLMAPIKey(),
 		ServedName:  info.ServedName,
 		MaxModelLen: cfg.MaxModelLen,
 		HFRepoID:    info.HFRepoID,

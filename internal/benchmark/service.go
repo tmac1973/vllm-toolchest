@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
 )
 
 // ErrRunAlreadyActive is returned by StartRun when another run or job
@@ -29,9 +31,7 @@ type activeRun struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	subMu sync.Mutex
-	subs  map[chan ProgressUpdate]struct{}
-	last  *ProgressUpdate
+	hub *broadcast.Hub[ProgressUpdate]
 }
 
 type activeJob struct {
@@ -68,6 +68,14 @@ func (s *Service) ActiveRunID() (string, bool) {
 }
 
 // ActiveJobID returns the ID of the in-flight job, if any.
+// Busy reports whether a run or a job is in flight, when SubmitJob and
+// StartRun would refuse.
+func (s *Service) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeRun != nil || s.activeJob != nil
+}
+
 func (s *Service) ActiveJobID() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,7 +100,7 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 		id:     cfg.Run.ID,
 		cancel: cancel,
 		done:   make(chan struct{}),
-		subs:   make(map[chan ProgressUpdate]struct{}),
+		hub:    broadcast.NewHub[ProgressUpdate](16),
 	}
 	s.activeRun = ar
 	s.mu.Unlock()
@@ -101,23 +109,9 @@ func (s *Service) StartRun(cfg RunnerConfig) error {
 
 	go func() {
 		for update := range progress {
-			update := update
-			ar.subMu.Lock()
-			ar.last = &update
-			for sub := range ar.subs {
-				select {
-				case sub <- update:
-				default:
-				}
-			}
-			ar.subMu.Unlock()
+			ar.hub.Send(update)
 		}
-		ar.subMu.Lock()
-		for sub := range ar.subs {
-			close(sub)
-			delete(ar.subs, sub)
-		}
-		ar.subMu.Unlock()
+		ar.hub.Close()
 
 		s.mu.Lock()
 		s.activeRun = nil
@@ -153,22 +147,12 @@ func (s *Service) Subscribe(id string) (<-chan ProgressUpdate, *ProgressUpdate, 
 	ar := s.activeRun
 	s.mu.Unlock()
 
-	sub := make(chan ProgressUpdate, 16)
-	ar.subMu.Lock()
-	ar.subs[sub] = struct{}{}
-	last := ar.last
-	ar.subMu.Unlock()
-
-	unsub := func() {
-		ar.subMu.Lock()
-		if _, ok := ar.subs[sub]; ok {
-			delete(ar.subs, sub)
-			close(sub)
-		}
-		ar.subMu.Unlock()
+	sub, last, ok := ar.hub.SubscribeLast()
+	var lastPtr *ProgressUpdate
+	if ok {
+		lastPtr = &last
 	}
-
-	return sub, last, unsub
+	return sub, lastPtr, func() { ar.hub.Unsubscribe(sub) }
 }
 
 // SubmitJob persists the job (with StatusPending → JobStatusRunning at

@@ -32,6 +32,14 @@ const (
 	residentExpertLayers = 3
 )
 
+// OffloadHostRAMGB is the system RAM, in GiB, left for offloaded experts on
+// a host with hostRAMGB of memory serving at tp ranks: the share the
+// engine's margin leaves, less each rank's process and the engine's own. It
+// can be negative; a caller after a bound rather than a plan clamps it.
+func OffloadHostRAMGB(hostRAMGB float64, tp int) float64 {
+	return offloadHostShare*hostRAMGB - offloadRankProcessGB*float64(tp) - offloadEngineGB
+}
+
 // offloadEligible reports a model the image's expert offload serves: a
 // mixture of experts with weights under 8 bits. The image's docs name MXFP4
 // and W4A16 experts.
@@ -118,7 +126,7 @@ func planOffload(in PlanInput, d PlanDefaults, tp, target int, dtype string) (Wi
 	// cache in RAM: Flash-Next's card runs on two R9700s that way, in 82 GiB
 	// of RAM, where the table in RAM would need over a hundred.
 	hostExperts := experts * (1 - float64(residentExpertLayers)/float64(layers))
-	hostHas := offloadHostShare*in.HostRAMGB - offloadRankProcessGB*float64(tp) - offloadEngineGB
+	hostHas := OffloadHostRAMGB(in.HostRAMGB, tp)
 	table := est.HostResidentGB
 	inRAM, nvme := hostExperts+table, false
 	if inRAM > hostHas && in.PLENVMe && table > 0 {

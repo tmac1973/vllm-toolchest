@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // Model represents a registered model in the inventory.
@@ -374,8 +377,7 @@ func (r *Registry) writableLocked() error {
 	if r.readOnlyReason == "" {
 		return nil
 	}
-	return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart",
-		r.filePath, r.readOnlyReason)
+	return fsutil.RefuseWrite(r.filePath, r.readOnlyReason)
 }
 
 func (r *Registry) save() error {
@@ -389,21 +391,7 @@ func (r *Registry) save() error {
 		PendingConfigs: r.pending,
 		Profiles:       r.profiles,
 	}
-	data, err := json.MarshalIndent(rf, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(r.filePath), 0o755); err != nil {
-		return err
-	}
-	// Write-then-rename, as the benchmark store does. os.WriteFile truncates
-	// first, so a crash or a full disk mid-write left a half-file that the
-	// next load could not parse.
-	tmp := r.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.filePath)
+	return fsutil.WriteJSONAtomic(r.filePath, rf)
 }
 
 // List returns every registered model, ordered by ID.
@@ -458,8 +446,20 @@ func (r *Registry) Delete(id string, deleteFiles bool) error {
 		return fmt.Errorf("model not found: %s", id)
 	}
 
+	// The entry goes only once its files are gone. Dropping it after a
+	// failed delete would leave the files on disk with nothing pointing at
+	// them.
 	if deleteFiles && m.LocalPath != "" {
-		os.RemoveAll(m.LocalPath)
+		// A model is a directory under the root, never the root itself or
+		// the data directory. Whatever registered such a path, deleting it
+		// would take every model -- or every setting -- with it.
+		switch filepath.Clean(m.LocalPath) {
+		case filepath.Clean(r.modelsDir), filepath.Clean(r.dataDir), "/":
+			return fmt.Errorf("refusing to delete %s: it is not one model's directory", m.LocalPath)
+		}
+		if err := os.RemoveAll(m.LocalPath); err != nil {
+			return fmt.Errorf("delete model files: %w", err)
+		}
 	}
 
 	delete(r.models, id)
@@ -691,7 +691,7 @@ func (r *Registry) scanForNewModels() {
 			}
 
 			// Check if it looks like a model directory
-			hasConfig := fileExists(filepath.Join(modelDir, "config.json"))
+			hasConfig := fsutil.Exists(filepath.Join(modelDir, "config.json"))
 			hasGGUF := hasGGUFFiles(modelDir)
 			hasSafetensors := hasSafetensorsFiles(modelDir)
 
@@ -730,7 +730,7 @@ func (r *Registry) backfillMetadata() {
 		if m.Orphaned || m.LocalPath == "" {
 			continue
 		}
-		if !fileExists(filepath.Join(m.LocalPath, "config.json")) {
+		if !fsutil.Exists(filepath.Join(m.LocalPath, "config.json")) {
 			continue
 		}
 		// Re-derive when the metadata was never parsed, and also when it
@@ -817,7 +817,7 @@ func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
 		Dtype:                "auto",
 		MaxModelLen:          defaultCtx,
 		TensorParallelSize:   1,
-		GPUMemoryUtilization: 0.90,
+		GPUMemoryUtilization: config.DefaultGPUMemoryUtil,
 		MaxNumSeqs:           16,
 		LoadFormat:           "auto",
 		KVCacheDtype:         "auto",
@@ -852,11 +852,6 @@ func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
 	}
 
 	return cfg
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func hasGGUFFiles(dir string) bool {

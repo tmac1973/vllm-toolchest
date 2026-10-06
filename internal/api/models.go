@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
-	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/internal/tuning"
 )
 
@@ -97,7 +95,7 @@ func (s *Server) modelRows() []modelRow {
 	list := s.registry.List()
 
 	servingID := ""
-	if st := s.process.GetStatus(); st.State == process.StateRunning || st.State == process.StateStarting {
+	if st := s.process.GetStatus(); st.State.Live() {
 		servingID = st.ModelID
 	}
 
@@ -185,12 +183,11 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 // list comes back: the previously-active card has to lose its radio, and the
 // restart markers move with the choice.
 func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
+	id := m.ID
 	if m.Orphaned {
 		http.Error(w, "model files are missing", http.StatusConflict)
 		return
@@ -219,20 +216,16 @@ func (s *Server) handleActivateModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
 	respondJSON(w, m)
 }
 
 func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
 	if m.IsDraft() {
@@ -245,19 +238,18 @@ func (s *Server) handleModelConfigPanel(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUpdateModelConfig(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
+	id := m.ID
 
 	var cfg models.VLLMConfig
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
-		json.NewDecoder(r.Body).Decode(&cfg)
-	} else {
-		r.ParseForm()
+	isJSON, ok := s.readBody(w, r, &cfg)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		cfg = models.VLLMConfig{
 			Dtype:                  r.FormValue("dtype"),
 			MaxModelLen:            formInt(r, "max_model_len"),
@@ -373,13 +365,36 @@ func envBlockWarning(env string) string {
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
+	// The buttons swap the whole card out. A refusal goes to the card's
+	// config slot instead, or the card would be replaced by the message.
+	if isHTMX(r) {
+		w.Header().Set("HX-Retarget", "#config-"+safeID(r.URL.Query().Get("id")))
+		w.Header().Set("HX-Reswap", "innerHTML")
+	}
+	m, ok := s.modelFromQuery(w, r)
+	if !ok {
+		return
+	}
+	id := m.ID
 	// Removing the registry entry and deleting tens of gigabytes are separate
 	// decisions, so the caller has to say which one it meant.
 	keepFiles := r.URL.Query().Get("keep_files") == "true"
-	if err := s.registry.Delete(id, !keepFiles); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if reason := s.registry.ReadOnly(); reason != "" {
+		s.fail(w, r, http.StatusConflict, "models.json "+reason+" — nothing was removed.")
 		return
+	}
+	if why := s.openInEngine(m); why != "" {
+		s.fail(w, r, http.StatusConflict, why+" Stop the server before removing it.")
+		return
+	}
+	if err := s.registry.Delete(id, !keepFiles); err != nil {
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if isHTMX(r) {
+		// Removed: the card goes, as the buttons asked.
+		w.Header().Del("HX-Retarget")
+		w.Header().Del("HX-Reswap")
 	}
 	// Nothing should still be pointed at a model that is gone.
 	if s.cfg.ActiveModel == id {

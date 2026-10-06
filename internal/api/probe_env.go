@@ -5,14 +5,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 // probeEnv adapts *Server to benchmark.ProbeEnv. It spawns vLLM on a
@@ -85,8 +85,11 @@ func (e *probeEnv) TrySpawn(ctx context.Context, modelID string, attempt benchma
 	cmdCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	cmd.Env = append(os.Environ(), env...)
+	// The probe is a full vLLM serve with per-rank workers. Cancelling only
+	// the direct child would leave them holding VRAM for the next attempt,
+	// and Wait blocked on the log pipe they keep open.
+	cmd := procgroup.Command(cmdCtx, syscall.SIGKILL, 10*time.Second, bin, args...)
+	cmd.Env = append(procgroup.Environ(), env...)
 
 	var logBuf safeBuffer
 	cmd.Stdout = &logBuf

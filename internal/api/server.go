@@ -119,7 +119,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 
 func (s *Server) templateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"divf": func(a, b interface{}) float64 {
+		"divf": func(a, b any) float64 {
 			af, bf := toFloat64(a), toFloat64(b)
 			if bf == 0 {
 				return 0
@@ -139,7 +139,7 @@ func (s *Server) templateFuncs() template.FuncMap {
 		// syntax.
 		"cssID": safeID,
 		// divGB renders a byte count in GiB.
-		"divGB": func(bytes int64) float64 { return float64(bytes) / (1024 * 1024 * 1024) },
+		"divGB": models.BytesToGB,
 		// hfModelURL is the HuggingFace page for a model, or "" when the ID is
 		// not a linkable owner/name pair — which is how the templates decide
 		// whether to render a link at all.
@@ -234,7 +234,7 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 
@@ -258,6 +258,14 @@ func (s *Server) buildRouter() chi.Router {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// /api has no login: anyone who can reach this port is trusted, as
+		// the README says. What it must not do is take orders from a web
+		// page in someone's browser, which could otherwise post a restore
+		// that replaces the HF token and API key. A state-changing request
+		// the browser marks as cross-origin is refused; scripts and curl
+		// send no such marks and are unaffected. /v1 is left out on purpose:
+		// browser chat front-ends call it cross-origin, and it has its key.
+		r.Use(http.NewCrossOriginProtection().Handler)
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/gpu-map", s.handleGPUMap)
 		r.Get("/arch-registry", s.handleArchRegistry)
@@ -468,6 +476,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMPort            int
 		HasAPIKey           bool
 		HasHFToken          bool
+		SecretMask          string
 		DefaultDtype        string
 		GPUMemoryUtil       float64
 		MaxNumSeqs          int
@@ -504,6 +513,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		VLLMPort:            c.VLLMPort,
 		HasAPIKey:           c.APIKey != "",
 		HasHFToken:          c.HFToken != "",
+		SecretMask:          secretMask,
 		DefaultDtype:        c.DefaultDtype,
 		GPUMemoryUtil:       c.GPUMemoryUtil,
 		MaxNumSeqs:          c.MaxNumSeqs,

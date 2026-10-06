@@ -3,6 +3,8 @@ package monitor
 import (
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
 )
 
 // Metrics holds a snapshot of system resource usage.
@@ -55,7 +57,7 @@ type Monitor struct {
 
 	mu      sync.RWMutex
 	current Metrics
-	subs    map[chan Metrics]struct{}
+	hub     *broadcast.Hub[Metrics]
 
 	stop chan struct{}
 }
@@ -64,7 +66,7 @@ func New(interval time.Duration) *Monitor {
 	return &Monitor{
 		gpu:      detectGPUBackend(),
 		interval: interval,
-		subs:     make(map[chan Metrics]struct{}),
+		hub:      broadcast.NewHub[Metrics](4),
 		stop:     make(chan struct{}),
 	}
 }
@@ -97,17 +99,11 @@ func (m *Monitor) Current() Metrics {
 }
 
 func (m *Monitor) Subscribe() chan Metrics {
-	ch := make(chan Metrics, 4)
-	m.mu.Lock()
-	m.subs[ch] = struct{}{}
-	m.mu.Unlock()
-	return ch
+	return m.hub.Subscribe()
 }
 
 func (m *Monitor) Unsubscribe(ch chan Metrics) {
-	m.mu.Lock()
-	delete(m.subs, ch)
-	m.mu.Unlock()
+	m.hub.Unsubscribe(ch)
 }
 
 func (m *Monitor) collect() {
@@ -125,13 +121,8 @@ func (m *Monitor) collect() {
 
 	m.mu.Lock()
 	m.current = metrics
-	for ch := range m.subs {
-		select {
-		case ch <- metrics:
-		default:
-		}
-	}
 	m.mu.Unlock()
+	m.hub.Send(metrics)
 }
 
 func detectGPUBackend() GPUBackend {

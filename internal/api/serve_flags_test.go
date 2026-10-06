@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 	"github.com/tmac1973/vllm-toolchest/internal/vllmenv"
 )
 
@@ -39,12 +40,11 @@ func fakeServeLauncher(t *testing.T, n int, fail bool) (vllmenv.Env, string) {
 	}
 	listing := filepath.Join(dir, "listing.txt")
 	os.WriteFile(listing, []byte(b.String()), 0o644)
-	body := "#!/bin/sh\necho x >> '" + count + "'\ncat '" + listing + "'\n"
+	body := "echo x >> '" + count + "'\ncat '" + listing + "'\n"
 	if fail {
-		body = "#!/bin/sh\necho x >> '" + count + "'\necho 'ImportError: no GPU' >&2\nexit 1\n"
+		body = "echo x >> '" + count + "'\necho 'ImportError: no GPU' >&2\nexit 1\n"
 	}
-	script := filepath.Join(dir, "vllm")
-	os.WriteFile(script, []byte(body), 0o755)
+	script := testutil.WriteScript(t, body)
 	return vllmenv.Env{Variant: "rocm", VariantVersion: "v1", Launcher: []string{script, "serve"}}, count
 }
 

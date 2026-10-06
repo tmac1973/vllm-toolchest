@@ -3,7 +3,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"maps"
 	"sort"
 	"strings"
@@ -90,7 +90,7 @@ func Run(ctx context.Context, d Deps, class models.ContextClass) (*Result, error
 		progress = func(string) {}
 	}
 	if d.Model == nil {
-		return nil, fmt.Errorf("no model")
+		return nil, errors.New("no model")
 	}
 	res := &Result{ModelID: d.Model.ID, Class: class, Base: d.Base, plan: d.Plan}
 	runNote := func(reason string) {

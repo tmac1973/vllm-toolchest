@@ -61,7 +61,7 @@ func TestSendCompletionStream(t *testing.T) {
 	defer srv.Close()
 
 	r := &Runner{}
-	timings, err := r.sendCompletionStream(context.Background(), srv.URL, "test-model", 128, 32, 1)
+	timings, err := r.sendCompletionStream(context.Background(), RunnerConfig{VLLMURL: srv.URL, ServedName: "test-model"}, 128, 32, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestSendCompletionStreamNoUsage(t *testing.T) {
 	defer srv.Close()
 
 	r := &Runner{}
-	_, err := r.sendCompletionStream(context.Background(), srv.URL, "test-model", 8, 4, 1)
+	_, err := r.sendCompletionStream(context.Background(), RunnerConfig{VLLMURL: srv.URL, ServedName: "test-model"}, 8, 4, 1)
 	if err == nil || !strings.Contains(err.Error(), "no usage") {
 		t.Fatalf("expected 'no usage' error, got %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSendCompletionStreamHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	r := &Runner{}
-	_, err := r.sendCompletionStream(context.Background(), srv.URL, "x", 8, 4, 1)
+	_, err := r.sendCompletionStream(context.Background(), RunnerConfig{VLLMURL: srv.URL, ServedName: "x"}, 8, 4, 1)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 400") {
 		t.Fatalf("expected HTTP 400, got %v", err)
 	}
@@ -290,11 +290,4 @@ func TestRunnerCancellation(t *testing.T) {
 	if final.Status != StatusFailed {
 		t.Fatalf("expected failed (cancelled), got %s", final.Status)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

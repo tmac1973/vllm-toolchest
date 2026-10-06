@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -18,6 +17,8 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/advice"
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
+	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
 type State string
@@ -29,6 +30,12 @@ const (
 	StateStopping State = "stopping"
 	StateError    State = "error"
 )
+
+// Live reports a state in which an engine process exists and owns the GPUs:
+// starting or running.
+func (s State) Live() bool {
+	return s == StateRunning || s == StateStarting
+}
 
 type Status struct {
 	State     State     `json:"state"`
@@ -84,7 +91,10 @@ type Manager struct {
 	modelID string
 	// args is the flag list the running process was launched with; see Status.
 	args []string
-	pid  int
+	// apiKey is the key the running process requires on /v1, from the
+	// VLLM_API_KEY it was launched with; see EngineAPIKey.
+	apiKey string
+	pid    int
 	// run numbers each launch, so that the goroutines watching one cannot
 	// write state that belongs to the next.
 	run        int
@@ -111,14 +121,8 @@ type Manager struct {
 	killWait  time.Duration
 	portWait  time.Duration
 
-	// Log ring buffer
-	logMu  sync.Mutex
-	logBuf []string
-	logMax int
-
-	// Log subscribers
-	subMu sync.Mutex
-	subs  map[chan string]struct{}
+	// The engine's output: the last lines, and a feed of new ones.
+	log *broadcast.Log
 
 	// What the engine said about this run, read off the log stream as it
 	// arrives. Cleared on start: advice from the previous run describes a
@@ -151,9 +155,7 @@ func NewManager(vllmHost string, vllmPort int, startupTimeout time.Duration) *Ma
 		stopGrace:      30 * time.Second,
 		killWait:       10 * time.Second,
 		portWait:       5 * time.Second,
-		logBuf:         make([]string, 0, 5000),
-		logMax:         5000,
-		subs:           make(map[chan string]struct{}),
+		log:            broadcast.NewLog(5000, 64),
 	}
 }
 
@@ -226,6 +228,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.state = StateStarting
 	m.modelID = modelID
 	m.args = append([]string(nil), args...)
+	m.apiKey = envValue(env, "VLLM_API_KEY")
 	m.lastError = ""
 	m.overdue = false
 	m.startFailed = false
@@ -234,9 +237,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 
 	// Clear log buffer, and with it what the last run's output said. Advice
 	// describing a configuration that is no longer loaded is worse than none.
-	m.logMu.Lock()
-	m.logBuf = m.logBuf[:0]
-	m.logMu.Unlock()
+	m.log.Clear()
 	m.resetAdvice()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -257,9 +258,6 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	)
 	cmdArgs = append(cmdArgs, args...)
 
-	cmd := exec.CommandContext(ctx, launcher.Bin, cmdArgs...)
-	cmd.Env = append(os.Environ(), env...)
-
 	// Put the server in its own process group so the whole tree can be
 	// signalled at once.
 	//
@@ -273,18 +271,22 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	//
 	// A new group is what makes this safe: the workers inherit it, so
 	// kill(-pgid) reaches every one of them without also signalling vllmctl,
-	// which shares its own group with them otherwise.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return killProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-	}
-	// Bound how long Wait blocks on the output pipes: a surviving grandchild
-	// holds them open, and without this the reaper never returns.
-	cmd.WaitDelay = 10 * time.Second
+	// which shares its own group with them otherwise. The wait bounds how
+	// long Wait blocks on the output pipes: a surviving grandchild holds
+	// them open, and without it the reaper never returns.
+	cmd := procgroup.Command(ctx, syscall.SIGKILL, 10*time.Second, launcher.Bin, cmdArgs...)
+	cmd.Env = append(procgroup.Environ(), env...)
 
-	// Capture stdout and stderr
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	// Capture stdout and stderr through pipes we own, not StdoutPipe. Wait
+	// closes a StdoutPipe as soon as the process exits, so reading one while
+	// Wait runs drops whatever was still unread -- and for an engine that
+	// dies at once that is the error itself, the lines the start-fix and the
+	// advice are read from. With these writers Wait copies everything out
+	// first (bounded by WaitDelay), and waitForExit closes them after.
+	stdout, stdoutW := io.Pipe()
+	stderr, stderrW := io.Pipe()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
 	slog.Info("starting vLLM", "model", modelID, "bin", launcher.Bin, "args", cmdArgs)
 
@@ -303,11 +305,17 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 	m.mu.Unlock()
 
 	// Stream logs
-	go m.streamOutput(stdout, run)
-	go m.streamOutput(stderr, run)
+	var streams sync.WaitGroup
+	streams.Add(2)
+	go func() { defer streams.Done(); m.streamOutput(stdout, run) }()
+	go func() { defer streams.Done(); m.streamOutput(stderr, run) }()
 
 	// Wait for process in background
-	go m.waitForExit(cmd, cancel, run)
+	go m.waitForExit(cmd, cancel, run, func() {
+		stdoutW.Close()
+		stderrW.Close()
+		streams.Wait()
+	})
 
 	// Poll for readiness
 	go m.waitForReady(run)
@@ -403,7 +411,7 @@ func killProcessGroup(pid int, sig syscall.Signal) error {
 // Only a live server is stopped first. Start accepts a stopped or errored
 // manager as it is, and reaps anything left of the last run itself.
 func (m *Manager) Restart(modelID, modelPath string, args []string, env []string) error {
-	if st := m.GetStatus().State; st == StateRunning || st == StateStarting {
+	if m.GetStatus().State.Live() {
 		if err := m.Stop(); err != nil {
 			return err
 		}
@@ -415,39 +423,22 @@ func (m *Manager) Restart(modelID, modelPath string, args []string, env []string
 
 // ClearLogs empties the log buffer.
 func (m *Manager) ClearLogs() {
-	m.logMu.Lock()
-	m.logBuf = m.logBuf[:0]
-	m.logMu.Unlock()
+	m.log.Clear()
 }
 
-// RecentLogs returns the most recent log lines.
+// RecentLogs returns the most recent n log lines, or all of them for n <= 0.
 func (m *Manager) RecentLogs(n int) []string {
-	m.logMu.Lock()
-	defer m.logMu.Unlock()
-
-	if n <= 0 || n > len(m.logBuf) {
-		n = len(m.logBuf)
-	}
-	start := len(m.logBuf) - n
-	out := make([]string, n)
-	copy(out, m.logBuf[start:])
-	return out
+	return m.log.Recent(n)
 }
 
 // SubscribeLogs returns a channel that receives log lines.
 func (m *Manager) SubscribeLogs() chan string {
-	ch := make(chan string, 64)
-	m.subMu.Lock()
-	m.subs[ch] = struct{}{}
-	m.subMu.Unlock()
-	return ch
+	return m.log.Subscribe()
 }
 
-// UnsubscribeLogs removes a log subscriber.
+// UnsubscribeLogs removes a log subscriber and closes its channel.
 func (m *Manager) UnsubscribeLogs(ch chan string) {
-	m.subMu.Lock()
-	delete(m.subs, ch)
-	m.subMu.Unlock()
+	m.log.Unsubscribe(ch)
 }
 
 func (m *Manager) streamOutput(r io.ReadCloser, run int) {
@@ -475,6 +466,12 @@ func (m *Manager) streamOutput(r io.ReadCloser, run int) {
 			}
 			m.mu.Unlock()
 		}
+	}
+	// The scanner stops on a line over its limit. Keep draining regardless:
+	// a pipe nobody reads fills, and vLLM then blocks on its next write.
+	if err := scanner.Err(); err != nil {
+		slog.Warn("vLLM output line too long to read; discarding the rest", "error", err)
+		_, _ = io.Copy(io.Discard, r)
 	}
 }
 
@@ -583,22 +580,7 @@ func (m *Manager) resetAdvice() {
 }
 
 func (m *Manager) appendLog(line string) {
-	m.logMu.Lock()
-	if len(m.logBuf) >= m.logMax {
-		m.logBuf = m.logBuf[1:]
-	}
-	m.logBuf = append(m.logBuf, line)
-	m.logMu.Unlock()
-
-	// Fan out to subscribers
-	m.subMu.Lock()
-	for ch := range m.subs {
-		select {
-		case ch <- line:
-		default:
-		}
-	}
-	m.subMu.Unlock()
+	m.log.Append(line)
 }
 
 // waitForExit records how a run ended -- if it is still the current run.
@@ -615,15 +597,22 @@ func (m *Manager) appendLog(line string) {
 //
 // Start and Stop are now serialised, so that interleaving cannot recur, but a
 // run's watcher still has no business writing another run's state.
-func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc, run int) {
+//
+// drain ends the output streams and returns once every line has been read,
+// so the exit is recorded only after everything the run printed has been
+// seen.
+func (m *Manager) waitForExit(cmd *exec.Cmd, cancel context.CancelFunc, run int, drain func()) {
 	err := cmd.Wait()
+	drain()
 	cancel()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.run != run {
-		slog.Info("a replaced vLLM run exited", "pid", cmd.Process.Pid, "error", err)
+		// Expected: the run was replaced, so it was told to exit and its
+		// error is the signal that ended it.
+		slog.Debug("a replaced vLLM run exited", "pid", cmd.Process.Pid, "error", err)
 		return
 	}
 	// Stop may already have finished: it waits on the processes, not on this.
@@ -881,6 +870,28 @@ func SplitFlags(s string) []string {
 	}
 	flush()
 	return out
+}
+
+// EngineAPIKey is the key the current engine requires on its /v1 routes, or
+// "" when it requires none. It is the key the engine was started with, which
+// is not the configured one after a change in Settings until the next start;
+// whatever calls the engine directly must send this one.
+func (m *Manager) EngineAPIKey() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.apiKey
+}
+
+// envValue is name's value in env, the last occurrence winning as it does
+// for os/exec.
+func envValue(env []string, name string) string {
+	v := ""
+	for _, kv := range env {
+		if k, val, ok := strings.Cut(kv, "="); ok && k == name {
+			v = val
+		}
+	}
+	return v
 }
 
 // BuildEnv constructs environment variables for the vLLM process.

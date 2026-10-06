@@ -40,7 +40,15 @@ func (s *Server) launchEnv(m *models.Model) []string {
 	if m != nil {
 		quantMethod = m.Quantization.Method
 	}
-	return process.BuildEnv(quantMethod, s.configuredEnvPairs(m)...)
+	env := process.BuildEnv(quantMethod, s.configuredEnvPairs(m)...)
+	// The engine's own port is published too, and without a key of its own
+	// it would answer anyone who skips the /v1 proxy and its check. Passed in
+	// the environment rather than as --api-key so it stays out of argv, the
+	// process list and the "starting vLLM" log line. Last, so it wins.
+	if s.cfg.APIKey != "" {
+		env = append(env, "VLLM_API_KEY="+s.cfg.APIKey)
+	}
+	return env
 }
 
 // configuredEnvPairs is the configured part of a launch environment, in the

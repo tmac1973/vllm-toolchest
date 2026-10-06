@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // hfMetaVersion is bumped whenever ParseHFConfig learns to read a new field.
@@ -289,16 +291,16 @@ func DetectToolUse(modelDir, modelID string, hfCfg HFConfig) ToolUseMeta {
 	data, err := os.ReadFile(filepath.Join(modelDir, "tokenizer_config.json"))
 	if err == nil {
 		var tc struct {
-			ChatTemplate interface{} `json:"chat_template"`
+			ChatTemplate any `json:"chat_template"`
 		}
 		if json.Unmarshal(data, &tc) == nil && tc.ChatTemplate != nil {
 			template := ""
 			switch v := tc.ChatTemplate.(type) {
 			case string:
 				template = v
-			case []interface{}:
+			case []any:
 				for _, item := range v {
-					if m, ok := item.(map[string]interface{}); ok {
+					if m, ok := item.(map[string]any); ok {
 						if s, ok := m["template"].(string); ok {
 							template += s + "\n"
 						}
@@ -500,8 +502,8 @@ func detectToolParserFromName(modelID string) string {
 func DetectVision(modelDir string, hfCfg HFConfig) VisionMeta {
 	v := VisionMeta{}
 
-	if fileExists(filepath.Join(modelDir, "processor_config.json")) ||
-		fileExists(filepath.Join(modelDir, "preprocessor_config.json")) {
+	if fsutil.Exists(filepath.Join(modelDir, "processor_config.json")) ||
+		fsutil.Exists(filepath.Join(modelDir, "preprocessor_config.json")) {
 		v.IsVisionModel = true
 		return v
 	}

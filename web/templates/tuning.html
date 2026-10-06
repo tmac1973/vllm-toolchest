@@ -43,31 +43,22 @@
   <pre id="tuner-log" style="max-height:400px;overflow-y:auto;font-size:0.75rem;background:var(--pico-code-background-color);padding:0.5em;">Connecting…</pre>
 </article>
 <script>
-(function() {
-  const logEl = document.getElementById("tuner-log");
-  logEl.textContent = "";
-
-  // Backfill recent logs first.
-  fetch("/api/tuning/logs")
-    .then(r => r.json())
-    .then(lines => {
-      if (Array.isArray(lines)) logEl.textContent = lines.join("\n") + "\n";
-      logEl.scrollTop = logEl.scrollHeight;
+// The job's log so far, then the live stream. log-panel.js is deferred, so
+// this waits for it.
+document.addEventListener('DOMContentLoaded', function() {
+    var logEl = document.getElementById('tuner-log');
+    logEl.textContent = '';
+    followLog(logEl, {
+        streamURL: '/api/tuning/log-stream',
+        backlogURL: '/api/tuning/logs',
+        backlogJSON: true,
+        onDone: function(e) {
+            logPanelAppend(logEl, '\n[stream] ' + e.data + '\n');
+            // Refresh after a beat so the job table re-renders.
+            setTimeout(function() { location.reload(); }, 1500);
+        },
     });
-
-  // Then stream new ones via SSE.
-  const es = new EventSource("/api/tuning/log-stream");
-  es.onmessage = (e) => {
-    logEl.textContent += e.data + "\n";
-    logEl.scrollTop = logEl.scrollHeight;
-  };
-  es.addEventListener("done", (e) => {
-    logEl.textContent += "\n[stream] " + e.data + "\n";
-    es.close();
-    // Refresh the page after a beat so the job-table re-renders.
-    setTimeout(() => location.reload(), 1500);
-  });
-})();
+});
 </script>
 {{end}}
 
@@ -133,19 +124,28 @@
 
 <script>
 function startTuning(modelID) {
-  if (!confirm("This will stop the running vLLM (if any) and run the kernel tuner.\n\nProceed?")) return;
-  fetch("/api/tuning/start", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({model_id: modelID}),
-  }).then(r => {
-    if (r.ok) location.reload();
-    else r.text().then(t => alert("Failed to start: " + t));
-  });
+    if (!confirm('This will stop the running vLLM (if any) and run the kernel tuner.\n\nProceed?')) return;
+    fetch('/api/tuning/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: modelID }),
+    }).then(function(r) {
+        if (r.ok) { location.reload(); return; }
+        return r.text().then(function(t) { alert('Failed to start: ' + t); });
+    }).catch(function(e) {
+        alert('Failed to start: ' + ((e && e.message) || e));
+    });
 }
+
 function cancelTuning() {
-  fetch("/api/tuning/cancel", {method: "POST"})
-    .then(() => setTimeout(() => location.reload(), 500));
+    fetch('/api/tuning/cancel', { method: 'POST' }).then(function(r) {
+        if (!r.ok) {
+            return r.text().then(function(t) { alert('Failed to cancel: ' + t); });
+        }
+        setTimeout(function() { location.reload(); }, 500);
+    }).catch(function(e) {
+        alert('Failed to cancel: ' + ((e && e.message) || e));
+    });
 }
 </script>
 {{end}}

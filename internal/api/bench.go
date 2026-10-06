@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -224,50 +225,36 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req startRunRequest
-	if r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" || isHTMX(r) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "invalid form", http.StatusBadRequest)
-			return
-		}
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		req.ModelID = r.FormValue("model_id")
 		req.Preset = r.FormValue("preset")
-	} else {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
 	}
 
 	if req.ModelID == "" || req.Preset == "" {
-		http.Error(w, "model_id and preset are required", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "model_id and preset are required")
 		return
 	}
 
 	model, ok := s.registry.Get(req.ModelID)
 	if !ok {
-		http.Error(w, "model not registered: "+req.ModelID, http.StatusNotFound)
+		s.fail(w, r, http.StatusNotFound, "model not registered: "+req.ModelID)
 		return
 	}
 
-	// Preset must exist by exact name. GetPreset falls back to standard
-	// silently, which would hide typos here.
-	var presetFound bool
-	for _, p := range benchmark.Presets() {
-		if p.Name == req.Preset {
-			presetFound = true
-			break
-		}
-	}
-	if !presetFound {
-		http.Error(w, "unknown preset: "+req.Preset, http.StatusBadRequest)
+	preset, ok := benchmark.LookupPreset(req.Preset)
+	if !ok {
+		s.fail(w, r, http.StatusBadRequest, "unknown preset: "+req.Preset)
 		return
 	}
-	preset := benchmark.GetPreset(req.Preset)
 
 	// Service must be running and serving this model.
 	status := s.process.GetStatus()
 	if status.State != process.StateRunning {
-		http.Error(w, "vLLM is not running; start the service before benchmarking", http.StatusConflict)
+		s.fail(w, r, http.StatusConflict, "vLLM is not running; start the service before benchmarking")
 		return
 	}
 	if status.ModelID != "" && status.ModelID != req.ModelID {
@@ -281,7 +268,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	// path as the model identifier unless --served-model-name was set.
 	servedName, err := s.discoverServedName(req.ModelID)
 	if err != nil {
-		http.Error(w, "could not discover vLLM served model name: "+err.Error(), http.StatusBadGateway)
+		s.fail(w, r, http.StatusBadGateway, "could not discover vLLM served model name: "+err.Error())
 		return
 	}
 
@@ -295,7 +282,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		ModelID:   model.ID,
 		ModelName: displayNameOf(model),
 		Quant:     model.Quantization.Method,
-		SizeGB:    float64(model.TotalSizeBytes) / (1024 * 1024 * 1024),
+		SizeGB:    models.BytesToGB(model.TotalSizeBytes),
 
 		Config: s.configSnapshotFromModel(model),
 
@@ -307,14 +294,15 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.bench.Save(run); err != nil {
-		http.Error(w, "failed to save run: "+err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, "failed to save run: "+err.Error())
 		return
 	}
 
 	cfg := benchmark.RunnerConfig{
 		Run:         run,
 		Preset:      preset,
-		VLLMURL:     fmt.Sprintf("http://%s:%d", s.cfg.VLLMHost, s.cfg.VLLMPort),
+		VLLMURL:     s.vllmBaseURL(),
+		APIKey:      s.process.EngineAPIKey(),
 		ServedName:  servedName,
 		MaxModelLen: model.VLLMConfig.MaxModelLen,
 		HFRepoID:    model.ID,
@@ -326,12 +314,14 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		// Roll the run back to a failed state so the UI doesn't show a stale "running".
 		run.Status = benchmark.StatusFailed
 		run.Error = err.Error()
-		_ = s.bench.Save(run)
+		if serr := s.bench.Save(run); serr != nil {
+			slog.Error("failed to record a benchmark run that did not start", "id", run.ID, "error", serr)
+		}
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
-			http.Error(w, err.Error(), http.StatusConflict)
+			s.fail(w, r, http.StatusConflict, err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.fail(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -679,9 +669,16 @@ func displayNameOf(m *models.Model) string {
 // itself by its path — and a benchmark run against it should measure the
 // model that is loaded rather than fail on the name.
 func (s *Server) discoverServedName(modelID string) (string, error) {
-	url := fmt.Sprintf("http://%s:%d/v1/models", s.cfg.VLLMHost, s.cfg.VLLMPort)
+	url := s.vllmBaseURL() + "/v1/models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	if key := s.process.EngineAPIKey(); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -699,7 +696,7 @@ func (s *Server) discoverServedName(modelID string) (string, error) {
 		return "", err
 	}
 	if len(body.Data) == 0 {
-		return "", fmt.Errorf("vLLM /v1/models returned no models")
+		return "", errors.New("vLLM /v1/models returned no models")
 	}
 
 	// Prefer an exact match against the requested modelID.

@@ -223,7 +223,8 @@ func (s *Server) askHelper(ctx context.Context, run *autoconfigRun, helper *mode
 	err, restore := s.borrowEngine(ctx, "autoconfigure", loan, progress,
 		func(ctx context.Context, baseURL string) error {
 			progress("Asking the helper model to read the card")
-			return s.llmClient().JSON(ctx, baseURL, models.HelperServedName, schemaName, schema,
+			ep := llmcall.Endpoint{BaseURL: baseURL, APIKey: s.process.EngineAPIKey()}
+			return s.llmClient().JSON(ctx, ep, models.HelperServedName, schemaName, schema,
 				[]llmcall.Message{{Role: "system", Content: system}, {Role: "user", Content: user}}, out)
 		})
 	if restore != "" {

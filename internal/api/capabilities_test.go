@@ -12,6 +12,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // The launch flags of the ThinkingCap config on compute, as the process
@@ -177,20 +178,14 @@ func TestLoadedModelsListsOnlyWhatIsServed(t *testing.T) {
 	}
 
 	// A fake engine that says it is up and then stays up.
-	dir := t.TempDir()
-	fake := filepath.Join(dir, "fakevllm")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 'INFO:     Application startup complete.'\nsleep 60\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, "echo 'INFO:     Application startup complete.'\nsleep 60\n")
 	mgr.SetLauncher(process.Launcher{Bin: fake})
 	if err := mgr.Start(m.ID, "", thinkingCapArgs, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mgr.Stop() })
-	deadline := time.Now().Add(5 * time.Second)
-	for mgr.GetStatus().State != process.StateRunning && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.Eventually(t, 5*time.Second, func() bool { return mgr.GetStatus().State == process.StateRunning },
+		"the fake engine never came up")
 
 	out = loadedModels(t, s)
 	list := out["models"].([]any)

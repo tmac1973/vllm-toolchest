@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,7 +20,9 @@ import (
 // gpu_memory_utilization when the engine had asked them to lower it -- and a
 // button that acts without being asked would have propagated both.
 func (s *Server) handleApplyAdvice(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 	modelID := r.FormValue("model_id")
 	field := r.FormValue("field")
 	value := r.FormValue("value")
@@ -85,7 +88,7 @@ func (s *Server) renderAdvice(w http.ResponseWriter, outcome adviceOutcome) {
 func applyToConfig(cfg models.VLLMConfig, field, value string) (models.VLLMConfig, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return cfg, fmt.Errorf("no value was given")
+		return cfg, errors.New("no value was given")
 	}
 
 	switch field {

@@ -1,6 +1,10 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/tmac1973/vllm-toolchest/internal/config"
+)
 
 // The helper model is the app's own: a small model autoconfigure loads to
 // read a model card, and stops again. It is one fixed model on every host,
@@ -38,13 +42,10 @@ var helperShape = HFConfig{
 const helperWeightBytes = 8_044_936_192
 
 // HelperUtil is the memory fraction the helper runs at: the machine-wide
-// setting when it is in range, and vLLM's own 0.90 otherwise, so an unset
+// setting when it is in range, and the default otherwise, so an unset
 // setting can never make the helper look as though it fits in nothing.
 func HelperUtil(configured float64) float64 {
-	if configured > 0 && configured <= 1 {
-		return configured
-	}
-	return 0.90
+	return config.GPUUtilOrDefault(configured)
 }
 
 // HelperConfig is the helper's launch config. It is fixed, and ignores

@@ -1,5 +1,7 @@
 package models
 
+import "github.com/tmac1973/vllm-toolchest/internal/config"
+
 // GPUInventory is the hardware a requirement is compared against.
 //
 // PerCardGB is the smallest card, not the average: a tensor-parallel group is
@@ -197,10 +199,7 @@ func Fit(est VRAMEstimate, c VLLMConfig, inv GPUInventory) VRAMFit {
 		return fit
 	}
 
-	util := c.GPUMemoryUtilization
-	if util <= 0 || util > 1 {
-		util = 0.90
-	}
+	util := config.GPUUtilOrDefault(c.GPUMemoryUtilization)
 
 	if !inv.Known || inv.Count < 1 || inv.PerCardGB <= 0 {
 		fit.Why = "no GPU has been read yet, so there is nothing to compare this against"

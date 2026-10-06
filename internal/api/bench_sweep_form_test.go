@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // postJob submits the batch-job form the way the browser does.
@@ -250,6 +251,7 @@ func (e *stubJobEnv) EnsureModelLoaded(ctx context.Context, _ string, _ benchmar
 }
 func (e *stubJobEnv) CurrentMetrics() monitor.Metrics { return monitor.Metrics{} }
 func (e *stubJobEnv) VLLMURL() string                 { return "http://127.0.0.1:1" }
+func (e *stubJobEnv) VLLMAPIKey() string              { return "" }
 func (e *stubJobEnv) HFToken() string                 { return "" }
 func (e *stubJobEnv) HFCacheDir() string              { return "" }
 func (e *stubJobEnv) VLLMVersion() string             { return "" }
@@ -267,17 +269,13 @@ func TestJobSubmissionSignalsSuccessOnlyWhenItSucceeded(t *testing.T) {
 		if id, busy := s.benchSvc.ActiveJobID(); busy {
 			s.benchSvc.CancelJob(id)
 		}
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, busy := s.benchSvc.ActiveJobID(); !busy {
-				// The final save lands just after the flag clears; give it the
-				// scheduler slot rather than racing it.
-				time.Sleep(20 * time.Millisecond)
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		t.Error("job did not finish within 5s of being cancelled")
+		testutil.Eventually(t, 5*time.Second, func() bool {
+			_, busy := s.benchSvc.ActiveJobID()
+			return !busy
+		}, "job did not finish within 5s of being cancelled")
+		// The final save lands just after the flag clears; give it the
+		// scheduler slot rather than racing it.
+		time.Sleep(20 * time.Millisecond)
 	})
 
 	post := func(form url.Values) *httptest.ResponseRecorder {

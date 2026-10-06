@@ -31,21 +31,27 @@ func (n *nvidiaBackend) Collect() ([]GPUInfo, error) {
 
 	var gpus []GPUInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// Seven columns were asked for. The name is the only free text, and
+		// can itself hold ", ", so the numbers are read from the ends and the
+		// name is whatever lies between them. A short row is skipped rather
+		// than indexed past its end, which used to panic the server.
 		fields := strings.Split(line, ", ")
-		if len(fields) < 6 {
+		if len(fields) < 7 {
 			continue
 		}
+		n := len(fields)
+		name := strings.Join(fields[1:n-5], ", ")
 
 		idx, _ := strconv.Atoi(strings.TrimSpace(fields[0]))
-		util, _ := strconv.Atoi(strings.TrimSpace(fields[2]))
-		vramUsed, _ := strconv.Atoi(strings.TrimSpace(fields[3]))
-		vramTotal, _ := strconv.Atoi(strings.TrimSpace(fields[4]))
-		temp, _ := strconv.Atoi(strings.TrimSpace(fields[5]))
-		power, _ := strconv.ParseFloat(strings.TrimSpace(fields[6]), 64)
+		util, _ := strconv.Atoi(strings.TrimSpace(fields[n-5]))
+		vramUsed, _ := strconv.Atoi(strings.TrimSpace(fields[n-4]))
+		vramTotal, _ := strconv.Atoi(strings.TrimSpace(fields[n-3]))
+		temp, _ := strconv.Atoi(strings.TrimSpace(fields[n-2]))
+		power, _ := strconv.ParseFloat(strings.TrimSpace(fields[n-1]), 64)
 
 		gpus = append(gpus, GPUInfo{
 			Index:       idx,
-			Name:        strings.TrimSpace(fields[1]),
+			Name:        strings.TrimSpace(name),
 			UtilPercent: util,
 			VRAMUsedMB:  vramUsed,
 			VRAMTotalMB: vramTotal,

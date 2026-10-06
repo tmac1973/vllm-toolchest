@@ -10,6 +10,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/monitor"
+	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // newTestServer constructs a minimal *Server suitable for testing the
@@ -29,15 +30,20 @@ func newTestServer(t *testing.T, backendURL string) *Server {
 		VLLMHost: u.Hostname(),
 		VLLMPort: port,
 	}
-	// Pre-create the config subdirectory the Store writes into.
-	_ = filepath.Join(dir, "config")
-
 	s := &Server{
 		cfg:      cfg,
 		registry: models.NewRegistry(dir, filepath.Join(dir, "models")),
 		monitor:  monitor.New(0),
+		process:  process.NewManager(u.Hostname(), port, 0),
 	}
 	s.bench = benchmark.NewStore(dir)
 	s.benchSvc = benchmark.NewService(s.bench)
 	return s
 }
+
+// lazy is a failure-message argument read when the message is printed, not
+// when the wait starts, so testutil.Eventually reports the state as it was
+// when the wait gave up.
+type lazy func() string
+
+func (f lazy) String() string { return f() }

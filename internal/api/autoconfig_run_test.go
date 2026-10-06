@@ -13,6 +13,7 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // autoconfigServer is a server with a scripted engine, a fake Hub serving the
@@ -69,15 +70,16 @@ func autoconfigServer(t *testing.T) (*Server, *atomic.Int32) {
 
 func waitForRun(t *testing.T, s *Server) autoconfigRun {
 	t.Helper()
-	for i := 0; i < 500; i++ {
-		if run, ok := s.autoconfigSnapshot(); ok && run.done {
-			return run
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	run, _ := s.autoconfigSnapshot()
-	t.Fatalf("the run never finished; last progress %q", run.progress)
-	return autoconfigRun{}
+	var run autoconfigRun
+	testutil.Eventually(t, 10*time.Second, func() bool {
+		var ok bool
+		run, ok = s.autoconfigSnapshot()
+		return ok && run.done
+	}, "the run never finished; last progress %q", lazy(func() string {
+		run, _ := s.autoconfigSnapshot()
+		return run.progress
+	}))
+	return run
 }
 
 func TestAutoconfigureInterruptsAndRestores(t *testing.T) {
@@ -101,10 +103,10 @@ func TestAutoconfigureInterruptsAndRestores(t *testing.T) {
 	if !res.Plan.Known || res.Plan.All.TP != 4 || res.Plan.All.Config.KVCacheDtype != "fp8" {
 		t.Errorf("plan: %+v", res.Plan.All)
 	}
-	waitFor(t, func() bool {
+	testutil.Eventually(t, 5*time.Second, func() bool {
 		st := s.process.GetStatus()
 		return st.ModelID == "org/served" && st.State == process.StateRunning
-	})
+	}, "the served model was not running again after the run")
 
 	// A second run on the unchanged card reuses the reading, and never
 	// touches the engine.

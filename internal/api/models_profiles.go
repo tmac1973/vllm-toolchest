@@ -42,12 +42,13 @@ func profileLabel(p models.ConfigProfile) string {
 // profileRequest resolves what every profile handler starts from: the model in
 // the query string and the profile name in the form.
 func (s *Server) profileRequest(w http.ResponseWriter, r *http.Request) (*models.Model, string, bool) {
-	m, ok := s.registry.Get(r.URL.Query().Get("id"))
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return nil, "", false
 	}
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return nil, "", false
+	}
 	return m, r.FormValue("name"), true
 }
 

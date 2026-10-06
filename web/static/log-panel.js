@@ -114,23 +114,68 @@ function renderLog(pre) {
     pre.textContent = visibleLog(pre, pre._rawLog || '');
 }
 
+// followLog seeds pre with a buffer's backlog, then appends its live stream.
+// The backlog is applied only if nothing has streamed in first: applied after
+// a live line it would put older lines below newer ones, and assigned over
+// the pane it would erase the live ones.
+//
+// opts.streamURL is the SSE stream; opts.backlogURL answers with the buffer
+// as text, or as a JSON array of lines with opts.backlogJSON; opts.onDone
+// runs when the stream says it has ended. Returns the EventSource.
+function followLog(pre, opts) {
+    // A .log-panel scrolls itself, honouring its live-tail toggle; a bare
+    // pre is followed always.
+    const scroll = () => {
+        if (!pre.closest('.log-panel')) pre.scrollTop = pre.scrollHeight;
+    };
+    const es = new EventSource(opts.streamURL);
+    es.onmessage = (e) => {
+        logPanelAppend(pre, e.data + '\n');
+        scroll();
+    };
+    es.addEventListener('done', (e) => {
+        es.close();
+        if (opts.onDone) opts.onDone(e);
+    });
+
+    fetch(opts.backlogURL, { headers: { 'HX-Request': 'true' } })
+        .then(r => (opts.backlogJSON ? r.json() : r.text()))
+        .then(backlog => {
+            let text = backlog;
+            if (Array.isArray(backlog)) {
+                text = backlog.length ? backlog.join('\n') + '\n' : '';
+            }
+            if (text && !pre._rawLog) {
+                logPanelAppend(pre, text);
+                pre.scrollTop = pre.scrollHeight;
+            }
+        })
+        .catch(() => {});
+    return es;
+}
+
+// copyToClipboard falls back to a hidden textarea when the async clipboard
+// API is missing or refuses, as it does on plain HTTP to a LAN address -- the
+// usual way this is reached.
 function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        return navigator.clipboard.writeText(text);
-    }
-    return new Promise((resolve, reject) => {
+    const fallback = () => new Promise((resolve, reject) => {
         try {
-            var ta = document.createElement('textarea');
+            const ta = document.createElement('textarea');
             ta.value = text;
+            ta.setAttribute('readonly', '');
             ta.style.position = 'fixed';
             ta.style.left = '-9999px';
             document.body.appendChild(ta);
             ta.select();
-            document.execCommand('copy');
+            const ok = document.execCommand('copy');
             document.body.removeChild(ta);
-            resolve();
+            if (ok) resolve(); else reject(new Error('copy refused'));
         } catch (e) {
             reject(e);
         }
     });
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    return fallback();
 }

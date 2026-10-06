@@ -2,7 +2,6 @@ package api
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -157,7 +156,7 @@ func (s *Server) pollEngineTimings(client *http.Client, watch *engineTimingWatch
 	if st.State != process.StateRunning {
 		return
 	}
-	resp, err := client.Get(fmt.Sprintf("http://%s:%d/metrics", s.cfg.VLLMHost, s.cfg.VLLMPort))
+	resp, err := client.Get(s.vllmBaseURL() + "/metrics")
 	if err != nil {
 		return
 	}

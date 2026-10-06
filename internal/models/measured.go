@@ -103,7 +103,7 @@ func MeasuredEstimate(m *Model, id EngineIdentity) (VRAMEstimate, bool) {
 		MeasuredTP: run.TP,
 
 		ContextTokens: ctx,
-		CheckpointGB:  float64(m.TotalSizeBytes) / (1024 * 1024 * 1024),
+		CheckpointGB:  BytesToGB(m.TotalSizeBytes),
 
 		// Per-rank figures multiplied back out. ConsumedGB is weights plus the
 		// allocator's overhead, which the projected path never modelled at all.
