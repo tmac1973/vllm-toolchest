@@ -165,7 +165,7 @@ func (s *Server) borrowEngine(ctx context.Context, holder string, loan engineLoa
 	if err := s.waitRunning(ctx, loan.StartWait); err != nil {
 		return err, ""
 	}
-	return work(ctx, fmt.Sprintf("http://%s:%d", s.cfg.VLLMHost, s.cfg.VLLMPort)), ""
+	return work(ctx, s.vllmBaseURL()), ""
 }
 
 // giveBack stops the loan and restarts prev, and says what went wrong, if

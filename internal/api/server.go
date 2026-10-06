@@ -139,7 +139,7 @@ func (s *Server) templateFuncs() template.FuncMap {
 		// syntax.
 		"cssID": safeID,
 		// divGB renders a byte count in GiB.
-		"divGB": func(bytes int64) float64 { return float64(bytes) / (1024 * 1024 * 1024) },
+		"divGB": models.BytesToGB,
 		// hfModelURL is the HuggingFace page for a model, or "" when the ID is
 		// not a linkable owner/name pair — which is how the templates decide
 		// whether to render a link at all.
@@ -234,7 +234,7 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 

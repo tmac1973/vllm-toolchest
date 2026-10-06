@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tmac1973/vllm-toolchest/internal/autoconfig"
+	"github.com/tmac1973/vllm-toolchest/internal/config"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
@@ -137,7 +138,7 @@ func hardwareValue(c models.VLLMConfig, field string) string {
 		return c.KVCacheDtype
 	case "gpu_memory_utilization":
 		if c.GPUMemoryUtilization == 0 {
-			return "0.90"
+			return fmt.Sprintf("%.2f", config.DefaultGPUMemoryUtil)
 		}
 		return fmt.Sprintf("%.2f", c.GPUMemoryUtilization)
 	case "max_num_seqs":
@@ -423,7 +424,9 @@ func (s *Server) handleAutoconfigDialog(w http.ResponseWriter, r *http.Request) 
 // handleAutoconfigStart starts a run.
 func (s *Server) handleAutoconfigStart(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 	class := models.ParseContextClass(r.FormValue("context_class"))
 	if err := s.startAutoconfig(id, class, r.FormValue("reread") == "on"); err != nil {
 		s.renderAutoconfigMessage(w, id, panelBanner{Error: "Not started: " + err.Error()})
@@ -471,7 +474,9 @@ func (s *Server) renderAutoconfigRun(w http.ResponseWriter, m *models.Model, run
 // apply=1 also makes it the live config.
 func (s *Server) handleAutoconfigSave(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 
 	run, ok := s.autoconfigSnapshot()
 	if !ok || run.modelID != id || !run.done || run.result == nil {

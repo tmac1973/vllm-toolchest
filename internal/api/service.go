@@ -1,11 +1,9 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -43,11 +41,11 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request) {
 		ModelID string `json:"model_id"`
 	}
 
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
-		json.NewDecoder(r.Body).Decode(&req)
-	} else {
-		r.ParseForm()
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		req.ModelID = r.FormValue("model_id")
 	}
 

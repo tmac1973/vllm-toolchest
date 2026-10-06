@@ -19,7 +19,9 @@ import (
 // gpu_memory_utilization when the engine had asked them to lower it -- and a
 // button that acts without being asked would have propagated both.
 func (s *Server) handleApplyAdvice(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 	modelID := r.FormValue("model_id")
 	field := r.FormValue("field")
 	value := r.FormValue("value")

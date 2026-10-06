@@ -7,12 +7,10 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
-	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // ErrProbeAlreadyActive is returned when a probe is requested while one is
@@ -65,14 +63,11 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req probeStartRequest
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "json") {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		r.ParseForm()
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		req.ModelID = r.FormValue("model_id")
 		req.TPSize, _ = strconv.Atoi(r.FormValue("tp_size"))
 	}
@@ -88,7 +83,7 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 
 	// Main vLLM must be stopped — the probe spawns vLLM repeatedly and
 	// needs the GPU's VRAM to itself.
-	if state := s.process.GetStatus().State; state == process.StateRunning || state == process.StateStarting {
+	if state := s.process.GetStatus().State; state.Live() {
 		http.Error(w, "stop the main vLLM process before probing", http.StatusConflict)
 		return
 	}
@@ -383,7 +378,7 @@ func (s *Server) handleProbeForm(w http.ResponseWriter, r *http.Request) {
 	// Probing starts its own vLLM processes, so the main one has to be out of
 	// the way first — otherwise the two fight over the same VRAM.
 	state := s.process.GetStatus().State
-	blocked := state == process.StateRunning || state == process.StateStarting
+	blocked := state.Live()
 
 	respondHTML(w)
 	s.renderPartial(w, "probe_form", struct {

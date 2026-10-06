@@ -31,6 +31,12 @@ const (
 	StateError    State = "error"
 )
 
+// Live reports a state in which an engine process exists and owns the GPUs:
+// starting or running.
+func (s State) Live() bool {
+	return s == StateRunning || s == StateStarting
+}
+
 type Status struct {
 	State     State     `json:"state"`
 	ModelID   string    `json:"model_id,omitempty"`
@@ -411,7 +417,7 @@ func killProcessGroup(pid int, sig syscall.Signal) error {
 // Only a live server is stopped first. Start accepts a stopped or errored
 // manager as it is, and reaps anything left of the last run itself.
 func (m *Manager) Restart(modelID, modelPath string, args []string, env []string) error {
-	if st := m.GetStatus().State; st == StateRunning || st == StateStarting {
+	if m.GetStatus().State.Live() {
 		if err := m.Stop(); err != nil {
 			return err
 		}

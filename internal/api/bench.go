@@ -224,18 +224,13 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req startRunRequest
-	if r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" || isHTMX(r) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "invalid form", http.StatusBadRequest)
-			return
-		}
+	isJSON, ok := s.readBody(w, r, &req)
+	if !ok {
+		return
+	}
+	if !isJSON {
 		req.ModelID = r.FormValue("model_id")
 		req.Preset = r.FormValue("preset")
-	} else {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
 	}
 
 	if req.ModelID == "" || req.Preset == "" {
@@ -249,20 +244,11 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Preset must exist by exact name. GetPreset falls back to standard
-	// silently, which would hide typos here.
-	var presetFound bool
-	for _, p := range benchmark.Presets() {
-		if p.Name == req.Preset {
-			presetFound = true
-			break
-		}
-	}
-	if !presetFound {
+	preset, ok := benchmark.LookupPreset(req.Preset)
+	if !ok {
 		http.Error(w, "unknown preset: "+req.Preset, http.StatusBadRequest)
 		return
 	}
-	preset := benchmark.GetPreset(req.Preset)
 
 	// Service must be running and serving this model.
 	status := s.process.GetStatus()
@@ -295,7 +281,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		ModelID:   model.ID,
 		ModelName: displayNameOf(model),
 		Quant:     model.Quantization.Method,
-		SizeGB:    float64(model.TotalSizeBytes) / (1024 * 1024 * 1024),
+		SizeGB:    models.BytesToGB(model.TotalSizeBytes),
 
 		Config: s.configSnapshotFromModel(model),
 
@@ -314,7 +300,7 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 	cfg := benchmark.RunnerConfig{
 		Run:         run,
 		Preset:      preset,
-		VLLMURL:     fmt.Sprintf("http://%s:%d", s.cfg.VLLMHost, s.cfg.VLLMPort),
+		VLLMURL:     s.vllmBaseURL(),
 		ServedName:  servedName,
 		MaxModelLen: model.VLLMConfig.MaxModelLen,
 		HFRepoID:    model.ID,
@@ -679,7 +665,7 @@ func displayNameOf(m *models.Model) string {
 // itself by its path — and a benchmark run against it should measure the
 // model that is loaded rather than fail on the name.
 func (s *Server) discoverServedName(modelID string) (string, error) {
-	url := fmt.Sprintf("http://%s:%d/v1/models", s.cfg.VLLMHost, s.cfg.VLLMPort)
+	url := s.vllmBaseURL() + "/v1/models"
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {

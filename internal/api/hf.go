@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
@@ -219,7 +219,7 @@ func (s *Server) newHFModelDetail(detail *huggingface.ModelDetail) hfModelDetail
 	// top, so weights beyond the cards is a model that cannot be served
 	// whole, and beyond one card one that needs several.
 	var vramWarning string
-	weightsGB := float64(detail.WeightsBytes) / (1 << 30)
+	weightsGB := models.BytesToGB(detail.WeightsBytes)
 	if inv := s.gpuInventory(); detail.WeightsKnown && inv.Known {
 		if weightsGB > inv.PerCardGB*float64(inv.Count) {
 			vramWarning = fmt.Sprintf(
@@ -293,15 +293,18 @@ func (s *Server) handleHFDownload(w http.ResponseWriter, r *http.Request) {
 	// Accept model_id from query param, form body, or JSON body
 	modelID := r.URL.Query().Get("model_id")
 	if modelID == "" {
-		r.ParseForm()
-		modelID = r.FormValue("model_id")
-	}
-	if modelID == "" {
 		var req struct {
 			ModelID string `json:"model_id"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
-		modelID = req.ModelID
+		isJSON, ok := s.readBody(w, r, &req)
+		if !ok {
+			return
+		}
+		if isJSON {
+			modelID = req.ModelID
+		} else {
+			modelID = r.FormValue("model_id")
+		}
 	}
 
 	if modelID == "" {

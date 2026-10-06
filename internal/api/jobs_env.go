@@ -32,7 +32,7 @@ func (e *jobEnv) ResolveModel(modelID string) (benchmark.ModelInfo, error) {
 	return benchmark.ModelInfo{
 		HFRepoID:    m.ID,
 		Quant:       m.Quantization.Method,
-		SizeGB:      float64(m.TotalSizeBytes) / (1024 * 1024 * 1024),
+		SizeGB:      models.BytesToGB(m.TotalSizeBytes),
 		DisplayName: displayNameOf(m),
 		// ServedName is discovered lazily because vLLM may not be running
 		// at the time ResolveModel is called. The job runner calls
@@ -199,7 +199,7 @@ func (e *jobEnv) CurrentMetrics() monitor.Metrics {
 
 // VLLMURL returns the base URL the runner targets.
 func (e *jobEnv) VLLMURL() string {
-	return fmt.Sprintf("http://%s:%d", e.s.cfg.VLLMHost, e.s.cfg.VLLMPort)
+	return e.s.vllmBaseURL()
 }
 
 // HFToken returns the HuggingFace token from config (empty when unset).

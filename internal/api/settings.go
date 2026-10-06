@@ -105,11 +105,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if strings.Contains(contentType, "json") {
 		if err := applyJSONUpdates(c, r.Body); err != nil {
-			settingsFail(s, w, r, "Invalid settings JSON: "+err.Error())
+			s.fail(w, r, http.StatusBadRequest, "Invalid settings JSON: "+err.Error())
 			return
 		}
 	} else {
-		r.ParseForm()
+		if !s.parseForm(w, r) {
+			return
+		}
 		if v := r.FormValue("external_url"); v != "" {
 			c.ExternalURL = v
 		}
@@ -179,16 +181,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			dir := strings.TrimSpace(r.FormValue("models_dir"))
 			if dir != "" {
 				if !filepath.IsAbs(dir) {
-					settingsFail(s, w, r, "Models directory must be an absolute path.")
+					s.fail(w, r, http.StatusBadRequest, "Models directory must be an absolute path.")
 					return
 				}
 				info, err := os.Stat(dir)
 				if err != nil {
-					settingsFail(s, w, r, fmt.Sprintf("Models directory %s: %s", dir, err))
+					s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("Models directory %s: %s", dir, err))
 					return
 				}
 				if !info.IsDir() {
-					settingsFail(s, w, r, fmt.Sprintf("Models directory %s is not a directory.", dir))
+					s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("Models directory %s is not a directory.", dir))
 					return
 				}
 			}
@@ -308,18 +310,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// settingsFail reports a rejected settings change through whichever channel
-// the caller used. htmx does not swap a non-2xx response, so an htmx caller is
-// given 200 and the error partial; everything else gets a real status code.
-func settingsFail(s *Server, w http.ResponseWriter, r *http.Request, msg string) {
-	if isHTMX(r) {
-		respondHTML(w)
-		s.renderPartial(w, "error_message", msg)
-		return
-	}
-	http.Error(w, msg, http.StatusBadRequest)
-}
-
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	status := s.process.GetStatus()
 	health := map[string]interface{}{
@@ -329,7 +319,7 @@ func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	if status.State == "running" {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
-			fmt.Sprintf("http://%s:%d/health", s.cfg.VLLMHost, s.cfg.VLLMPort), nil)
+			s.vllmBaseURL()+"/health", nil)
 		var resp *http.Response
 		if err == nil {
 			resp, err = (&http.Client{Timeout: 5 * time.Second}).Do(req)

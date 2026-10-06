@@ -94,7 +94,7 @@ func (s *Server) handleStartTuning(w http.ResponseWriter, r *http.Request) {
 		ModelID string `json:"model_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+		s.fail(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if body.ModelID == "" {
@@ -120,7 +120,7 @@ func (s *Server) handleStartTuning(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, job)
+	respondJSONStatus(w, http.StatusAccepted, job)
 }
 
 // POST /api/tuning/cancel
@@ -131,7 +131,7 @@ func (s *Server) handleCancelTuning(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/tuning/status
 func (s *Server) handleTuningStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	respondJSONStatus(w, http.StatusOK, map[string]any{
 		"device_name": s.tuner.DeviceName(),
 		"active":      s.tuner.ActiveJob(),
 		"models":      s.buildTuningViews(),
@@ -150,7 +150,7 @@ func (s *Server) handleTuningLogs(w http.ResponseWriter, r *http.Request) {
 	if len(all) > limit {
 		all = all[len(all)-limit:]
 	}
-	writeJSON(w, http.StatusOK, all)
+	respondJSONStatus(w, http.StatusOK, all)
 }
 
 // GET /api/tuning/log-stream — SSE of live log lines.
@@ -158,10 +158,4 @@ func (s *Server) handleTuningLogStream(w http.ResponseWriter, r *http.Request) {
 	ch := s.tuner.Subscribe()
 	defer s.tuner.Unsubscribe(ch)
 	StreamLines(w, r.Context(), ch, "tuning job ended")
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // manifestName is the record, kept beside a model's files, of what each of
@@ -92,18 +94,7 @@ func loadManifest(modelDir, modelID string) *Manifest {
 
 func (m *Manifest) save(modelDir string) error {
 	m.UpdatedAt = time.Now().UTC()
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Written whole and renamed, so a crash leaves the old manifest rather
-	// than half of the new one.
-	path := filepath.Join(modelDir, manifestName)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsutil.WriteJSONAtomic(filepath.Join(modelDir, manifestName), m)
 }
 
 // FileState is where one upstream file stands against the copy on disk.

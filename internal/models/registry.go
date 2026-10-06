@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/config"
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // Model represents a registered model in the inventory.
@@ -374,8 +377,7 @@ func (r *Registry) writableLocked() error {
 	if r.readOnlyReason == "" {
 		return nil
 	}
-	return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart",
-		r.filePath, r.readOnlyReason)
+	return fsutil.RefuseWrite(r.filePath, r.readOnlyReason)
 }
 
 func (r *Registry) save() error {
@@ -389,21 +391,7 @@ func (r *Registry) save() error {
 		PendingConfigs: r.pending,
 		Profiles:       r.profiles,
 	}
-	data, err := json.MarshalIndent(rf, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(r.filePath), 0o755); err != nil {
-		return err
-	}
-	// Write-then-rename, as the benchmark store does. os.WriteFile truncates
-	// first, so a crash or a full disk mid-write left a half-file that the
-	// next load could not parse.
-	tmp := r.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.filePath)
+	return fsutil.WriteJSONAtomic(r.filePath, rf)
 }
 
 // List returns every registered model, ordered by ID.
@@ -822,7 +810,7 @@ func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
 		Dtype:                "auto",
 		MaxModelLen:          defaultCtx,
 		TensorParallelSize:   1,
-		GPUMemoryUtilization: 0.90,
+		GPUMemoryUtilization: config.DefaultGPUMemoryUtil,
 		MaxNumSeqs:           16,
 		LoadFormat:           "auto",
 		KVCacheDtype:         "auto",

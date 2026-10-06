@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 )
 
 // serveFlagsProbeTimeout bounds the help probe. A first run on an image that
@@ -141,21 +143,10 @@ func (s *Server) RefreshServeFlags() {
 	if s.vllmEnv.VariantVersion == "" {
 		return
 	}
-	data, _ := json.MarshalIndent(serveFlagsCache{
+	if err := fsutil.WriteJSONAtomic(s.serveFlagsPath(), serveFlagsCache{
 		Variant: s.vllmEnv.Variant, VariantVersion: s.vllmEnv.VariantVersion,
 		ProbedAt: time.Now().UTC(), Flags: flags,
-	}, "", "  ")
-	path := s.serveFlagsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Warn("could not cache the serve flags", "error", err)
-		return
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		slog.Warn("could not cache the serve flags", "error", err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	}); err != nil {
 		slog.Warn("could not cache the serve flags", "error", err)
 	}
 }

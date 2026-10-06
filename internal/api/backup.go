@@ -54,9 +54,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			s.renderPartial(w, "restore_report", backup.Report{Error: msg})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		fmt.Fprintf(w, `{"error": %q}`, msg)
+		respondJSONStatus(w, status, map[string]string{"error": msg})
 	}
 
 	// A restore mid-benchmark would rewrite the configs a running cell is
@@ -221,7 +219,9 @@ func (s *Server) restoreDeps() backup.Deps {
 // handleDiscardPending drops a pending config the operator no longer wants
 // waiting for its model.
 func (s *Server) handleDiscardPending(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	if !s.parseForm(w, r) {
+		return
+	}
 	modelID := r.FormValue("model_id")
 	// Checked first so the refusal is not reported as a missing entry.
 	if reason := s.registry.ReadOnly(); reason != "" {

@@ -21,9 +21,7 @@ func (s *Server) newProxyHandler() http.Handler {
 	// engine_timings.go.
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"error":{"message":"vLLM is not available: %s","type":"proxy_error"}}`, err)
+		respondJSONStatus(w, http.StatusBadGateway, openAIError("vLLM is not available: "+err.Error(), "proxy_error"))
 	}
 	return proxy
 }

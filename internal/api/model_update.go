@@ -9,7 +9,6 @@ import (
 	"regexp"
 
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
-	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
 // commitSHA is a full git commit id, the only form of revision accepted from
@@ -47,7 +46,7 @@ func (s *Server) transferBlocker(modelID string, plan huggingface.Plan) string {
 		// The engine has the checkpoint open. Nothing is swapped in until the
 		// whole update has arrived, but that last step would still change the
 		// files under a running server.
-		if st := s.process.GetStatus(); st.State == process.StateRunning || st.State == process.StateStarting {
+		if st := s.process.GetStatus(); st.State.Live() {
 			if st.ModelID == modelID {
 				return "This model is being served. Stop the server before updating its files."
 			}
@@ -205,12 +204,11 @@ func (s *Server) newModelUpdateView(modelID, displayName string, plan huggingfac
 // stands now. It reads no file contents, so it answers at once even for a
 // checkpoint that would take minutes to hash.
 func (s *Server) handleModelUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	m, ok := s.registry.Get(id)
+	m, ok := s.modelFromQuery(w, r)
 	if !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
+	id := m.ID
 
 	revision, files, err := s.hfClient.GetFiles(r.Context(), id, "")
 	if err != nil {
@@ -234,11 +232,11 @@ func (s *Server) handleModelUpdateCheck(w http.ResponseWriter, r *http.Request) 
 
 // handleModelUpdate starts fetching what handleModelUpdateCheck reported.
 func (s *Server) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	if _, ok := s.registry.Get(id); !ok {
-		http.Error(w, "model not found", http.StatusNotFound)
+	m, ok := s.modelFromQuery(w, r)
+	if !ok {
 		return
 	}
+	id := m.ID
 	// FormValue, not the query alone: the checkbox arrives in the body.
 	removeStale := r.FormValue("remove_stale") == "true"
 

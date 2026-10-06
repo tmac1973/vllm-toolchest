@@ -220,7 +220,7 @@ func EstimateVRAM(m *Model, envPairs []string) VRAMEstimate {
 	for _, d := range BundledDrafts(m) {
 		size -= d.TotalSizeBytes
 	}
-	diskGB := float64(size) / (1024 * 1024 * 1024)
+	diskGB := BytesToGB(size)
 	params := estimateParamCount(cfg)
 	bpp := m.Quantization.BytesPerParam
 

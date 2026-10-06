@@ -12,6 +12,21 @@ import (
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
 
+// DefaultGPUMemoryUtil is the fraction of each card a model may claim when
+// nothing in range is configured. vllmctl always passes the value it plans
+// with (see process.BuildArgs), because vLLM's own default is not the same in
+// every version: 0.29 uses 0.92.
+const DefaultGPUMemoryUtil = 0.90
+
+// GPUUtilOrDefault returns u when it is a usable fraction, and
+// DefaultGPUMemoryUtil otherwise.
+func GPUUtilOrDefault(u float64) float64 {
+	if u <= 0 || u > 1 {
+		return DefaultGPUMemoryUtil
+	}
+	return u
+}
+
 type Config struct {
 	// Server
 	ListenAddr string `yaml:"listen_addr"`
@@ -288,7 +303,7 @@ func defaults() *Config {
 		ExternalURL:        "http://localhost:3000",
 		VLLMPort:           8000,
 		VLLMHost:           "127.0.0.1",
-		GPUMemoryUtil:      0.90,
+		GPUMemoryUtil:      DefaultGPUMemoryUtil,
 		TensorParallelSize: 1,
 		MaxNumSeqs:         16,
 		DefaultDtype:       "auto",

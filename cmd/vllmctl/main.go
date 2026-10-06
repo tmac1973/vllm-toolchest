@@ -33,6 +33,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The default handler's format is kept -- operators read these lines in
+	// podman logs -- and only its level comes from the config.
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
+		slog.Warn("unknown log_level; using info", "log_level", cfg.LogLevel)
+		level = slog.LevelInfo
+	}
+	slog.SetLogLoggerLevel(level)
+
 	if err := initDataDir(cfg.DataDir); err != nil {
 		slog.Warn("could not init data dir (expected in local dev)", "error", err)
 	}
