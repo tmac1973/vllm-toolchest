@@ -16,6 +16,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/huggingface"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 const (
@@ -137,22 +138,6 @@ func htmxRequest(s *Server, method, target string) *httptest.ResponseRecorder {
 	return rec
 }
 
-func waitForTransfer(t *testing.T, s *Server, modelID string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		p := s.downloader.GetProgress(huggingface.DownloadID(modelID))
-		if p != nil && p.Status != "downloading" {
-			if p.Status != "complete" {
-				t.Fatalf("transfer ended %s: %s", p.Status, p.Error)
-			}
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("transfer did not settle")
-}
-
 func TestUpdateCheckReportsWhatChangedWithoutFetchingIt(t *testing.T) {
 	s, hub, _ := newUpdateServer(t)
 
@@ -182,7 +167,14 @@ func TestUpdateFetchesTheChangedShardAndKeepsTheConfig(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Update started") {
 		t.Fatalf("update did not start: %d %s", rec.Code, rec.Body.String())
 	}
-	waitForTransfer(t, s, updModel)
+	var p *huggingface.DownloadProgress
+	testutil.Eventually(t, 10*time.Second, func() bool {
+		p = s.downloader.GetProgress(huggingface.DownloadID(updModel))
+		return p != nil && p.Status != "downloading"
+	}, "transfer did not settle")
+	if p.Status != "complete" {
+		t.Fatalf("transfer ended %s: %s", p.Status, p.Error)
+	}
 
 	got, err := os.ReadFile(filepath.Join(dir, "model-00001.safetensors"))
 	if err != nil || string(got) != "shard one, second cut!" {

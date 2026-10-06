@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // The lines a successful start really prints, taken from
@@ -29,10 +31,7 @@ func startFakeEngine(t *testing.T, mgr *process.Manager, modelID, output string)
 	if err := os.WriteFile(data, []byte(output+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fake := filepath.Join(dir, "fakevllm")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncat "+data+"\nsleep 60\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, "cat "+data+"\nsleep 60\n")
 
 	mgr.SetLauncher(process.Launcher{Bin: fake})
 	if err := mgr.Start(modelID, "", nil, nil); err != nil {
@@ -65,13 +64,8 @@ func testServerWithEngine(t *testing.T, modelID, output string, cfg models.VLLMC
 // waitForObserved gives the manager's scanner a moment to read the output.
 func waitForObserved(t *testing.T, s *Server, want func() bool) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
-		if want() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("the engine's output was never observed: %+v", s.process.Measured())
+	testutil.Eventually(t, 4*time.Second, want, "the engine's output was never observed: %v",
+		lazy(func() string { return fmt.Sprintf("%+v", s.process.Measured()) }))
 }
 
 // End to end: the engine prints, the manager observes, the registry keeps it.

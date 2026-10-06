@@ -1,6 +1,7 @@
 package process
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // readyHarness is a Manager pointed at a health endpoint the test controls,
@@ -57,30 +60,21 @@ func readyHarness(t *testing.T, healthy *atomic.Bool, timeout time.Duration) *Ma
 	return m
 }
 
-func waitForState(t *testing.T, m *Manager, want State, within time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if got := m.GetStatus().State; got == want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("state = %s after %s, want %s (error: %q)",
-		m.GetStatus().State, within, want, m.GetStatus().Error)
+// status is a failure-message argument that reads the manager's state when
+// the message is printed, so a wait that gives up reports where it stopped.
+type status struct{ m *Manager }
+
+func (s status) String() string {
+	st := s.m.GetStatus()
+	return fmt.Sprintf("state %s, error %q, notice %q", st.State, st.Error, st.Notice)
 }
 
-// waitForOverdue waits for a start to be marked as past its deadline.
-func waitForOverdue(t *testing.T, m *Manager, within time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if m.GetStatus().Overdue {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("start was never marked overdue (state %s)", m.GetStatus().State)
+func becomes(m *Manager, want State) func() bool {
+	return func() bool { return m.GetStatus().State == want }
+}
+
+func isOverdue(m *Manager) func() bool {
+	return func() bool { return m.GetStatus().Overdue }
 }
 
 // The case this was written for. A 125B MoE printed "Application startup
@@ -91,12 +85,12 @@ func TestAServerThatComesUpLateIsNotLeftMarkedFailed(t *testing.T) {
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
 	go m.waitForReady(m.run)
-	waitForOverdue(t, m, 2*time.Second)
+	testutil.Eventually(t, 2*time.Second, isOverdue(m), "the start was never marked overdue: %v", status{m})
 
 	// The engine finishes loading well after the deadline.
 	healthy.Store(true)
 
-	waitForState(t, m, StateRunning, 2*time.Second)
+	testutil.Eventually(t, 2*time.Second, becomes(m, StateRunning), "never running: %v", status{m})
 	st := m.GetStatus()
 	if st.Error != "" || st.Notice != "" || st.Overdue {
 		t.Errorf("a late start that came good still carries error %q, notice %q, overdue %v",
@@ -112,7 +106,7 @@ func TestASlowStartIsNotReportedAsAnError(t *testing.T) {
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
 	go m.waitForReady(m.run)
-	waitForOverdue(t, m, 2*time.Second)
+	testutil.Eventually(t, 2*time.Second, isOverdue(m), "the start was never marked overdue: %v", status{m})
 
 	st := m.GetStatus()
 	if st.State != StateStarting {
@@ -139,7 +133,7 @@ func TestAnOverdueStartCannotBeStartedOver(t *testing.T) {
 	m := readyHarness(t, &healthy, 60*time.Millisecond)
 
 	go m.waitForReady(m.run)
-	waitForOverdue(t, m, 2*time.Second)
+	testutil.Eventually(t, 2*time.Second, isOverdue(m), "the start was never marked overdue: %v", status{m})
 
 	err := m.Start("org/other", "/nowhere", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "already running") {
@@ -167,7 +161,11 @@ func TestAStartTheEngineGaveUpOnIsNotCalledSlow(t *testing.T) {
 
 	// Still so once the deadline passes: the failure outranks the lateness.
 	go m.waitForReady(m.run)
-	time.Sleep(200 * time.Millisecond)
+	testutil.Eventually(t, 2*time.Second, func() bool {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return m.overdue
+	}, "the startup deadline never passed")
 	st = m.GetStatus()
 	if !st.StartFailed || st.Overdue || strings.Contains(st.Notice, "Nothing has failed") {
 		t.Errorf("a failed start reads as a slow one: %+v", st)
@@ -181,7 +179,7 @@ func TestReadyBeforeTheDeadlineNeverReportsAnError(t *testing.T) {
 
 	go m.waitForReady(m.run)
 
-	waitForState(t, m, StateRunning, 2*time.Second)
+	testutil.Eventually(t, 2*time.Second, becomes(m, StateRunning), "never running: %v", status{m})
 	if e := m.GetStatus().Error; e != "" {
 		t.Errorf("error text = %q, want none", e)
 	}

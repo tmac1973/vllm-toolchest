@@ -1,6 +1,7 @@
 package variants_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,12 +53,12 @@ func TestVariantMatching(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := splitLines(runMatch(t, tc.state, "matching_variants"))
 			for _, w := range tc.want {
-				if !contains(got, w) {
+				if !slices.Contains(got, w) {
 					t.Errorf("%s should be offered here; got %v", w, got)
 				}
 			}
 			for _, n := range tc.notWant {
-				if contains(got, n) {
+				if slices.Contains(got, n) {
 					t.Errorf("%s must not be offered here; got %v", n, got)
 				}
 			}
@@ -88,7 +89,7 @@ func TestRecommendationPrefersTheSpecificVariant(t *testing.T) {
 
 	// The source build is still offered, just not preselected.
 	all := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
-	if !contains(all, "rocm-source") {
+	if !slices.Contains(all, "rocm-source") {
 		t.Errorf("rocm-source should still be on the menu; got %v", all)
 	}
 }
@@ -168,15 +169,6 @@ func TestHostRequirementBlocksAndCanBeSkipped(t *testing.T) {
 	}
 }
 
-func contains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // AMD publishes an arch-specific CDNA image and an unsuffixed unified one, and
 // since 2026-09-21 the rocm variant points at the unified build. An Instinct
 // machine therefore matches both, and should be offered both: they are real
@@ -187,7 +179,7 @@ func TestCDNAIsOfferedBothAMDImages(t *testing.T) {
 
 	got := splitLines(runMatch(t, state, "matching_variants"))
 	for _, w := range []string{"rocm", "rocm-cdna"} {
-		if !contains(got, w) {
+		if !slices.Contains(got, w) {
 			t.Errorf("%s should be offered to an Instinct machine; got %v", w, got)
 		}
 	}
@@ -208,10 +200,10 @@ func TestCDNAIsOfferedBothAMDImages(t *testing.T) {
 // be easy to widen the wrong manifest.
 func TestRDNAIsNotOfferedTheCDNAImage(t *testing.T) {
 	got := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
-	if contains(got, "rocm-cdna") {
+	if slices.Contains(got, "rocm-cdna") {
 		t.Errorf("rocm-cdna is built for MI200/MI300/MI350 and must not be offered to gfx1100; got %v", got)
 	}
-	if !contains(got, "rocm") {
+	if !slices.Contains(got, "rocm") {
 		t.Errorf("rocm covers gfx1100 and should still be offered; got %v", got)
 	}
 }

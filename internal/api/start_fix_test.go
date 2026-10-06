@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // failingServer is a server whose engine prints output and exits 1, as a
@@ -20,8 +21,7 @@ func failingServer(t *testing.T, output string, cfg models.VLLMConfig) (*Server,
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.txt")
 	os.WriteFile(out, []byte(output+"\n"), 0o644)
-	fake := filepath.Join(dir, "fakevllm")
-	os.WriteFile(fake, []byte("#!/bin/sh\ncat "+out+"\nexit 1\n"), 0o755)
+	fake := testutil.WriteScript(t, "cat "+out+"\nexit 1\n")
 
 	s := newGoldenServer(t, goldenEnvGeneric)
 	s.process = process.NewManager("127.0.0.1", 0, 0)
@@ -32,14 +32,12 @@ func failingServer(t *testing.T, output string, cfg models.VLLMConfig) (*Server,
 	if err := s.startModel(m); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 200 && s.process.GetStatus().State != process.StateError; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.Eventually(t, 2*time.Second, func() bool { return s.process.GetStatus().State == process.StateError },
+		"the failing start was never recorded as an error")
 	// Five seconds, not one: under the full suite's parallel load the advice
 	// sometimes took just over a second to appear, and a test read none.
-	for i := 0; i < 500 && len(s.process.Advice()) == 0; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.Eventually(t, 5*time.Second, func() bool { return len(s.process.Advice()) > 0 },
+		"no advice was drawn from the failed start's output")
 	return s, m
 }
 

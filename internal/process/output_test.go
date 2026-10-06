@@ -1,10 +1,10 @@
 package process
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // An engine that prints and dies at once must still have every line read
@@ -12,11 +12,7 @@ import (
 // to drop the tail, which is where a failing start prints its error.
 func TestAnEngineThatDiesAtOnceKeepsItsOutput(t *testing.T) {
 	dir := t.TempDir()
-	fake := filepath.Join(dir, "fakevllm")
-	script := "#!/bin/sh\nfor i in $(seq 1 200); do echo line $i; done\necho LAST LINE >&2\nexit 1\n"
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, "for i in $(seq 1 200); do echo line $i; done\necho LAST LINE >&2\nexit 1\n")
 
 	for attempt := 0; attempt < 20; attempt++ {
 		m := NewManager("127.0.0.1", 0, 0)
@@ -24,7 +20,7 @@ func TestAnEngineThatDiesAtOnceKeepsItsOutput(t *testing.T) {
 		if err := m.Start("org/model", dir, nil, nil); err != nil {
 			t.Fatal(err)
 		}
-		waitForState(t, m, StateError, 5*time.Second)
+		testutil.Eventually(t, 5*time.Second, becomes(m, StateError), "the exit was never recorded: %v", status{m})
 
 		logs := m.RecentLogs(1000)
 		var sawLast, sawTail bool
