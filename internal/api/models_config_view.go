@@ -359,8 +359,8 @@ func (s *Server) effectiveServeCommand(m *models.Model, modelLen int) string {
 // vllm/tool_parsers/__init__.py.
 var toolParserGroups = []optGroup{
 	{Label: "Common", Options: []selectOption{
-		{Value: "hermes", Label: "hermes — Hermes, NousResearch, Qwen 2.5, plain Qwen 3"},
-		{Value: "qwen3_xml", Label: "qwen3_xml — Qwen 3.5+, Qwen thinking variants, MiMo"},
+		{Value: "hermes", Label: "hermes — Hermes, NousResearch, Qwen 2.5, Qwen 3 (thinking too)"},
+		{Value: "qwen3_xml", Label: "qwen3_xml — Qwen 3.5+, MiMo"},
 		{Value: "qwen3_coder", Label: "qwen3_coder — Qwen 3 Coder"},
 		{Value: "llama3_json", Label: "llama3_json — Llama 3.1 / 3.2 / 3.3"},
 		{Value: "llama4_pythonic", Label: "llama4_pythonic — Llama 4"},

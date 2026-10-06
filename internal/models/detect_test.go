@@ -44,16 +44,28 @@ For each function call return a json object with function name and arguments wit
 {%- endif %}
 {%- elif message.tool_calls is defined and message.tool_calls is not none %}{{- "[TOOL_CALLS] [" }}`
 
-	// meta-llama/Llama-3.1-8B-Instruct: custom tools are called in JSON;
-	// <|python_tag|> is only for the built-in ipython tools.
-	llama31Template = `{%- if builtin_tools is defined or tools is not none %}{{- "Environment: ipython\n" }}{%- endif %}
-{{- 'Given the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.\n\n' }}
-{{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
-{%- elif 'tool_calls' in message %}
-    {%- if builtin_tools is defined and tool_call.name in builtin_tools %}
-        {{- "<|python_tag|>" + tool_call.name + ".call(" }}
-    {%- else %}
-        {{- '{"name": "' + tool_call.name + '", ' }}`
+	// meta-llama/Llama-3.1-8B-Instruct's assistant tool-call turn, verbatim
+	// from its tokenizer_config.json (via the ungated unsloth mirror). Custom
+	// tools are called in JSON; <|python_tag|> only prefixes the built-in
+	// ipython tools.
+	llama31Template = `{%- set tool_call = message.tool_calls[0].function %}
+        {%- if builtin_tools is defined and tool_call.name in builtin_tools %}
+            {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+            {{- "<|python_tag|>" + tool_call.name + ".call(" }}
+            {%- for arg_name, arg_val in tool_call.arguments | items %}
+                {{- arg_name + '="' + arg_val + '"' }}
+                {%- if not loop.last %}
+                    {{- ", " }}
+                {%- endif %}
+                {%- endfor %}
+            {{- ")" }}
+        {%- else  %}
+            {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+            {{- '{"name": "' + tool_call.name + '", ' }}
+            {{- '"parameters": ' }}
+            {{- tool_call.arguments | tojson }}
+            {{- "}" }}
+        {%- endif %}`
 )
 
 // The architecture is checked first because newer families share template
@@ -103,11 +115,10 @@ func TestDetectToolUseReadsTheChatTemplate(t *testing.T) {
 }
 
 // Llama 3.1 calls custom tools in JSON, which vLLM parses with llama3_json.
-// Its template also mentions <|python_tag|> for the built-in ipython tools,
-// and the template regex checks that first and picks "pythonic", so the
-// name fallback that would say llama3_json is never reached.
+// Its template also has <|python_tag|> for the built-in ipython tools, which
+// once selected "pythonic": every Llama 3.x model was set up with a parser
+// that could not read its tool calls.
 func TestDetectToolUseGivesLlama31ItsJSONParser(t *testing.T) {
-	t.Skip("known bug: <|python_tag|> in Llama 3.1's template selects pythonic over llama3_json")
 	dir := modelDirWith(t, map[string]string{"tokenizer_config.json": tokenizerConfig(t, llama31Template)})
 	got := DetectToolUse(dir, "meta-llama/Llama-3.1-8B-Instruct", HFConfig{Architectures: []string{"LlamaForCausalLM"}})
 	if got.ToolCallParser != "llama3_json" {
@@ -155,7 +166,8 @@ func TestDetectVisionRecognisesVisionModels(t *testing.T) {
 		// Qwen2.5-VL ships a preprocessor_config.json for its image
 		// processor; that alone is enough.
 		{"preprocessor config", map[string]string{"preprocessor_config.json": `{"image_processor_type":"Qwen2VLImageProcessor"}`}, nil},
-		{"processor config", map[string]string{"processor_config.json": `{"processor_class":"LlavaProcessor"}`}, nil},
+		// llava-hf/llava-1.5-7b-hf's processor_config.json.
+		{"processor config", map[string]string{"processor_config.json": `{"image_token":"<image>","num_additional_image_tokens":1,"patch_size":14,"processor_class":"LlavaProcessor","vision_feature_select_strategy":"default"}`}, nil},
 		// Gemma 3's config carries its vision tower; that is enough even
 		// when no processor file was downloaded.
 		{"vision_config in config.json", map[string]string{"config.json": `{"architectures":["Gemma3ForConditionalGeneration"],"vision_config":{"hidden_size":1152}}`}, nil},
@@ -248,5 +260,81 @@ func TestParseGenDefaultsWithoutAUsableFileIsEmpty(t *testing.T) {
 		if got := ParseGenDefaults(dir); got != (GenDefaults{}) {
 			t.Errorf("%s: got %+v, want all unset", name, got)
 		}
+	}
+}
+
+// One field of an unexpected type costs that field only. top_k written as
+// 20.0 is still the count 20; a temperature written as a string is dropped
+// while the rest of the file is kept.
+func TestParseGenDefaultsKeepsWhatItCanRead(t *testing.T) {
+	dir := modelDirWith(t, map[string]string{"generation_config.json": `{
+		"temperature": "0.7", "top_p": 0.95, "top_k": 20.0, "max_new_tokens": 1.5
+	}`})
+	g := ParseGenDefaults(dir)
+	if g.Temperature != nil {
+		t.Errorf("temperature = %v, want unset for a string", *g.Temperature)
+	}
+	if g.TopP == nil || *g.TopP != 0.95 {
+		t.Errorf("top_p = %v, want 0.95", g.TopP)
+	}
+	if g.TopK == nil || *g.TopK != 20 {
+		t.Errorf("top_k = %v, want 20", g.TopK)
+	}
+	if g.MaxNewTokens != nil {
+		t.Errorf("max_new_tokens = %v, want unset for a fraction", *g.MaxNewTokens)
+	}
+}
+
+// Audio models ship a preprocessor_config.json too, for their feature
+// extractor. That alone must not make Whisper a vision model.
+func TestDetectVisionIgnoresAnAudioFeatureExtractor(t *testing.T) {
+	// openai/whisper-large-v3's preprocessor_config.json, abridged.
+	dir := modelDirWith(t, map[string]string{"preprocessor_config.json": `{"chunk_length":30,"feature_extractor_type":"WhisperFeatureExtractor","feature_size":128,"hop_length":160,"n_fft":400,"n_samples":480000,"nb_max_frames":3000,"padding_side":"right","padding_value":0.0,"processor_class":"WhisperProcessor","return_attention_mask":false,"sampling_rate":16000}`})
+	if DetectVision(dir, HFConfig{Architectures: []string{"WhisperForConditionalGeneration"}}).IsVisionModel {
+		t.Error("an audio model was detected as a vision model")
+	}
+}
+
+// Qwen's <tool_call> wraps JSON in Qwen3 -- thinking variants too -- and XML
+// in Qwen3 Coder and Qwen3.5. Each excerpt is the tool-call instruction from
+// the repository's own chat template, verbatim, with the <think> it opens
+// where the template has one. <think> once chose the XML parser, which sent
+// Qwen3's JSON calls to a parser that could not read them.
+func TestDetectToolUseTellsQwensTwoToolCallFormatsApart(t *testing.T) {
+	cases := []struct {
+		repo, template, want string
+	}{
+		{"Qwen/Qwen3-8B", `<tool_call></tool_call>
+{{- '<think>\n' }}`, "hermes"},
+		{"Qwen/Qwen3-30B-A3B-Thinking-2507", `<tool_call></tool_call>
+{{- '<think>\n' }}`, "hermes"},
+		{"Qwen/Qwen3-Coder-30B-A3B-Instruct", `<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>`, "qwen3_coder"},
+		{"Qwen/Qwen3.5-27B", `<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>
+{{- '<think>\n' }}`, "qwen3_xml"},
+	}
+	for _, c := range cases {
+		t.Run(c.repo, func(t *testing.T) {
+			dir := modelDirWith(t, map[string]string{"tokenizer_config.json": tokenizerConfig(t, c.template)})
+			// An architecture that names no parser, so the template decides.
+			got := DetectToolUse(dir, "local/model", HFConfig{Architectures: []string{"Qwen3ForCausalLM"}})
+			if got.ToolCallParser != c.want {
+				t.Errorf("got %+v, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// Newer repositories keep the template in chat_template.jinja and leave it
+// out of tokenizer_config.json. Detection must read it there rather than fall
+// back to guessing from the name.
+func TestDetectToolUseReadsAChatTemplateFile(t *testing.T) {
+	dir := modelDirWith(t, map[string]string{
+		"tokenizer_config.json": `{"model_max_length": 131072}`,
+		"chat_template.jinja":   mistralTemplate,
+	})
+	got := DetectToolUse(dir, "local/model", HFConfig{Architectures: []string{"MistralForCausalLM"}})
+	want := ToolUseMeta{HasToolSupport: true, ToolCallParser: "mistral", DetectionMethod: "chat_template_regex"}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
