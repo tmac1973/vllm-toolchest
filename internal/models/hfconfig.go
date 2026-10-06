@@ -287,35 +287,12 @@ func DetectToolUse(modelDir, modelID string, hfCfg HFConfig) ToolUseMeta {
 		return t
 	}
 
-	data, err := os.ReadFile(filepath.Join(modelDir, "tokenizer_config.json"))
-	if err == nil {
-		var tc struct {
-			ChatTemplate any `json:"chat_template"`
-		}
-		if json.Unmarshal(data, &tc) == nil && tc.ChatTemplate != nil {
-			template := ""
-			switch v := tc.ChatTemplate.(type) {
-			case string:
-				template = v
-			case []any:
-				for _, item := range v {
-					if m, ok := item.(map[string]any); ok {
-						if s, ok := m["template"].(string); ok {
-							template += s + "\n"
-						}
-					}
-				}
-			}
-
-			if template != "" {
-				parser := detectToolParser(template)
-				if parser != "" {
-					t.HasToolSupport = true
-					t.ToolCallParser = parser
-					t.DetectionMethod = "chat_template_regex"
-					return t
-				}
-			}
+	if template := chatTemplate(modelDir); template != "" {
+		if parser := detectToolParser(template); parser != "" {
+			t.HasToolSupport = true
+			t.ToolCallParser = parser
+			t.DetectionMethod = "chat_template_regex"
+			return t
 		}
 	}
 
@@ -327,6 +304,42 @@ func DetectToolUse(modelDir, modelID string, hfCfg HFConfig) ToolUseMeta {
 	}
 
 	return t
+}
+
+// chatTemplate is the model's chat template: tokenizer_config.json's
+// chat_template -- a string, or a list of named templates, all of which are
+// read -- or, when that has none, chat_template.jinja beside it, where newer
+// repositories keep it and where vLLM looks too.
+func chatTemplate(modelDir string) string {
+	if data, err := os.ReadFile(filepath.Join(modelDir, "tokenizer_config.json")); err == nil {
+		var tc struct {
+			ChatTemplate any `json:"chat_template"`
+		}
+		if json.Unmarshal(data, &tc) == nil {
+			switch v := tc.ChatTemplate.(type) {
+			case string:
+				if v != "" {
+					return v
+				}
+			case []any:
+				template := ""
+				for _, item := range v {
+					if m, ok := item.(map[string]any); ok {
+						if s, ok := m["template"].(string); ok {
+							template += s + "\n"
+						}
+					}
+				}
+				if template != "" {
+					return template
+				}
+			}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(modelDir, "chat_template.jinja")); err == nil {
+		return string(data)
+	}
+	return ""
 }
 
 // detectToolParserFromArch picks a parser by HF architecture string.

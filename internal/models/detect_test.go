@@ -323,3 +323,18 @@ func TestDetectToolUseTellsQwensTwoToolCallFormatsApart(t *testing.T) {
 		})
 	}
 }
+
+// Newer repositories keep the template in chat_template.jinja and leave it
+// out of tokenizer_config.json. Detection must read it there rather than fall
+// back to guessing from the name.
+func TestDetectToolUseReadsAChatTemplateFile(t *testing.T) {
+	dir := modelDirWith(t, map[string]string{
+		"tokenizer_config.json": `{"model_max_length": 131072}`,
+		"chat_template.jinja":   mistralTemplate,
+	})
+	got := DetectToolUse(dir, "local/model", HFConfig{Architectures: []string{"MistralForCausalLM"}})
+	want := ToolUseMeta{HasToolSupport: true, ToolCallParser: "mistral", DetectionMethod: "chat_template_regex"}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
