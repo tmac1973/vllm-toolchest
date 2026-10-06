@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -169,7 +170,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if err := s.benchSvc.SubmitJob(job); err != nil {
 		// Roll the job back to failed so the UI doesn't show it forever-pending.
 		job.Status = benchmark.JobStatusFailed
-		_ = s.bench.SaveJob(job)
+		if serr := s.bench.SaveJob(job); serr != nil {
+			slog.Error("failed to record a benchmark job that did not start", "id", job.ID, "error", serr)
+		}
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
 			s.fail(w, r, http.StatusConflict, err.Error())
 			return

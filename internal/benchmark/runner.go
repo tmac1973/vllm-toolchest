@@ -55,6 +55,16 @@ func (r *Runner) Run(ctx context.Context, cfg RunnerConfig, progress chan<- Prog
 	run := cfg.Run
 	startTime := time.Now()
 
+	// Progress is saved on every update. A store that refuses one refuses
+	// them all, so the first failure is logged and the rest are not.
+	var saveFailed bool
+	save := func(run BenchmarkRun) {
+		if err := r.store.Save(run); err != nil && !saveFailed {
+			saveFailed = true
+			slog.Error("failed to save benchmark run", "id", run.ID, "error", err)
+		}
+	}
+
 	defer func() {
 		run.DurationMs = time.Since(startTime).Milliseconds()
 		if err := r.store.Save(run); err != nil {
@@ -67,7 +77,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunnerConfig, progress chan<- Prog
 
 	send := func(stage, detail string, pct int) {
 		run.ProgressDetail = detail
-		_ = r.store.Save(run)
+		save(run)
 		if progress != nil {
 			select {
 			case progress <- ProgressUpdate{Stage: stage, Detail: detail, Pct: pct}:
@@ -215,7 +225,9 @@ func (r *Runner) runInternal(ctx context.Context, run *BenchmarkRun, cfg RunnerC
 				"ttft_ms", result.TTFTMs, "gen_tps", result.GenTokPerSec)
 			run.Results = append(run.Results, *result)
 			// Intermediate save so partial results survive a crash.
-			_ = r.store.Save(*run)
+			if err := r.store.Save(*run); err != nil {
+				slog.Warn("failed to save partial benchmark results", "id", run.ID, "error", err)
+			}
 		}
 	}
 

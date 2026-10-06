@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -312,7 +313,9 @@ func (s *Server) handleStartBenchmark(w http.ResponseWriter, r *http.Request) {
 		// Roll the run back to a failed state so the UI doesn't show a stale "running".
 		run.Status = benchmark.StatusFailed
 		run.Error = err.Error()
-		_ = s.bench.Save(run)
+		if serr := s.bench.Save(run); serr != nil {
+			slog.Error("failed to record a benchmark run that did not start", "id", run.ID, "error", serr)
+		}
 		if errors.Is(err, benchmark.ErrRunAlreadyActive) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

@@ -263,12 +263,7 @@ func (c *Client) Candidates(ctx context.Context, q CandidateQuery) ([]ModelSearc
 // FetchConfigJSON is a repository's config.json at a revision, as bytes, for
 // a caller that parses it with the same code as a local one.
 func (c *Client) FetchConfigJSON(ctx context.Context, modelID, revision string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL(c.base, modelID, revision, "config.json"), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.get(ctx, fileURL(c.base, modelID, revision, "config.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -644,37 +639,30 @@ type modelConfig struct {
 }
 
 func (c *Client) fetchConfig(ctx context.Context, modelID string) (*modelConfig, error) {
-	u := fmt.Sprintf("%s/%s/resolve/main/config.json", c.base, modelID)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	data, err := c.FetchConfigJSON(ctx, modelID, "")
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("config.json: HTTP %d", resp.StatusCode)
-	}
-
 	var cfg modelConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-func (c *Client) getJSON(ctx context.Context, u string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+// get sends an authenticated GET to the Hub. The caller checks the status
+// and closes the body.
+func (c *Client) get(ctx context.Context, u string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.setAuth(req)
+	return c.httpClient.Do(req)
+}
 
-	resp, err := c.httpClient.Do(req)
+func (c *Client) getJSON(ctx context.Context, u string, v any) error {
+	resp, err := c.get(ctx, u)
 	if err != nil {
 		return err
 	}
@@ -694,13 +682,7 @@ func (c *Client) getJSON(ctx context.Context, u string, v any) error {
 // A repository with no card returns "" and no error: most of what reads a card
 // can proceed without one.
 func (c *Client) ModelCard(ctx context.Context, modelID string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/%s/raw/main/README.md", c.base, modelID), nil)
-	if err != nil {
-		return "", err
-	}
-	c.setAuth(req)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.get(ctx, fmt.Sprintf("%s/%s/raw/main/README.md", c.base, modelID))
 	if err != nil {
 		return "", err
 	}

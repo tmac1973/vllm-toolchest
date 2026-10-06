@@ -18,6 +18,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/advice"
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
 	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
 
@@ -118,14 +119,8 @@ type Manager struct {
 	killWait  time.Duration
 	portWait  time.Duration
 
-	// Log ring buffer
-	logMu  sync.Mutex
-	logBuf []string
-	logMax int
-
-	// Log subscribers
-	subMu sync.Mutex
-	subs  map[chan string]struct{}
+	// The engine's output: the last lines, and a feed of new ones.
+	log *broadcast.Log
 
 	// What the engine said about this run, read off the log stream as it
 	// arrives. Cleared on start: advice from the previous run describes a
@@ -158,9 +153,7 @@ func NewManager(vllmHost string, vllmPort int, startupTimeout time.Duration) *Ma
 		stopGrace:      30 * time.Second,
 		killWait:       10 * time.Second,
 		portWait:       5 * time.Second,
-		logBuf:         make([]string, 0, 5000),
-		logMax:         5000,
-		subs:           make(map[chan string]struct{}),
+		log:            broadcast.NewLog(5000, 64),
 	}
 }
 
@@ -241,9 +234,7 @@ func (m *Manager) Start(modelID, modelPath string, args []string, env []string) 
 
 	// Clear log buffer, and with it what the last run's output said. Advice
 	// describing a configuration that is no longer loaded is worse than none.
-	m.logMu.Lock()
-	m.logBuf = m.logBuf[:0]
-	m.logMu.Unlock()
+	m.log.Clear()
 	m.resetAdvice()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -429,39 +420,22 @@ func (m *Manager) Restart(modelID, modelPath string, args []string, env []string
 
 // ClearLogs empties the log buffer.
 func (m *Manager) ClearLogs() {
-	m.logMu.Lock()
-	m.logBuf = m.logBuf[:0]
-	m.logMu.Unlock()
+	m.log.Clear()
 }
 
-// RecentLogs returns the most recent log lines.
+// RecentLogs returns the most recent n log lines, or all of them for n <= 0.
 func (m *Manager) RecentLogs(n int) []string {
-	m.logMu.Lock()
-	defer m.logMu.Unlock()
-
-	if n <= 0 || n > len(m.logBuf) {
-		n = len(m.logBuf)
-	}
-	start := len(m.logBuf) - n
-	out := make([]string, n)
-	copy(out, m.logBuf[start:])
-	return out
+	return m.log.Recent(n)
 }
 
 // SubscribeLogs returns a channel that receives log lines.
 func (m *Manager) SubscribeLogs() chan string {
-	ch := make(chan string, 64)
-	m.subMu.Lock()
-	m.subs[ch] = struct{}{}
-	m.subMu.Unlock()
-	return ch
+	return m.log.Subscribe()
 }
 
-// UnsubscribeLogs removes a log subscriber.
+// UnsubscribeLogs removes a log subscriber and closes its channel.
 func (m *Manager) UnsubscribeLogs(ch chan string) {
-	m.subMu.Lock()
-	delete(m.subs, ch)
-	m.subMu.Unlock()
+	m.log.Unsubscribe(ch)
 }
 
 func (m *Manager) streamOutput(r io.ReadCloser, run int) {
@@ -603,22 +577,7 @@ func (m *Manager) resetAdvice() {
 }
 
 func (m *Manager) appendLog(line string) {
-	m.logMu.Lock()
-	if len(m.logBuf) >= m.logMax {
-		m.logBuf = m.logBuf[1:]
-	}
-	m.logBuf = append(m.logBuf, line)
-	m.logMu.Unlock()
-
-	// Fan out to subscribers
-	m.subMu.Lock()
-	for ch := range m.subs {
-		select {
-		case ch <- line:
-		default:
-		}
-	}
-	m.subMu.Unlock()
+	m.log.Append(line)
 }
 
 // waitForExit records how a run ended -- if it is still the current run.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
+	"github.com/tmac1973/vllm-toolchest/internal/broadcast"
 )
 
 // ErrProbeAlreadyActive is returned when a probe is requested while one is
@@ -32,10 +33,8 @@ type activeProbe struct {
 	modelID string
 	cancel  context.CancelFunc
 
-	subMu sync.Mutex
-	subs  map[chan benchmark.ProbeProgress]struct{}
-	last  *benchmark.ProbeProgress
-	done  chan struct{}
+	hub  *broadcast.Hub[benchmark.ProbeProgress]
+	done chan struct{}
 }
 
 func newProbeManager(s *Server) *probeManager {
@@ -101,7 +100,7 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 		id:      probeID,
 		modelID: req.ModelID,
 		cancel:  cancel,
-		subs:    make(map[chan benchmark.ProbeProgress]struct{}),
+		hub:     broadcast.NewHub[benchmark.ProbeProgress](32),
 		done:    make(chan struct{}),
 	}
 	s.probe.active = ap
@@ -112,23 +111,9 @@ func (s *Server) handleStartContextProbe(w http.ResponseWriter, r *http.Request)
 	// Fan-out goroutine.
 	go func() {
 		for p := range progress {
-			p := p
-			ap.subMu.Lock()
-			ap.last = &p
-			for sub := range ap.subs {
-				select {
-				case sub <- p:
-				default:
-				}
-			}
-			ap.subMu.Unlock()
+			ap.hub.Send(p)
 		}
-		ap.subMu.Lock()
-		for sub := range ap.subs {
-			close(sub)
-			delete(ap.subs, sub)
-		}
-		ap.subMu.Unlock()
+		ap.hub.Close()
 
 		s.probe.mu.Lock()
 		s.probe.active = nil
@@ -187,19 +172,8 @@ func (s *Server) handleContextProbeProgress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	sub := make(chan benchmark.ProbeProgress, 32)
-	ap.subMu.Lock()
-	ap.subs[sub] = struct{}{}
-	last := ap.last
-	ap.subMu.Unlock()
-	defer func() {
-		ap.subMu.Lock()
-		if _, ok := ap.subs[sub]; ok {
-			delete(ap.subs, sub)
-			close(sub)
-		}
-		ap.subMu.Unlock()
-	}()
+	sub, last, hasLast := ap.hub.SubscribeLast()
+	defer ap.hub.Unsubscribe(sub)
 
 	sse, err := NewSSEWriter(w)
 	if err != nil {
@@ -207,7 +181,7 @@ func (s *Server) handleContextProbeProgress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if last != nil {
+	if hasLast {
 		payload, _ := json.Marshal(last)
 		sse.SendEvent("progress", string(payload))
 	}
