@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // leaseServer is a server whose engine is a script: a model path ending in
@@ -25,12 +24,8 @@ func leaseServer(t *testing.T) *Server {
 	leasePoll, leaseStopWait = 20*time.Millisecond, 5*time.Second
 	t.Cleanup(func() { leasePoll, leaseStopWait = oldPoll, oldStop })
 
-	fake := filepath.Join(t.TempDir(), "fakevllm")
-	script := "#!/bin/sh\ncase \"$1\" in *fail) echo 'boom' >&2; exit 1;; esac\n" +
-		"echo 'INFO Application startup complete.'\nexec sleep 60\n"
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, "case \"$1\" in *fail) echo 'boom' >&2; exit 1;; esac\n"+
+		"echo 'INFO Application startup complete.'\nexec sleep 60\n")
 	s := newTestServer(t, "http://127.0.0.1:1")
 	s.process = process.NewManager("127.0.0.1", 0, 0)
 	s.process.SetLauncher(process.Launcher{Bin: fake})
@@ -51,18 +46,8 @@ func serve(t *testing.T, s *Server, id string) {
 	if err := s.startModel(m); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return s.process.GetStatus().State == process.StateRunning })
-}
-
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	for i := 0; i < 250; i++ {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("condition never held")
+	testutil.Eventually(t, 5*time.Second, func() bool { return s.process.GetStatus().State == process.StateRunning },
+		"%s never came up", id)
 }
 
 var helperLoan = engineLoan{ModelID: "helper", ModelPath: "/models/helper", StartWait: 5 * time.Second}
@@ -145,7 +130,8 @@ func TestBorrowRestoresAfterAFailure(t *testing.T) {
 	if err == nil || called {
 		t.Errorf("err=%v called=%v; a failed start must not reach work", err, called)
 	}
-	waitFor(t, func() bool { return s.process.GetStatus().ModelID == "org/served" })
+	testutil.Eventually(t, 5*time.Second, func() bool { return s.process.GetStatus().ModelID == "org/served" },
+		"the served model was never restored after the failed start")
 }
 
 func TestBorrowRestoresWhenTheCallerGivesUp(t *testing.T) {
@@ -206,7 +192,8 @@ func TestBorrowIsExclusiveAndGuardsTheHandlers(t *testing.T) {
 		}
 	}
 	close(release)
-	waitFor(t, func() bool { return s.lease.heldBy() == "" })
+	testutil.Eventually(t, 5*time.Second, func() bool { return s.lease.heldBy() == "" },
+		"the lease was never released after the loan")
 	if busy := s.engineBusy(); busy != "" {
 		t.Errorf("still busy after the loan: %q", busy)
 	}

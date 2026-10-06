@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // What vLLM 0.29 publishes after two short requests, as read from a real
@@ -159,10 +160,8 @@ func TestAPollRecordsWhatTheEngineReports(t *testing.T) {
 	}
 	metrics.Start()
 	defer metrics.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for mgr.GetStatus().State != process.StateRunning && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.Eventually(t, 5*time.Second, func() bool { return mgr.GetStatus().State == process.StateRunning },
+		"the fake engine never came up")
 
 	s.pollEngineTimings(http.DefaultClient, watch)
 	s.pollEngineTimings(http.DefaultClient, watch) // same totals: nothing new finished

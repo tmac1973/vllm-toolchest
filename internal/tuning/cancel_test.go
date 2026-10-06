@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // The tuner is a process tree, not a process: python spawns ROCm workers that
@@ -40,10 +42,7 @@ child &
 sleep 120
 `, marker)
 
-	fake := filepath.Join(dir, "faketuner")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, script)
 
 	m := NewManager(dir, "gfx1201", "tuner.py", nil)
 	m.SetPython(fake)
@@ -53,30 +52,21 @@ sleep 120
 	}
 
 	var gpid int
-	for i := 0; i < 100; i++ {
-		if b, err := os.ReadFile(marker); err == nil {
-			if gpid, _ = strconv.Atoi(strings.TrimSpace(string(b))); gpid > 0 {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if gpid == 0 {
-		t.Skip("the fake tuner never started a child; nothing to assert about")
-	}
+	testutil.Eventually(t, 5*time.Second, func() bool {
+		b, _ := os.ReadFile(marker)
+		gpid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		return gpid > 0
+	}, "the fake tuner never started its child")
+	// It ignores SIGTERM; if Cancel fails to end it, nothing else will.
+	t.Cleanup(func() { _ = syscall.Kill(gpid, syscall.SIGKILL) })
 	if !processAlive(gpid) {
 		t.Fatalf("child %d should be alive before Cancel", gpid)
 	}
 
 	m.Cancel()
 
-	for i := 0; i < 60 && processAlive(gpid); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
-	if processAlive(gpid) {
-		_ = syscall.Kill(-gpid, syscall.SIGKILL) // don't leak it out of the test
-		t.Errorf("child %d survived Cancel -- it would still be holding GPU memory", gpid)
-	}
+	testutil.Eventually(t, 3*time.Second, func() bool { return !processAlive(gpid) },
+		"child %d survived Cancel -- it would still be holding GPU memory", gpid)
 }
 
 func processAlive(pid int) bool {

@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // vLLM is a process tree, not a process: an EngineCore and one Worker per rank
@@ -37,10 +39,7 @@ child &
 sleep 120
 `, marker)
 
-	fake := filepath.Join(dir, "fakevllm")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, script)
 
 	m := NewManager("127.0.0.1", 0, 0)
 	m.SetLauncher(Launcher{Bin: fake})
@@ -50,17 +49,13 @@ sleep 120
 
 	// Wait for the grandchild to announce itself.
 	var gpid int
-	for i := 0; i < 100; i++ {
-		if b, err := os.ReadFile(marker); err == nil {
-			if gpid, _ = strconv.Atoi(strings.TrimSpace(string(b))); gpid > 0 {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if gpid == 0 {
-		t.Fatal("grandchild never started")
-	}
+	testutil.Eventually(t, 5*time.Second, func() bool {
+		b, _ := os.ReadFile(marker)
+		gpid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		return gpid > 0
+	}, "grandchild never started")
+	// It ignores SIGTERM; if Stop fails to end it, nothing else will.
+	t.Cleanup(func() { _ = syscall.Kill(gpid, syscall.SIGKILL) })
 	if !processAlive(gpid) {
 		t.Fatalf("grandchild %d should be alive before Stop", gpid)
 	}
@@ -70,13 +65,8 @@ sleep 120
 	}
 
 	// Give the signal a moment to land.
-	for i := 0; i < 40 && processAlive(gpid); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
-	if processAlive(gpid) {
-		_ = syscall.Kill(gpid, 9) // don't leak it out of the test
-		t.Errorf("grandchild %d survived Stop — it would still hold its GPU context", gpid)
-	}
+	testutil.Eventually(t, 2*time.Second, func() bool { return !processAlive(gpid) },
+		"grandchild %d survived Stop — it would still hold its GPU context", gpid)
 }
 
 func TestStopOnStoppedManagerErrors(t *testing.T) {
@@ -99,10 +89,7 @@ func TestKillProcessGroupIgnoresNonPositivePID(t *testing.T) {
 // launches it, with timings short enough for a test.
 func fakeServer(t *testing.T, script string) *Manager {
 	t.Helper()
-	fake := filepath.Join(t.TempDir(), "fakevllm")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, script)
 	m := NewManager("127.0.0.1", 0, 0)
 	m.SetLauncher(Launcher{Bin: fake})
 	m.stopGrace = 5 * time.Second
@@ -131,21 +118,31 @@ func startedPID(t *testing.T, m *Manager) int {
 // holding the port and the GPUs -- under a status of "stopped".
 func TestStartDuringStopDoesNotLoseTheNewServer(t *testing.T) {
 	// Takes a second to exit on SIGTERM, and exits 0, as vLLM does.
-	m := fakeServer(t, `
+	trapped := filepath.Join(t.TempDir(), "trapped")
+	m := fakeServer(t, fmt.Sprintf(`
 trap 'sleep 1; exit 0' TERM
+touch %q
 sleep 120 &
 wait
-`)
+`, trapped))
 	if err := m.Start("model", "", nil, nil); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
 	first := startedPID(t, m)
 
+	// Start returns once the shell is spawned, not once it has run its first
+	// line. A SIGTERM sent before the trap is set ends it at once, Stop is
+	// over before the test can see it stopping, and the overlap this test is
+	// about never happens.
+	testutil.Eventually(t, 5*time.Second, func() bool {
+		_, err := os.Stat(trapped)
+		return err == nil
+	}, "the fake server never set its SIGTERM trap")
+
 	stopped := make(chan error, 1)
 	go func() { stopped <- m.Stop() }()
-	if !waitUntil(func() bool { return m.GetStatus().State == StateStopping }, 2*time.Second) {
-		t.Fatal("Stop never reached stopping")
-	}
+	testutil.Eventually(t, 2*time.Second, func() bool { return m.GetStatus().State == StateStopping },
+		"Stop never reached stopping")
 
 	if err := m.Start("model", "", nil, nil); err != nil {
 		t.Fatalf("start during stop: %v", err)
@@ -161,7 +158,11 @@ wait
 		t.Errorf("first server %d is still alive", first)
 	}
 
-	// Give a stale watcher every chance to write over the new run.
+	// Give a stale watcher every chance to write over the new run. There is
+	// nothing to wait for: the bug is a write that should never come. Both of
+	// the first run's watchers have to have had their turn -- its exit
+	// watcher, and its health poll, which ticks every 2s from the first Start.
+	// The SIGTERM trap took a second, so 1.5s more puts that tick well behind.
 	time.Sleep(1500 * time.Millisecond)
 	if st := m.GetStatus(); st.State != StateStarting || st.PID != second {
 		t.Errorf("status = %s pid %d, want starting pid %d", st.State, st.PID, second)
@@ -250,6 +251,9 @@ func TestStartRefusesAPortHeldByAStranger(t *testing.T) {
 	if st := m.GetStatus(); st.State != StateError || !strings.Contains(st.Error, "already in use") {
 		t.Errorf("status = %s %q, want error naming the port", st.State, st.Error)
 	}
+	// Start returned without launching, so there is no event to wait for;
+	// give a server that was spawned regardless the moment it needs to show
+	// itself by touching the marker.
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the server was launched anyway")

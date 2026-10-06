@@ -3,12 +3,11 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tmac1973/vllm-toolchest/internal/process"
+	"github.com/tmac1973/vllm-toolchest/internal/testutil"
 )
 
 // The proxy is a pass-through. It used to buffer non-streaming chat
@@ -56,10 +55,7 @@ func TestProxySendsTheEngineItsOwnKey(t *testing.T) {
 
 	s := newTestServer(t, backend.URL)
 	dir := t.TempDir()
-	fake := filepath.Join(dir, "fakevllm")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := testutil.WriteScript(t, "exec sleep 30\n")
 	s.process = process.NewManager("127.0.0.1", 0, 0)
 	s.process.SetLauncher(process.Launcher{Bin: fake})
 	if err := s.process.Start("org/m", dir, nil, []string{"VLLM_API_KEY=engine-key"}); err != nil {

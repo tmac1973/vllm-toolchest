@@ -40,3 +40,10 @@ func newTestServer(t *testing.T, backendURL string) *Server {
 	s.benchSvc = benchmark.NewService(s.bench)
 	return s
 }
+
+// lazy is a failure-message argument read when the message is printed, not
+// when the wait starts, so testutil.Eventually reports the state as it was
+// when the wait gave up.
+type lazy func() string
+
+func (f lazy) String() string { return f() }

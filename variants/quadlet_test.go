@@ -3,6 +3,7 @@ package variants_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,15 +115,6 @@ func quadletKeys(unit string) map[string][]string {
 	return keys
 }
 
-func has(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
-
 // composeFields splits a compose short-syntax mapping ("source:target:opts")
 // into its fields. A ${VAR:-default} substitution is one field: the ":-" and
 // the "./" inside it are not separators.
@@ -203,7 +195,7 @@ func TestQuadletMountsTheModelsDir(t *testing.T) {
 	for vendor := range quadletVendor {
 		t.Run(vendor, func(t *testing.T) {
 			with := quadletKeys(generateQuadlet(t, vendor, dir))
-			if want := dir + ":" + target; !has(with["Volume"], want) {
+			if want := dir + ":" + target; !slices.Contains(with["Volume"], want) {
 				t.Errorf("models dir configured but the unit has no Volume=%s\n got: %v",
 					want, with["Volume"])
 			}
@@ -250,7 +242,7 @@ func TestQuadletMatchesCompose(t *testing.T) {
 				if strings.Contains(v, "${") {
 					continue
 				}
-				if !has(keys["Volume"], v) {
+				if !slices.Contains(keys["Volume"], v) {
 					t.Errorf("compose mounts %s; the unit mounts %v", v, keys["Volume"])
 				}
 			}
@@ -259,7 +251,7 @@ func TestQuadletMatchesCompose(t *testing.T) {
 			// through deploy.resources, and the unit names the CDI device.
 			for _, d := range svc.Devices {
 				host := composeFields(d)[0]
-				if !has(keys["AddDevice"], host) {
+				if !slices.Contains(keys["AddDevice"], host) {
 					t.Errorf("compose grants device %s; the unit grants %v", host, keys["AddDevice"])
 				}
 			}
@@ -273,7 +265,7 @@ func TestQuadletMatchesCompose(t *testing.T) {
 				if strings.Contains(g, "${") {
 					continue
 				}
-				if !has(keys["GroupAdd"], g) {
+				if !slices.Contains(keys["GroupAdd"], g) {
 					t.Errorf("compose adds group %s; the unit adds %v", g, keys["GroupAdd"])
 				}
 			}
@@ -296,7 +288,7 @@ func TestQuadletMatchesCompose(t *testing.T) {
 			// Ulimits.
 			for name, lim := range svc.Ulimits {
 				want := name + "=" + strconv.Itoa(lim.Soft) + ":" + strconv.Itoa(lim.Hard)
-				if !has(keys["Ulimit"], want) {
+				if !slices.Contains(keys["Ulimit"], want) {
 					t.Errorf("compose sets ulimit %s; the unit sets %v", want, keys["Ulimit"])
 				}
 			}
