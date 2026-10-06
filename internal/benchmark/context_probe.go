@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -105,7 +106,7 @@ type ProbeProgress struct {
 // (closes on exit). Returns the aggregated ProbeResult.
 func RunProbe(ctx context.Context, env ProbeEnv, cfg ProbeConfig, progress chan<- ProbeProgress) (*ProbeResult, error) {
 	if cfg.ModelID == "" {
-		return nil, fmt.Errorf("ProbeConfig.ModelID is required")
+		return nil, errors.New("ProbeConfig.ModelID is required")
 	}
 	if cfg.TPSize <= 0 {
 		cfg.TPSize = 1

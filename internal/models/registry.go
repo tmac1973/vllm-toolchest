@@ -684,7 +684,7 @@ func (r *Registry) scanForNewModels() {
 			}
 
 			// Check if it looks like a model directory
-			hasConfig := fileExists(filepath.Join(modelDir, "config.json"))
+			hasConfig := fsutil.Exists(filepath.Join(modelDir, "config.json"))
 			hasGGUF := hasGGUFFiles(modelDir)
 			hasSafetensors := hasSafetensorsFiles(modelDir)
 
@@ -723,7 +723,7 @@ func (r *Registry) backfillMetadata() {
 		if m.Orphaned || m.LocalPath == "" {
 			continue
 		}
-		if !fileExists(filepath.Join(m.LocalPath, "config.json")) {
+		if !fsutil.Exists(filepath.Join(m.LocalPath, "config.json")) {
 			continue
 		}
 		// Re-derive when the metadata was never parsed, and also when it
@@ -845,11 +845,6 @@ func defaultVLLMConfig(q QuantMeta, t ToolUseMeta, h HFConfig) VLLMConfig {
 	}
 
 	return cfg
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func hasGGUFFiles(dir string) bool {

@@ -201,7 +201,7 @@ func (s *Server) handleServiceLogStream(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleServiceHealth(w http.ResponseWriter, r *http.Request) {
 	status := s.process.GetStatus()
-	respondJSON(w, map[string]interface{}{
+	respondJSON(w, map[string]any{
 		"vllm_state": status.State,
 		"model":      status.ModelID,
 		"healthy":    status.State == process.StateRunning,

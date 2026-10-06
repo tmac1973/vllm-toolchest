@@ -33,7 +33,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("attachment; filename=vllm-toolchest-backup-%s.json", time.Now().Format("2006-01-02")))
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // restoreFileLimit bounds the uploaded backup. Real backups are kilobytes, so

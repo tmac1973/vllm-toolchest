@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tmac1973/vllm-toolchest/internal/fsutil"
 	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 	"github.com/tmac1973/vllm-toolchest/variants"
 )
@@ -173,7 +174,7 @@ func Detect() Env {
 		e.SitePackages = sp
 		e.BlockFP8ConfigsDir = filepath.Join(sp,
 			"vllm/model_executor/layers/quantization/utils/configs")
-		e.HasBitsAndBytes = fileExists(filepath.Join(sp, "bitsandbytes"))
+		e.HasBitsAndBytes = fsutil.Exists(filepath.Join(sp, "bitsandbytes"))
 		if py := filepath.Join(root, "bin/python"); isExecutable(py) {
 			e.Python = py
 		}
@@ -189,7 +190,7 @@ func Detect() Env {
 		e.Launcher = d.Launcher
 	}
 
-	if p := "/opt/vllm-tuner/tune_fp8_wrapper.py"; fileExists(p) {
+	if p := "/opt/vllm-tuner/tune_fp8_wrapper.py"; fsutil.Exists(p) {
 		e.TunerScript = p
 	}
 
@@ -358,16 +359,11 @@ const (
 func sitePackagesWithVLLM(root string) (string, bool) {
 	matches, _ := filepath.Glob(filepath.Join(root, "lib/python3.*/site-packages"))
 	for _, sp := range matches {
-		if fileExists(filepath.Join(sp, "vllm")) {
+		if fsutil.Exists(filepath.Join(sp, "vllm")) {
 			return sp, true
 		}
 	}
 	return "", false
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 func isExecutable(p string) bool {

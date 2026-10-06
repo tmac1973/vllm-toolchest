@@ -119,7 +119,7 @@ func NewServerWithEnv(cfg *config.Config, env vllmenv.Env, version string) *Serv
 
 func (s *Server) templateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"divf": func(a, b interface{}) float64 {
+		"divf": func(a, b any) float64 {
 			af, bf := toFloat64(a), toFloat64(b)
 			if bf == 0 {
 				return 0

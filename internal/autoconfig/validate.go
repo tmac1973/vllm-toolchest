@@ -709,7 +709,10 @@ func (v *validator) samplingFromProse(chosen *Command) {
 	if chosen != nil {
 		for _, g := range chosen.Settings().Rest {
 			if g[0] == overrideFlag && len(g) > 1 {
-				json.Unmarshal([]byte(g[1]), &override)
+				// A malformed override is read as none, not half of one.
+				if err := json.Unmarshal([]byte(g[1]), &override); err != nil {
+					override = nil
+				}
 			}
 		}
 	}

@@ -696,7 +696,7 @@ func (s *Server) discoverServedName(modelID string) (string, error) {
 		return "", err
 	}
 	if len(body.Data) == 0 {
-		return "", fmt.Errorf("vLLM /v1/models returned no models")
+		return "", errors.New("vLLM /v1/models returned no models")
 	}
 
 	// Prefer an exact match against the requested modelID.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -87,7 +88,7 @@ func (s *Server) renderAdvice(w http.ResponseWriter, outcome adviceOutcome) {
 func applyToConfig(cfg models.VLLMConfig, field, value string) (models.VLLMConfig, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return cfg, fmt.Errorf("no value was given")
+		return cfg, errors.New("no value was given")
 	}
 
 	switch field {

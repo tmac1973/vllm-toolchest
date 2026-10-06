@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -378,12 +379,12 @@ func (r *Runner) sendCompletionStream(ctx context.Context, cfg RunnerConfig, pro
 	total := time.Since(startTime)
 
 	if !sawAnyChunk {
-		return nil, fmt.Errorf("no SSE chunks received from vLLM")
+		return nil, errors.New("no SSE chunks received from vLLM")
 	}
 	if usageGen == 0 {
 		// vLLM should always emit a usage chunk when include_usage=true;
 		// if it doesn't, surface that rather than reporting bogus numbers.
-		return nil, fmt.Errorf("no usage in response; set stream_options.include_usage=true")
+		return nil, errors.New("no usage in response; set stream_options.include_usage=true")
 	}
 
 	return &streamTimings{

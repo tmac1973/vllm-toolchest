@@ -163,7 +163,7 @@ func runLlamaBenchy(ctx context.Context, c BenchyConfig) ([]LlamaBenchyResult, s
 			return nil, "", fmt.Errorf("create result tempfile: %w", err)
 		}
 		c.SaveResultPath = f.Name()
-		f.Close()
+		_ = f.Close()
 	}
 	defer os.Remove(c.SaveResultPath)
 

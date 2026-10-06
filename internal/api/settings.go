@@ -312,7 +312,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	status := s.process.GetStatus()
-	health := map[string]interface{}{
+	health := map[string]any{
 		"vllm_running": status.State == "running",
 		"vllm_state":   status.State,
 	}

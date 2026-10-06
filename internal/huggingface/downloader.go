@@ -506,7 +506,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 			// A download of some other version of this file: upstream moved
 			// on while the transfer was paused. Appending to it would build
 			// a file that is neither.
-			os.Remove(partPath)
+			_ = os.Remove(partPath)
 			existingSize = 0
 		case known && rec.Verified && existingSize == f.Size:
 			return t.place(f, replacing)
@@ -634,7 +634,7 @@ func (t *transfer) fetch(ctx context.Context, f PlannedFile) error {
 		}
 		if got != id {
 			// Kept, it would be resumed from and fail the same way forever.
-			os.Remove(partPath)
+			_ = os.Remove(partPath)
 			d.updateFileState(dl, f.Filename, 0, "failed")
 			if err := t.record(func(m *Manifest) { delete(m.Parts, f.Filename) }); err != nil {
 				return err
@@ -714,7 +714,7 @@ func (t *transfer) commit(plan Plan, removeStale bool) error {
 		f, wanted := upstream[name]
 		if !wanted {
 			// A replacement for a file upstream has since dropped.
-			os.Remove(finalPath + ".part")
+			_ = os.Remove(finalPath + ".part")
 			delete(m.Parts, name)
 			continue
 		}

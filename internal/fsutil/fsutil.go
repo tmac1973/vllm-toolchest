@@ -33,3 +33,10 @@ func WriteJSONAtomic(path string, v any) error {
 func RefuseWrite(path, reason string) error {
 	return fmt.Errorf("refusing to write %s: it %s — move it aside or fix it, then restart", path, reason)
 }
+
+// Exists reports whether path exists. A path that cannot be stat'ed for any
+// reason counts as absent.
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
