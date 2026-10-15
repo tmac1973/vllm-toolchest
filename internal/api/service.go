@@ -10,11 +10,19 @@ import (
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 )
 
+// statusEngine names the inference engine in GET /api/service/status.
+// llama-toolchest serves the same management API, so this is how a client
+// such as Haruspex tells the two apart. Keep it a short lowercase constant.
+const statusEngine = "vllm"
+
 func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.process.GetStatus()
 
 	if !isHTMX(r) {
-		respondJSON(w, status)
+		respondJSON(w, struct {
+			Engine string `json:"engine"`
+			process.Status
+		}{statusEngine, status})
 		return
 	}
 

@@ -200,3 +200,46 @@ func TestLoadedModelsListsOnlyWhatIsServed(t *testing.T) {
 		t.Errorf("capabilities = %v", caps)
 	}
 }
+
+func serviceStatus(t *testing.T, s *Server) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/service/status", nil)
+	rec := httptest.NewRecorder()
+	s.handleServiceStatus(rec, req)
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, rec.Body.String())
+	}
+	return out
+}
+
+// The status names the engine in every state, so a client probing it can
+// tell this toolchest from llama-toolchest, which answers the same API.
+func TestServiceStatusNamesTheEngine(t *testing.T) {
+	s := newTestServer(t, "http://127.0.0.1:1")
+	mgr := process.NewManager("127.0.0.1", 0, 0)
+	s.process = mgr
+	m := thinkingCapModel(t)
+	if err := s.registry.Register(m); err != nil {
+		t.Fatal(err)
+	}
+
+	out := serviceStatus(t, s)
+	if out["engine"] != "vllm" || out["state"] != "stopped" {
+		t.Errorf("with nothing running: %v", out)
+	}
+
+	fake := testutil.WriteScript(t, "echo 'INFO:     Application startup complete.'\nsleep 60\n")
+	mgr.SetLauncher(process.Launcher{Bin: fake})
+	if err := mgr.Start(m.ID, "", thinkingCapArgs, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop() })
+	testutil.Eventually(t, 5*time.Second, func() bool { return mgr.GetStatus().State == process.StateRunning },
+		"the fake engine never came up")
+
+	out = serviceStatus(t, s)
+	if out["engine"] != "vllm" || out["state"] != "running" || out["model_id"] != m.ID || out["args"] == nil {
+		t.Errorf("with a model running: %v", out)
+	}
+}
