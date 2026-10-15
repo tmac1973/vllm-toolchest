@@ -266,6 +266,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Use(http.NewCrossOriginProtection().Handler)
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/gpu-map", s.handleGPUMap)
+		r.Get("/agent-configs", s.handleAgentConfigs)
+		r.Get("/agent-configs/{agent}", s.handleAgentConfigDownload)
 		r.Get("/arch-registry", s.handleArchRegistry)
 		r.Get("/recommend", s.handleRecommend)
 		r.Post("/recommend/refresh", s.handleRecommendRefresh)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tmac1973/vllm-toolchest/internal/agentconfig"
 	"github.com/tmac1973/vllm-toolchest/internal/autoconfig"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
 	"github.com/tmac1973/vllm-toolchest/internal/models"
@@ -708,6 +709,23 @@ func TestGoldenPartials(t *testing.T) {
 			partial: "helper_model_panel",
 			data: helperPanelData{Repo: "Qwen/Qwen3-4B-Instruct-2507",
 				TooLarge: "The helper model needs about 9.6 GB and the smallest card offers 7.2 GB."},
+		},
+		{
+			// The Agent Configs dialog for a served model behind a key, at
+			// an address only this machine can reach.
+			name:    "agent_configs",
+			partial: "agent_configs",
+			data: newAgentConfigsData(agentconfig.Input{
+				BaseURL: "http://localhost:3000/v1", APIKey: true,
+				Models: []agentconfig.Model{{ID: "unsloth/Qwen3.8-27B-FP8", Context: 131072,
+					MaxOutput: 32768, Tools: true, Reasoning: true}},
+			}, ""),
+		},
+		{
+			name:    "agent_configs_unavailable",
+			partial: "agent_configs",
+			data: newAgentConfigsData(agentconfig.Input{BaseURL: "http://gpu-box:3000/v1"},
+				"The server isn't serving a model. Start one on this tab, then open this again."),
 		},
 	}
 

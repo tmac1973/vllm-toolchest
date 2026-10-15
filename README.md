@@ -17,6 +17,7 @@ vllm-toolchest packages vLLM into a Docker/Podman container with a full web inte
 - **Tool use support** -- auto tool choice with configurable tool call parsers
 - **Multiple quantization formats** -- GPTQ, AWQ, GGUF, Marlin, bitsandbytes
 - **OpenAI-compatible API** -- proxies /v1/* endpoints to vLLM
+- **Coding agent configs** -- ready-made config files for opencode, Kilo Code, pi, Goose and Crush naming the served model with its context and capabilities (Server tab -> API Endpoint -> *Agent Configs*); see [Coding agents](#coding-agents)
 
 ## Quick start
 
@@ -298,6 +299,40 @@ Things worth knowing as a client:
 - `sampling.default` is what the engine applies when a request names no
   sampling of its own: the launch's `--override-generation-config` where it sets
   a value, the checkpoint's `generation_config.json` where it does not.
+
+## Coding agents
+
+Terminal coding agents can use the served model, but most only find a local
+server through a hand-edited config file naming the model, its context size and
+what it can do. **Server tab → API Endpoint → Agent Configs** generates those
+files from what is being served right now:
+
+| Agent | File | Where it goes | How it's picked up |
+|---|---|---|---|
+| [opencode](https://opencode.ai) | `vllm-toolchest.opencode.json` | `~/.config/opencode/` | `export OPENCODE_CONFIG=…` layers it over your own config |
+| [Kilo Code](https://kilo.ai) | `kilo.json` | `~/.config/kilo/` | read on start (merge the `provider` block if you have a kilo.json) |
+| [pi](https://github.com/earendil-works/pi) | `models.json` | `~/.pi/agent/` | read on start (merge the provider if you have a models.json) |
+| [Goose](https://github.com/aaif-goose/goose) | `vllm_toolchest.json` | `~/.config/goose/custom_providers/` | `goose session --provider vllm_toolchest` |
+| [Crush](https://github.com/charmbracelet/crush) | `vllm-toolchest.crushrc` | `~/.config/crush/` | one `source` line in your `crushrc` |
+
+Each file names the running model with the same facts
+[client auto-discovery](#client-auto-discovery) reports, from the flags the
+engine was started with:
+- the served `--max-model-len` as the context (not divided between concurrent
+  requests, since vLLM shares one KV pool);
+- a max output of a quarter of that, capped at 32K;
+- tool, image and reasoning support. Coding agents need tool calls, so the
+  dialog warns when the model was started without tool calling.
+
+The dialog shows the paths for Linux, macOS and Windows and the exact command
+for each agent. Its *Server URL* field sets the address the files use: change it
+if the agent runs on another machine. When an API key is set, the files read it
+from `VLLM_TOOLCHEST_API_KEY` instead of containing it, so set that variable
+wherever the agent runs. The dialog offers nothing while the engine is stopped
+or starting, or while autoconfigure's helper model is running.
+
+A file is a snapshot: **download it again after serving another model or
+changing its context size.**
 
 ## Security
 

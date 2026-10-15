@@ -306,6 +306,18 @@
             </div>
         </article>
     </dialog>
+
+    <dialog id="agent-configs-modal">
+        <article style="max-width:720px;">
+            <header>
+                <button aria-label="Close" rel="prev" onclick="this.closest('dialog').close();"></button>
+                <strong>Agent Configs</strong>
+            </header>
+            <div id="agent-configs-slot">
+                <p aria-busy="true">Loading...</p>
+            </div>
+        </article>
+    </dialog>
 </div>
 
 <script>
@@ -335,6 +347,17 @@ function engineNotesOpen() {
 
 function openEngineNotes() {
     document.getElementById('engine-notes-modal').showModal();
+}
+
+// --- Agent configs dialog ---
+// Loaded on every open rather than once: the files name the model being
+// served right now, which changes with every start.
+function openAgentConfigs() {
+    var slot = document.getElementById('agent-configs-slot');
+    slot.innerHTML = '<p aria-busy="true">Loading...</p>';
+    htmx.ajax('GET', '/api/agent-configs', {target: slot, swap: 'innerHTML'})
+        .catch(function() { slot.textContent = 'Could not load the agent configs.'; });
+    document.getElementById('agent-configs-modal').showModal();
 }
 
 // Pulse the strip when what it says has changed, and only then. The strip is
