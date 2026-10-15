@@ -236,7 +236,9 @@ being configured by hand. The contract is the same one
 [llama-toolchest](https://github.com/tmac1973/llama-toolchest) exposes, so a
 client written against either works with both. Haruspex probes it this way:
 
-1. `GET /api/service/status` — answers 200 when this is a toolchest.
+1. `GET /api/service/status` — answers 200 when this is a toolchest. Its
+   `"engine": "vllm"` (present in every state) tells it apart from
+   llama-toolchest, which serves the same API.
 2. `GET /api/service/loaded-models` — everything else, in one request.
 
 ```jsonc
