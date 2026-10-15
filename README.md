@@ -332,7 +332,10 @@ wherever the agent runs. The dialog offers nothing while the engine is stopped
 or starting, or while autoconfigure's helper model is running.
 
 A file is a snapshot: **download it again after serving another model or
-changing its context size.**
+changing its context size.** Each agent was tested making a tool call against
+vLLM through these files, with and without an API key, serving a model whose
+name contains a slash (opencode 1.19, Kilo Code 7.8, pi 1.0, Goose 1.54,
+Crush 0.98).
 
 ## Security
 
