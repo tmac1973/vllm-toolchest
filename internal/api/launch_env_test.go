@@ -185,3 +185,22 @@ func TestQuantMethodStillReachesTheEnvironment(t *testing.T) {
 		t.Errorf("VLLM_USE_TRITON_AWQ = %q (present=%v), want 1 for an AWQ model", got, ok)
 	}
 }
+
+// vLLM refuses a context past max_position_embeddings even with a YaRN
+// override that covers it, so a model the panel lets go past its trained
+// length is launched with the variable that lifts the check -- and only that
+// model.
+func TestYaRNOverrideAllowsALongContext(t *testing.T) {
+	s := &Server{cfg: &config.Config{}, vllmEnv: vllmenv.Env{Variant: "radiance"}}
+	yarn := &models.Model{
+		HFConfig:   models.HFConfig{MaxPositionEmbeddings: 262144},
+		VLLMConfig: models.VLLMConfig{ExtraFlags: `--hf-overrides '{"text_config": {"rope_parameters": {"rope_type": "yarn", "factor": 2.0, "original_max_position_embeddings": 262144}}}'`},
+	}
+	if got, _ := envValue(s.launchEnv(yarn), "VLLM_ALLOW_LONG_MAX_MODEL_LEN"); got != "1" {
+		t.Errorf("YaRN model: VLLM_ALLOW_LONG_MAX_MODEL_LEN = %q, want 1", got)
+	}
+	plain := &models.Model{HFConfig: models.HFConfig{MaxPositionEmbeddings: 262144}}
+	if _, found := envValue(s.launchEnv(plain), "VLLM_ALLOW_LONG_MAX_MODEL_LEN"); found {
+		t.Error("model without a YaRN override was given VLLM_ALLOW_LONG_MAX_MODEL_LEN")
+	}
+}

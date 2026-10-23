@@ -73,6 +73,14 @@ func (s *Server) configuredEnvPairs(m *models.Model) []string {
 			pairs = append(pairs, "VLLM_PLE_CPU_OFFLOAD=1")
 		}
 	}
+	// vLLM does not stretch its own ceiling by a YaRN factor -- it expects a
+	// YaRN config's max_position_embeddings to be scaled already -- so a
+	// context past the trained length, which the config panel allows once
+	// --hf-overrides carries the factor, is refused unless this is set. It is
+	// what Qwen's own YaRN instructions pair with the override.
+	if m != nil && models.MaxContext(m) > m.HFConfig.MaxPositionEmbeddings {
+		pairs = append(pairs, "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1")
+	}
 	pairs = append(pairs, s.cfg.RuntimeEnvPairs()...)
 	pairs = append(pairs, s.cfg.KnobEnv(s.vllmEnv.Variant)...)
 	if m != nil {

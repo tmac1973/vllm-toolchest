@@ -124,7 +124,7 @@ type modelConfigView struct {
 func (s *Server) newModelConfigView(m *models.Model) modelConfigView {
 	c := m.VLLMConfig
 
-	maxCtx := m.HFConfig.MaxPositionEmbeddings
+	maxCtx := models.MaxContext(m)
 	if maxCtx == 0 {
 		maxCtx = 4096
 	}
