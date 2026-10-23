@@ -243,7 +243,7 @@ func bestOffload(in PlanInput, d PlanDefaults, widths []int, target int, dtype s
 
 // planTarget is the context a class asks for, for this model.
 func planTarget(m *Model, class ContextClass) int {
-	max := m.HFConfig.MaxPositionEmbeddings
+	max := MaxContext(m)
 	target := class.Tokens()
 	if class == ContextMax {
 		if max > 0 {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmac1973/vllm-toolchest/internal/ansi"
 	"github.com/tmac1973/vllm-toolchest/internal/benchmark"
+	"github.com/tmac1973/vllm-toolchest/internal/models"
 	"github.com/tmac1973/vllm-toolchest/internal/process"
 	"github.com/tmac1973/vllm-toolchest/internal/procgroup"
 )
@@ -37,16 +38,16 @@ func newProbeEnv(s *Server) *probeEnv {
 	}
 }
 
-// ModelMaxPositionEmbeddings reads max_position_embeddings from the
-// model's HF config. Used as the absolute ceiling for the probe so we
-// don't spend attempts on context lengths the model architecture
-// fundamentally can't support.
+// ModelMaxPositionEmbeddings is the longest context the model as configured
+// supports: its HF config's max_position_embeddings, stretched by a YaRN
+// override in its extra flags. Used as the absolute ceiling for the probe so
+// we don't spend attempts on context lengths the engine would refuse.
 func (e *probeEnv) ModelMaxPositionEmbeddings(modelID string) int {
 	m, ok := e.s.registry.Get(modelID)
 	if !ok {
 		return 0
 	}
-	return m.HFConfig.MaxPositionEmbeddings
+	return models.MaxContext(m)
 }
 
 // TrySpawn starts vLLM on the probe port with the given attempt
