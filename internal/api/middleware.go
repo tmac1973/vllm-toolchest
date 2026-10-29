@@ -12,9 +12,15 @@ import (
 
 // apiKeyAuth returns middleware that checks for a valid Bearer token.
 // If no API key is configured, all requests are allowed.
+//
+// A CORS preflight is let through without one. A browser asks it before a
+// page's cross-origin request and never attaches credentials to it, so
+// refusing it locks every browser client out however its key is set. It
+// carries no body and reaches nothing but vLLM's CORS handling, which
+// answers it; the request that follows is checked as usual.
 func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.APIKey == "" {
+		if s.cfg.APIKey == "" || isPreflight(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -35,6 +41,12 @@ func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isPreflight reports a CORS preflight: an OPTIONS request naming the method
+// the browser wants to send. A bare OPTIONS is not one.
+func isPreflight(r *http.Request) bool {
+	return r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
 }
 
 // requestLogger logs each request when it completes, through slog like the

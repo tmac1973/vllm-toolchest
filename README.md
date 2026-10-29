@@ -350,7 +350,10 @@ restore.
   request needs `Authorization: Bearer <key>`, both through the proxy on
   `VLLMCTL_PORT` and on vLLM's own port (`VLLMCTL_INFERENCE_PORT`, 8000), which
   is started requiring the same key. A key changed in Settings reaches vLLM's
-  port at its next start; the proxy accepts the new key straight away.
+  port at its next start; the proxy accepts the new key straight away. CORS
+  preflights are the exception: browsers never put a key on them, so they are
+  passed to vLLM, which answers them, and the request that follows needs the
+  key as usual.
 - **Cross-site requests.** A state-changing `/api` request that a browser marks
   as coming from another site is refused, so a web page you visit cannot drive
   the UI or post a restore. Scripts and `curl` are unaffected, and so is `/v1`,
