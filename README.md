@@ -353,7 +353,8 @@ restore.
   port at its next start; the proxy accepts the new key straight away. CORS
   preflights are the exception: browsers never put a key on them, so they are
   passed to vLLM, which answers them, and the request that follows needs the
-  key as usual.
+  key as usual. A refused key or a stopped engine is answered readably to any
+  origin, as vLLM's own answers are, so a browser client can say which it was.
 - **Cross-site requests.** A state-changing `/api` request that a browser marks
   as coming from another site is refused, so a web page you visit cannot drive
   the UI or post a restore. Scripts and `curl` are unaffected, and so is `/v1`,

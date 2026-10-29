@@ -32,6 +32,11 @@ func (s *Server) newProxyHandler() http.Handler {
 		}
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if isPreflight(r) {
+			answerPreflight(w, r)
+			return
+		}
+		allowAnyOrigin(w, r)
 		respondJSONStatus(w, http.StatusBadGateway, openAIError("vLLM is not available: "+err.Error(), "proxy_error"))
 	}
 	return proxy
@@ -53,6 +58,7 @@ func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 		s.newProxyHandler().ServeHTTP(w, r)
 		return
 	}
+	allowAnyOrigin(w, r)
 	respondJSON(w, struct {
 		Object string `json:"object"`
 		Data   []any  `json:"data"`
