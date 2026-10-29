@@ -306,6 +306,23 @@ func TestValidateRejects(t *testing.T) {
 			"no VARIANT_BASE_IMAGE to read it from",
 		},
 		{
+			// The tag chosen at install decides which vLLM is inside, so the
+			// pin cannot be written down here either.
+			"a tag list with a stated pin",
+			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:1.0'\nVARIANT_BASE_TAGS='^[0-9.]+$'\nVARIANT_VLLM_PIN='v0.29.0'\n",
+			"cannot have its vLLM version stated in advance",
+		},
+		{
+			"a tag list with no repository",
+			base + "KNOBS=''\nVARIANT_BASE_TAGS='^[0-9.]+$'\n",
+			"no VARIANT_BASE_IMAGE naming the repository",
+		},
+		{
+			"a tag pattern that does not compile",
+			base + "KNOBS=''\nVARIANT_BASE_IMAGE='docker.io/a/b:1.0'\nVARIANT_BASE_TAGS='^v[0-9+$'\nVARIANT_VLLM_PIN='image'\n",
+			"VARIANT_BASE_TAGS",
+		},
+		{
 			"bad tier",
 			"VARIANT_ID='t'\nVARIANT_LABEL='T'\nVARIANT_TIER='probably fine'\nKNOBS=''\n",
 			"not tested, community or experimental",

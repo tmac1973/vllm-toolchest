@@ -60,7 +60,7 @@ offers a second, hand-tuned image -- see [Image variants](#image-variants).
 |---------|--------|
 | NVIDIA CUDA | Tested and working |
 | AMD ROCm (RDNA3) | Supported |
-| AMD ROCm (RDNA4) | Supported -- from source, or the tuned `radiance` variant |
+| AMD ROCm (RDNA4) | Supported -- from source, or the tuned `rdna4-clav` variant |
 
 ## Image variants
 
@@ -76,7 +76,7 @@ feature switches its Settings page offers.
 | `rocm` | AMD RDNA3 and RDNA4 (gfx1100-gfx1201) | [rocm/vllm](https://hub.docker.com/r/rocm/vllm) -- AMD's own build |
 | `rocm-cdna` | AMD Instinct (MI200, MI300, MI350) | [rocm/vllm](https://hub.docker.com/r/rocm/vllm) -- AMD's CDNA build |
 | `rocm-source` | Any supported AMD card | Fedora + ROCm, vLLM built from source, tracking `main` |
-| `radiance` | AMD RDNA4 (gfx1201: R9700, RX 9070/XT) | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance) -- hand-tuned for gfx1201 |
+| `radiance` | AMD RDNA4 (gfx1201: R9700, RX 9070/XT) | [vllm-radiance](https://codeberg.org/StillDeadcode/vllm-radiance) -- **deprecated**: no longer maintained upstream; use `rdna4-clav` |
 | `rdna4-clav` | AMD RDNA4 (gfx1201 and gfx1200) | [tcclaviger/vllm](https://blog.robai.net/vllmdocs/) -- hand-written HIP kernels |
 | `strix-halo` | Ryzen AI MAX (gfx1151) | [kyuz0/vllm-therock-gfx1151](https://hub.docker.com/r/kyuz0/vllm-therock-gfx1151) |
 | `gfx906` | MI50, MI60, Radeon VII | [vllm-gfx906-mobydick](https://github.com/ai-infos/vllm-gfx906-mobydick) -- serve with `--dtype float16` |
@@ -104,7 +104,7 @@ config file first.
 To skip the prompt, or to change your mind later:
 
 ```bash
-VLLMCTL_VARIANT=radiance ./setup.sh install     # build a specific variant
+VLLMCTL_VARIANT=rdna4-clav ./setup.sh install   # build a specific variant
 VLLMCTL_VARIANT=rocm-source ./setup.sh rebuild  # switch to the from-source image
 ```
 
@@ -147,6 +147,11 @@ the build uses), `VLLMCTL_BASE_DIGEST`, `VLLMCTL_BASE_PREVIOUS`,
 `VLLMCTL_BASE_VLLM` and `VLLMCTL_BASE_RELEASE`.
 
 ### What the radiance variant adds
+
+> **Deprecated.** vllm-radiance stopped being maintained on 2026-10-04 when its
+> author moved to a standalone engine that is not vLLM; 0.9.3 is the last image.
+> It still builds, so an existing install can rebuild, but new installs on an
+> R9700 should use `rdna4-clav`.
 
 Its tuned paths are switchable from the **Settings** page (and via `RADIANCE_*`
 variables in `.env`), each defaulting to whatever the image ships so they track
@@ -438,6 +443,26 @@ the build asserts them: `VARIANT_VENV_ROOT` (from `VIRTUAL_ENV` or `PATH` in the
 image config) and `VARIANT_VLLM_PIN`. Get the pin wrong and the build stops with
 a message telling you the right value.
 
+A base whose author publishes numbered releases should offer them instead of
+naming one, so installs get the newest and can step back to an older one:
+
+```sh
+VARIANT_BASE_IMAGE='docker.io/someone/their-vllm:1.2.3'   # offline fallback
+VARIANT_BASE_TAGS='^[0-9]+\.[0-9]+\.[0-9]+$'              # grep -E over tag names
+VARIANT_VLLM_PIN='image'
+```
+
+`install` and `rebuild` list the matching tags, newest first, and build on the
+one picked (a tag not in the list can be typed by name); `pull` takes the newest
+without asking; `quick` stays on the last one picked. Docker Hub lists tags in
+push order and ghcr.io by version. Make the pattern narrow enough to leave out
+nightlies, release candidates and builds for other hardware, and make sure the
+fallback tag matches it.
+
+A variant that should no longer be chosen says why in `VARIANT_DEPRECATED`. It
+still builds, so an install already on it can rebuild, but it is listed last,
+never recommended, and setup warns when it is used.
+
 A base that names a tag which moves (`latest`, `nightly`) has to say so, or it
 is pulled once and never again:
 
@@ -447,7 +472,7 @@ VARIANT_BASE_PULL='always'            # re-resolve on install, rebuild and pull
 VARIANT_VLLM_PIN='image'              # read the vLLM version out of the base
 ```
 
-`VARIANT_VLLM_PIN='image'` is required alongside `VARIANT_BASE_PULL`: a pin
+`VARIANT_VLLM_PIN='image'` is required alongside `VARIANT_BASE_PULL` or `VARIANT_BASE_TAGS`: a pin
 written down in advance is right until the image's next vLLM bump and then
 fails every build. It can also be used on its own, with a fixed tag, to save
 looking the version up. `VARIANT_BASE_RELEASE_CMD`, optional, is a shell command
