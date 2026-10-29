@@ -27,6 +27,7 @@ func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
+			allowAnyOrigin(w, r)
 			respondJSONStatus(w, http.StatusUnauthorized, openAIError("missing API key", "auth_error"))
 			return
 		}
@@ -35,6 +36,7 @@ func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 		// Constant time, so response timing says nothing about how much of
 		// a guess was right.
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.APIKey)) != 1 {
+			allowAnyOrigin(w, r)
 			respondJSONStatus(w, http.StatusUnauthorized, openAIError("invalid API key", "auth_error"))
 			return
 		}
@@ -47,6 +49,31 @@ func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 // the browser wants to send. A bare OPTIONS is not one.
 func isPreflight(r *http.Request) bool {
 	return r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
+}
+
+// allowAnyOrigin lets a browser page read a /v1 response this server writes
+// itself, as vLLM lets it read the ones it writes. Without it a page sees a
+// refused key, or an engine that is down, only as "Failed to fetch". It is
+// what vLLM answers with by default, and what it exposes -- an error, or an
+// empty model list -- is no more than any client could learn by asking.
+func allowAnyOrigin(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != "" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+}
+
+// answerPreflight answers a preflight that vLLM cannot, because it is not
+// running, as vLLM would: any origin, the method and headers asked for. Left
+// failing, it would stop the browser before the request whose answer says
+// the engine is down.
+func answerPreflight(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Allow-Methods", r.Header.Get("Access-Control-Request-Method"))
+	if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
+		h.Set("Access-Control-Allow-Headers", asked)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // requestLogger logs each request when it completes, through slog like the

@@ -101,3 +101,81 @@ func TestV1PassesPreflightsWithoutTheKey(t *testing.T) {
 		t.Errorf("vLLM received %v from requests without the key", reached)
 	}
 }
+
+// A page has to be able to read what this server answers on /v1 itself, or
+// a refused key and a stopped engine both reach it as "Failed to fetch".
+func TestV1OwnAnswersAreReadableCrossOrigin(t *testing.T) {
+	// Nothing listens on port 1: the engine is down.
+	s := newTestServer(t, "http://127.0.0.1:1")
+	s.cfg.APIKey = "sk-test"
+	router := s.buildRouter()
+	send := func(method, path, key string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		req.Header.Set("Origin", "http://chat.lan:8080")
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, c := range []struct {
+		name   string
+		rec    *httptest.ResponseRecorder
+		status int
+		body   string
+	}{
+		{"no key", send("POST", "/v1/chat/completions", "", nil), http.StatusUnauthorized, "missing API key"},
+		{"wrong key", send("POST", "/v1/chat/completions", "nope", nil), http.StatusUnauthorized, "invalid API key"},
+		{"engine down", send("POST", "/v1/chat/completions", "sk-test", nil), http.StatusBadGateway, "vLLM is not available"},
+		{"nothing served", send("GET", "/v1/models", "sk-test", nil), http.StatusOK, `"data":[]`},
+	} {
+		if c.rec.Code != c.status || !strings.Contains(c.rec.Body.String(), c.body) ||
+			c.rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Errorf("%s: %d %v %s", c.name, c.rec.Code, c.rec.Header(), c.rec.Body.String())
+		}
+	}
+
+	// With the engine down there is no vLLM to answer the preflight, and a
+	// failed one would stop the browser before the request that says so.
+	rec := send("OPTIONS", "/v1/chat/completions", "", map[string]string{
+		"Access-Control-Request-Method":  "POST",
+		"Access-Control-Request-Headers": "authorization, content-type",
+	})
+	h := rec.Header()
+	if rec.Code != http.StatusNoContent || h.Get("Access-Control-Allow-Origin") != "*" ||
+		h.Get("Access-Control-Allow-Methods") != "POST" || h.Get("Access-Control-Allow-Headers") != "authorization, content-type" {
+		t.Errorf("preflight with the engine down: %d %v", rec.Code, h)
+	}
+
+	// Not a browser: nothing added.
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader("{}"))
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if v := rec.Header().Values("Access-Control-Allow-Origin"); len(v) != 0 {
+		t.Errorf("CORS header without an Origin: %v", v)
+	}
+}
+
+// vLLM's own answers keep vLLM's header, once: two values would make the
+// browser refuse the response.
+func TestV1ProxiedAnswersKeepOneCORSHeader(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}))
+	defer backend.Close()
+	s := newTestServer(t, backend.URL)
+	s.cfg.APIKey = "sk-test"
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader("{}"))
+	req.Header.Set("Origin", "http://chat.lan:8080")
+	req.Header.Set("Authorization", "Bearer sk-test")
+	rec := httptest.NewRecorder()
+	s.buildRouter().ServeHTTP(rec, req)
+	if v := rec.Header().Values("Access-Control-Allow-Origin"); rec.Code != http.StatusOK || len(v) != 1 {
+		t.Errorf("proxied answer: %d, Access-Control-Allow-Origin %v", rec.Code, v)
+	}
+}
