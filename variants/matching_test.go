@@ -72,8 +72,16 @@ func TestVariantMatching(t *testing.T) {
 func TestRecommendationPrefersTheSpecificVariant(t *testing.T) {
 	got := strings.TrimSpace(runMatch(t,
 		`GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1201`, "recommended_variant"))
-	if got != "radiance" {
-		t.Errorf("recommended = %q, want radiance (it names gfx1201; rocm-source names nothing)", got)
+	if got != "rdna4-clav" {
+		t.Errorf("recommended = %q, want rdna4-clav (it names gfx1201; rocm-source names nothing)", got)
+	}
+
+	// radiance names gfx1201 too and outranks rdna4-clav on priority, but it
+	// is deprecated: still offered, so an install on it can rebuild, and
+	// listed last.
+	all := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1201`, "matching_variants"))
+	if len(all) == 0 || all[len(all)-1] != "radiance" {
+		t.Errorf("the deprecated radiance should be offered last; got %v", all)
 	}
 
 	// On RDNA3 the tuned gfx1201 images do not apply, but AMD's own prebuilt
@@ -88,7 +96,7 @@ func TestRecommendationPrefersTheSpecificVariant(t *testing.T) {
 	}
 
 	// The source build is still offered, just not preselected.
-	all := splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
+	all = splitLines(runMatch(t, `GPU_VENDOR=rocm; AMD_GFX_TARGET=gfx1100`, "matching_variants"))
 	if !slices.Contains(all, "rocm-source") {
 		t.Errorf("rocm-source should still be on the menu; got %v", all)
 	}

@@ -119,6 +119,15 @@ type Descriptor struct {
 	// setup.sh asks the registry where the tag points on install, rebuild
 	// and pull, instead of building on whatever it fetched the first time.
 	BasePull string
+	// BaseTags is an extended regular expression over the base repository's
+	// tag names. When set, setup.sh lists the matching tags newest first on
+	// install and rebuild and builds on the one chosen; BaseImage is then only
+	// the fallback for when the registry cannot be asked.
+	BaseTags string
+	// Deprecated, when set, says why the variant should no longer be chosen.
+	// It still builds, so an install already on it can rebuild, but setup.sh
+	// lists it last and never recommends it.
+	Deprecated string
 	// BaseReleaseCmd, run in the base image, prints the image's own release
 	// number. Optional, and only ever recorded for the operator to read.
 	BaseReleaseCmd string
@@ -392,6 +401,8 @@ func parse(id string, src string) (Descriptor, error) {
 		Note:           kv["VARIANT_NOTE"],
 		BaseImage:      kv["VARIANT_BASE_IMAGE"],
 		BasePull:       kv["VARIANT_BASE_PULL"],
+		BaseTags:       kv["VARIANT_BASE_TAGS"],
+		Deprecated:     kv["VARIANT_DEPRECATED"],
 		BaseReleaseCmd: kv["VARIANT_BASE_RELEASE_CMD"],
 		Dockerfile:     kv["VARIANT_DOCKERFILE"],
 		NeedsFlatten:   kv["VARIANT_NEEDS_FLATTEN"] == "1",
@@ -580,9 +591,11 @@ func groupKnobs(kv map[string]string, knobs []Knob) []Group {
 // from that.
 const PinFromImage = "image"
 
-// TracksBase reports whether the variant follows a base tag that moves.
+// TracksBase reports whether the variant follows a base tag that moves, or
+// offers a list of tags to choose from -- which setup.sh treats the same way:
+// the base can change on any install, rebuild or pull.
 func (d Descriptor) TracksBase() bool {
-	return d.BasePull == "always"
+	return d.BasePull == "always" || d.BaseTags != ""
 }
 
 // Validate enforces the manifest invariants that a typo would otherwise turn
@@ -598,15 +611,27 @@ func (d Descriptor) Validate() error {
 	if d.BasePull != "" && d.BasePull != "always" {
 		return fmt.Errorf("VARIANT_BASE_PULL: %q is not \"always\"; leave it out for a base that names one release", d.BasePull)
 	}
-	if d.TracksBase() && d.BaseImage == "" {
+	if d.BasePull != "" && d.BaseImage == "" {
 		return fmt.Errorf("VARIANT_BASE_PULL is set but there is no VARIANT_BASE_IMAGE to pull")
+	}
+	if d.BaseTags != "" {
+		// The tags are those of the base image's repository, and the base
+		// image itself is what an install falls back to offline.
+		if d.BaseImage == "" {
+			return fmt.Errorf("VARIANT_BASE_TAGS is set but there is no VARIANT_BASE_IMAGE naming the repository")
+		}
+		// setup.sh hands this to grep -E. Go's syntax is not POSIX ERE, but
+		// a pattern Go rejects is very likely one grep reads differently.
+		if _, err := regexp.Compile(d.BaseTags); err != nil {
+			return fmt.Errorf("VARIANT_BASE_TAGS: %v", err)
+		}
 	}
 	// The pin says which vLLM is inside the base, and the build checks it. A
 	// base that moves carries a different vLLM from one pull to the next, so
 	// a pin written down here would be right until the first release that
 	// changed it and then stop every build.
 	if d.TracksBase() && d.VLLMPin != PinFromImage {
-		return fmt.Errorf("VARIANT_BASE_PULL='always' needs VARIANT_VLLM_PIN='%s': a base that moves cannot have its vLLM version stated in advance", PinFromImage)
+		return fmt.Errorf("VARIANT_BASE_PULL or VARIANT_BASE_TAGS needs VARIANT_VLLM_PIN='%s': a base that can change cannot have its vLLM version stated in advance", PinFromImage)
 	}
 	if d.VLLMPin == PinFromImage {
 		if d.BaseImage == "" {

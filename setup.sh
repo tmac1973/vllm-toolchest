@@ -461,6 +461,8 @@ variant_specificity() {
     ( load_variant_manifest "$1" || exit 0
       local score=0
       [[ -n "${VARIANT_GFX_TARGETS:-}" ]] && score=$((score + 1000))
+      # A deprecated variant still runs, but is never the one recommended.
+      [[ -n "${VARIANT_DEPRECATED:-}" ]] && score=$((score - 10000))
       printf '%s' "$((score + ${VARIANT_PRIORITY:-0}))" )
 }
 
@@ -1090,6 +1092,26 @@ tier_note() {
     esac
 }
 
+# variant_summary ID prints the one-line summary menus show, flagged when the
+# variant is deprecated.
+variant_summary() {
+    local summary
+    summary="$(variant_field "$1" SUMMARY)"
+    if [[ -n "$(variant_field "$1" DEPRECATED)" ]]; then
+        summary="${summary} (deprecated)"
+    fi
+    printf '%s\n' "$summary"
+}
+
+# warn_deprecated_variant says why when the selected variant is deprecated.
+# Building on it still works; nothing about it will get newer.
+warn_deprecated_variant() {
+    local why
+    why="$(variant_field "$BUILD_VARIANT" DEPRECATED)"
+    [[ -n "$why" ]] || return 0
+    warn "${BUILD_VARIANT} is deprecated. ${why}"
+}
+
 # prompt_variant offers every variant that runs on the detected hardware, with
 # the best match preselected.
 #
@@ -1129,7 +1151,7 @@ prompt_variant() {
     local i=1 label summary tier
     for id in "${ids[@]}"; do
         label="$(variant_field "$id" LABEL)"
-        summary="$(variant_field "$id" SUMMARY)"
+        summary="$(variant_summary "$id")"
         tier="$(variant_field "$id" TIER)"
         tiers+=("$tier")
 
@@ -1151,7 +1173,7 @@ prompt_variant() {
 
     local choice
     while :; do
-        read -rp "$(echo -e "  ${BOLD}Choice${NC} [1]: ")" choice
+        read -rp "$(echo -e "  ${BOLD}Choice${NC} [1]: ")" choice || true
         choice="${choice:-1}"
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "${#ids[@]}" ]]; then
             break
@@ -1165,7 +1187,9 @@ prompt_variant() {
 
     local pin
     pin="$(variant_field "$BUILD_VARIANT" VLLM_PIN)"
-    if [[ "$pin" == "image" ]]; then
+    if [[ -n "$(variant_field "$BUILD_VARIANT" BASE_TAGS)" ]]; then
+        : # prompt_base_tag says which image, and so which vLLM, next.
+    elif [[ "$pin" == "image" ]]; then
         echo "    Follows $(variant_field "$BUILD_VARIANT" BASE_IMAGE): vLLM is whatever that image carries."
     elif [[ -n "$pin" && "$pin" != "main" ]]; then
         echo "    Pins vLLM ${pin}: models needing a newer vLLM will not load."
@@ -1361,9 +1385,13 @@ env_file_value() {
     { grep "^$1=" "${SCRIPT_DIR}/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-
 }
 
-# variant_tracks_base: does this variant follow a tag that moves?
+# variant_tracks_base: does this variant follow a tag that moves? A variant
+# that offers a list of tags does: which one it is built on changes with each
+# install, rebuild and pull, and quick stays on the last one chosen, exactly as
+# for a moving tag.
 variant_tracks_base() {
-    [[ "$(variant_field "$BUILD_VARIANT" BASE_PULL)" == "always" ]]
+    [[ "$(variant_field "$BUILD_VARIANT" BASE_PULL)" == "always" ]] \
+        || [[ -n "$(variant_field "$BUILD_VARIANT" BASE_TAGS)" ]]
 }
 
 # variant_pin_from_image: is the vLLM pin read out of the base image rather
@@ -1415,6 +1443,149 @@ tracked_upstream_ref() {
     printf '%s@%s\n' "$repo" "$digest"
 }
 
+# ─── Choosing which release of the base to build on ──────────────────────────
+#
+# A manifest with VARIANT_BASE_TAGS names the shape of its repository's release
+# tags rather than one release. install and rebuild list the matching tags,
+# newest first, and build on the one chosen -- the newest unless someone picks
+# an older one, which is how a release that broke a model is stepped back from.
+# pull takes the newest without asking. quick never asks the registry: it stays
+# on the image the last choice resolved to, like any tracked base.
+#
+# The manifest's own VARIANT_BASE_IMAGE is the fallback for when the registry
+# cannot be reached, so an offline rebuild still has something to build on.
+
+CHOSEN_BASE_REF=""     # repo:tag picked this run, empty when nothing was asked
+
+# base_repo REF prints REF without its tag. The tag is a colon in the last
+# path component, not the one in a registry's host:port.
+base_repo() {
+    local ref="$1"
+    [[ "${ref##*/}" == *:* ]] && ref="${ref%:*}"
+    printf '%s\n' "$ref"
+}
+
+# registry_get fetches one registry API URL. Its own function so the tests can
+# stand in for the network.
+registry_get() {
+    curl -fsSL --max-time 15 "$@" 2>/dev/null
+}
+
+# list_base_tags REPO PATTERN prints up to twelve of REPO's tags matching the
+# extended regular expression PATTERN, newest first. Prints nothing, and fails,
+# when the registry cannot be asked.
+#
+# Docker Hub sorts by when a tag was last pushed, which is the order a
+# maintainer released in -- tcclaviger/vllm pushed 29.08.10 a fortnight before
+# 29.08.9, so sorting by version would pick the wrong one. Other registries
+# only list names, and those are sorted as versions.
+list_base_tags() {
+    local repo="$1" pattern="$2" path page json names all="" token
+    need_cmd curl || return 1
+    case "$repo" in
+        docker.io/*)
+            path="${repo#docker.io/}"
+            [[ "$path" == */* ]] || path="library/${path}"
+            # Up to five pages: vllm/vllm-openai pushes nightlies several
+            # times a day, and its releases can be a hundred tags down.
+            for page in 1 2 3 4 5; do
+                json="$(registry_get "https://hub.docker.com/v2/repositories/${path}/tags?page_size=100&page=${page}&ordering=last_updated")" || break
+                names="$({ grep -o '"name": *"[^"]*"' <<<"$json" || true; } | sed 's/.*"\([^"]*\)"$/\1/')"
+                [[ -n "$names" ]] || break
+                all+="${names}"$'\n'
+                [[ "$({ grep -E "$pattern" <<<"$all" || true; } | wc -l)" -ge 12 ]] && break
+                grep -q '"next": *"http' <<<"$json" || break
+            done
+            { grep -E "$pattern" <<<"$all" || true; } | awk 'NF && !seen[$0]++' | head -12
+            ;;
+        ghcr.io/*)
+            path="${repo#ghcr.io/}"
+            token="$(registry_get "https://ghcr.io/token?scope=repository:${path}:pull" \
+                | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')" || return 1
+            [[ -n "$token" ]] || return 1
+            registry_get -H "Authorization: Bearer ${token}" "https://ghcr.io/v2/${path}/tags/list?n=1000" \
+                | { grep -o '"[^"]*"' || true; } | tr -d '"' \
+                | { grep -E "$pattern" || true; } | sort -rV | head -12
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# prompt_base_tag [newest] settles CHOSEN_BASE_REF for a variant that offers
+# its tags. With "newest", or with no terminal to ask at, it takes the first.
+#
+# An operator's VLLMCTL_BASE_IMAGE outranks the list, so nothing is asked.
+prompt_base_tag() {
+    CHOSEN_BASE_REF=""
+    local pattern fallback repo installed
+    pattern="$(variant_field "$BUILD_VARIANT" BASE_TAGS)"
+    [[ -n "$pattern" ]] || return 0
+    [[ -z "${VLLMCTL_BASE_IMAGE:-}" ]] || return 0
+
+    fallback="$(variant_field "$BUILD_VARIANT" BASE_IMAGE)"
+    repo="$(base_repo "$fallback")"
+    local -a tags=()
+    local t
+    while IFS= read -r t; do
+        [[ -n "$t" ]] && tags+=("$t")
+    done < <(list_base_tags "$repo" "$pattern" || true)
+
+    if [[ "${#tags[@]}" -eq 0 ]]; then
+        warn "Could not list the releases of ${repo}; building on ${fallback}."
+        return 0
+    fi
+
+    if [[ "${1:-}" == "newest" ]] || ! [[ -t 0 ]]; then
+        CHOSEN_BASE_REF="${repo}:${tags[0]}"
+        log "Newest release of ${repo}: ${tags[0]}"
+        return 0
+    fi
+
+    installed="$(env_file_value VLLMCTL_BASE_TAG)"
+    echo ""
+    echo -e "  ${BOLD}Which release of ${repo}?${NC}"
+    echo ""
+    local i=1 marker
+    for t in "${tags[@]}"; do
+        marker=""
+        [[ $i -eq 1 ]] && marker=" ${GREEN}← newest${NC}"
+        [[ "${repo}:${t}" == "$installed" ]] && marker="${marker} (installed now)"
+        printf "    %2d) %s%b\n" "$i" "$t" "$marker"
+        i=$((i + 1))
+    done
+    echo ""
+    echo "  Older releases than these can be typed by name."
+    echo ""
+
+    local choice tag
+    while :; do
+        read -rp "$(echo -e "  ${BOLD}Release${NC} [1]: ")" choice || true
+        choice="${choice:-1}"
+        if [[ "$choice" =~ ^[0-9]+$ ]]; then
+            if [[ "$choice" -ge 1 && "$choice" -le "${#tags[@]}" ]]; then
+                tag="${tags[$((choice - 1))]}"
+                break
+            fi
+            echo "  Enter a number between 1 and ${#tags[@]}, or a tag."
+            continue
+        fi
+        # A tag typed by name: anything the registry might carry. A typo
+        # fails at the pull, with the registry's own message.
+        if [[ "$choice" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then
+            tag="$choice"
+            break
+        fi
+        echo "  That is not a tag name."
+    done
+
+    CHOSEN_BASE_REF="${repo}:${tag}"
+    echo ""
+    echo -e "  → Building on ${BOLD}${CHOSEN_BASE_REF}${NC}"
+    echo ""
+}
+
 # What ensure_base_image found out, for write_env_file to record.
 BASE_UPSTREAM_REF=""   # repo@sha256:… of the base in use
 BASE_PREVIOUS=""       # the base in use before this one, still on disk
@@ -1422,6 +1593,7 @@ BASE_VLLM_VERSION=""   # the vLLM version the base reports
 BASE_RELEASE=""        # the base's own release number, where it has one
 RESOLVED_VLLM_PIN=""
 TRACKED_BASE=""
+BASE_TAG=""            # the repo:tag the base was resolved from, where one was
 
 # resolve_tracked_base MODE SRC settles which image a tracking variant builds
 # on and leaves its local name in TRACKED_BASE.
@@ -1572,9 +1744,16 @@ report_tracked_base() {
 # -- tcclaviger/vllm 28.02.2 and 28.04.9 both report 0.27.0.dev0+g55c98e370a,
 # four releases apart, which is exactly when a bump matters and exactly when
 # the assertion is blind.
+#
+# A release chosen from the variant's tag list this run comes next. It is not
+# read back from .env either: quick does not need it, because it stays on the
+# image the choice resolved to, which ensure_base_image keeps on record.
 variant_base_ref() {
     if [[ -n "${VLLMCTL_BASE_IMAGE:-}" ]]; then
         echo "$VLLMCTL_BASE_IMAGE"; return
+    fi
+    if [[ -n "$CHOSEN_BASE_REF" ]]; then
+        echo "$CHOSEN_BASE_REF"; return
     fi
     variant_field "$BUILD_VARIANT" BASE_IMAGE
 }
@@ -1650,6 +1829,9 @@ flatten_image() {
 # resolve chose. Every other variant names one release and gets it either way.
 ensure_base_image() {
     local mode="${1:-refresh}" src
+    # Whether the operator named the image, asked before this function
+    # exports a value of its own under the same name.
+    local overridden="${VLLMCTL_BASE_IMAGE:+1}"
     warn_stale_env_base
     src="$(variant_base_ref)"
     [[ -n "$src" ]] || return 0
@@ -1670,6 +1852,7 @@ ensure_base_image() {
     was="$(env_file_value VLLMCTL_BASE_IMAGE)"
     BASE_UPSTREAM_REF="$(env_file_value VLLMCTL_BASE_DIGEST)"
     BASE_PREVIOUS="$(env_file_value VLLMCTL_BASE_PREVIOUS)"
+    BASE_TAG="$(env_file_value VLLMCTL_BASE_TAG)"
 
     resolve_tracked_base "$mode" "$src"
     usable_base_image "$TRACKED_BASE"
@@ -1682,6 +1865,13 @@ ensure_base_image() {
         BASE_UPSTREAM_REF="$(tracked_upstream_ref "$TRACKED_BASE")"
         # The way back is only worth naming while it is still on disk.
         [[ -n "$was" ]] && BASE_PREVIOUS="$was"
+    fi
+    # Which tag this base came from. A local name an operator went back to
+    # carries none, and a stale record would be worse than no record.
+    if [[ -n "$overridden" || "$src" == localhost/* ]]; then
+        BASE_TAG=""
+    elif [[ "$mode" != "keep" || "$was" != "$VLLMCTL_BASE_IMAGE" ]]; then
+        BASE_TAG="$src"
     fi
     if [[ -n "$BASE_PREVIOUS" ]] && ! image_exists "$BASE_PREVIOUS"; then
         BASE_PREVIOUS=""
@@ -1796,6 +1986,7 @@ write_env_file() {
         VLLMCTL_VENDOR VLLMCTL_BASE_IMAGE VLLMCTL_DOCKERFILE
         VLLMCTL_VENV_ROOT VLLMCTL_STAMP_FILE VLLMCTL_VLLM_PIN VLLMCTL_TUNER_REF
         VLLMCTL_BASE_DIGEST VLLMCTL_BASE_PREVIOUS VLLMCTL_BASE_VLLM VLLMCTL_BASE_RELEASE
+        VLLMCTL_BASE_TAG
         HSA_OVERRIDE_GFX_VERSION GPU_ARCH HOST_VIDEO_GID HOST_RENDER_GID
         HIP_VISIBLE_DEVICES
     )
@@ -1837,6 +2028,7 @@ write_env_file() {
         # What a variant that follows a moving tag resolved it to. These are
         # a record, not inputs: VLLMCTL_BASE_IMAGE above is what gets built
         # on, and it is what `quick` stays on until the next pull.
+        [[ -n "$BASE_TAG" ]]           && echo "VLLMCTL_BASE_TAG=${BASE_TAG}"
         [[ -n "$BASE_UPSTREAM_REF" ]]  && echo "VLLMCTL_BASE_DIGEST=${BASE_UPSTREAM_REF}"
         [[ -n "$BASE_PREVIOUS" ]]      && echo "VLLMCTL_BASE_PREVIOUS=${BASE_PREVIOUS}"
         [[ -n "$BASE_VLLM_VERSION" ]]  && echo "VLLMCTL_BASE_VLLM=${BASE_VLLM_VERSION}"
@@ -2487,7 +2679,7 @@ print_variants() {
         while IFS= read -r id; do
             [[ -n "$id" ]] || continue
             printf "    %-14s %-15s %s%b\n" "$id" "[$(variant_field "$id" TIER)]" \
-                "$(variant_field "$id" SUMMARY)" \
+                "$(variant_summary "$id")" \
                 "$([[ "$id" == "$rec" ]] && echo " ${GREEN}← recommended${NC}")"
         done <<<"$ordered"
     else
@@ -2499,7 +2691,7 @@ print_variants() {
         echo -e "  ${BOLD}For other hardware${NC}  (VLLMCTL_VARIANT=<id> to force one anyway)"
         for id in "${others[@]}"; do
             printf "    %-14s %-15s %s\n" "$id" "[$(variant_field "$id" TIER)]" \
-                "$(variant_field "$id" SUMMARY)"
+                "$(variant_summary "$id")"
         done
     fi
     echo ""
@@ -2554,6 +2746,10 @@ Image variants:
   match; the answer is stored in .env and reused by every later command.
   Run `./setup.sh variants` to see them all.
 
+  Most prebuilt variants offer their base image's releases: install and
+  rebuild list them newest first and build on the one picked, pull takes the
+  newest, and quick stays on whichever was picked last.
+
   Support tiers: [tested] means someone on this project ran it on that
   hardware; [community] means it is published upstream but not validated here;
   [experimental] means little upstream support.
@@ -2585,7 +2781,7 @@ Examples:
   ./setup.sh pull                 # move to the newest base image, keep the old one
   ./setup.sh rebuild              # full clean rebuild (no cache)
   RUNTIME=podman ./setup.sh install  # force Podman runtime
-  VLLMCTL_VARIANT=radiance ./setup.sh install   # build a specific variant
+  VLLMCTL_VARIANT=rdna4-clav ./setup.sh install # build a specific variant
   VLLMCTL_VARIANT=rocm-source ./setup.sh rebuild # switch to the from-source image
 USAGE
 }
@@ -2658,6 +2854,8 @@ main() {
         disable)   autostart_disable; exit 0 ;;
         uninstall) container_uninstall; exit 0 ;;
         pull)
+            warn_deprecated_variant
+            prompt_base_tag newest
             if variant_tracks_base; then
                 log "Pulling the base image and rebuilding on it..."
             else
@@ -2672,6 +2870,7 @@ main() {
             exit 0
             ;;
         quick)
+            warn_deprecated_variant
             log "Quick rebuild (cached)..."
             container_quick_rebuild
             ok "vllm-toolchest is running"
@@ -2689,6 +2888,8 @@ main() {
     # dry run and never prompts.
     if [[ "$command" != "status" ]]; then
         prompt_variant
+        warn_deprecated_variant
+        prompt_base_tag
     fi
 
     check_prerequisites
