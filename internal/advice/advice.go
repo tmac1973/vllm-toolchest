@@ -121,6 +121,30 @@ type Measurements struct {
 	// note ("default since v0.21.0") is an example of exactly that kind of
 	// change.
 	EngineVersion string `json:"engine_version,omitempty"`
+
+	// DeviceGB is one card's whole memory and BudgetGB the share of it vLLM
+	// was told it may use, both from the free-memory report a start prints.
+	// Together they say what the memory figures above are a part of.
+	DeviceGB float64 `json:"device_gb,omitempty"`
+	BudgetGB float64 `json:"budget_gb,omitempty"`
+
+	// BlockTokens is the attention block size, reported only when vLLM had to
+	// raise it so a hybrid model's recurrent-state pages line up with its
+	// attention pages. It is also the granularity prefix caching reuses in.
+	BlockTokens int `json:"block_tokens,omitempty"`
+	// Hybrid marks a model whose recurrent layers keep per-request state in
+	// the KV pool, so a running request costs a little more than its tokens.
+	Hybrid bool `json:"hybrid,omitempty"`
+
+	// ExpertsResident is the routed-expert count the expert planner found room
+	// for on every rank, which it reports when it switches offload off.
+	ExpertsResident int `json:"experts_resident,omitempty"`
+
+	// InitSeconds is the engine setup after the weights are in -- profiling,
+	// KV allocation, warmup -- and CompileSeconds the part of it spent
+	// compiling.
+	InitSeconds    float64 `json:"init_seconds,omitempty"`
+	CompileSeconds float64 `json:"compile_seconds,omitempty"`
 }
 
 // Any reports whether anything at all was captured.
@@ -307,10 +331,61 @@ func Observe(m *Measurements, line string) {
 			m.EngineVersion = g[1]
 		}
 	}
+	// Desired GPU memory utilization is (0.97, 30.9 GiB). The same sentence
+	// opens with the card's size, which the free-memory pattern already reads.
+	if strings.Contains(lower, "desired gpu memory utilization") {
+		if g := reBudget.FindStringSubmatch(line); g != nil {
+			if v, err := strconv.ParseFloat(g[1], 64); err == nil {
+				m.BudgetGB = v
+			}
+		}
+		if g := reFreeMemory.FindStringSubmatch(line); g != nil {
+			if v, err := strconv.ParseFloat(g[2], 64); err == nil {
+				m.DeviceGB = v
+			}
+		}
+	}
+	if strings.Contains(lower, "attention block size to") {
+		if g := reBlockSize.FindStringSubmatch(line); g != nil {
+			if n, ok := parseCount(g[1]); ok {
+				m.BlockTokens = n
+			}
+		}
+	}
+	if strings.Contains(lower, "mamba cache mode") || strings.Contains(lower, "mamba page size") {
+		m.Hybrid = true
+	}
+	if strings.Contains(lower, "every routed expert fits resident") {
+		if g := reExpertsResident.FindStringSubmatch(line); g != nil {
+			if n, ok := parseCount(g[1]); ok {
+				m.ExpertsResident = n
+			}
+		}
+	}
+	// init engine (profile, create kv cache, warmup model) took 74.75 s (compilation: 9.50 s)
+	if strings.Contains(lower, "init engine") {
+		if g := reInitEngine.FindStringSubmatch(line); g != nil {
+			if v, err := strconv.ParseFloat(g[1], 64); err == nil {
+				m.InitSeconds = v
+			}
+			if g[2] != "" {
+				if v, err := strconv.ParseFloat(g[2], 64); err == nil {
+					m.CompileSeconds = v
+				}
+			}
+		}
+	}
 	// One line carries both halves on a partial failure:
 	//   PLE offload: locked 0.0 GiB, FAILED to lock 47.7 GiB
 	if strings.Contains(lower, "locked") {
 		if v, ok := firstFloat(reLocked, line); ok {
+			m.PLEOffloadGB = v
+		}
+	}
+	// The Clav build words a successful offload differently:
+	//   PLE ...: host table SHARED across TP ranks (memfd), ... = 38.74 GiB pinned
+	if strings.Contains(lower, "gib pinned") && strings.Contains(line, "PLE") {
+		if v, ok := firstFloat(rePinned, line); ok {
 			m.PLEOffloadGB = v
 		}
 	}
@@ -725,6 +800,7 @@ var (
 	// reProfilingEquiv a value of "0.9826." destined for a config field.
 	reEngineVersion  = regexp.MustCompile(`(?i)(?:LLM engine \(v|vLLM API server version\s+)([^\s),]+)`)
 	reLocked         = regexp.MustCompile(`(?i)locked\s*([\d.]+)\s*GiB`)
+	rePinned         = regexp.MustCompile(`(?i)([\d.]+)\s*GiB pinned`)
 	reFailedLock     = regexp.MustCompile(`(?i)FAILED to lock\s*([\d.]+)\s*GiB`)
 	reSeqLenEstimate = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?estimated maximum model length is (\d+)`)
 	reSeqLenVsKV     = regexp.MustCompile(`(?i)max seq len \((\d+)\).*?KV cache.*?\((\d+)\)`)
@@ -734,9 +810,13 @@ var (
 	// The post-start report does not:
 	//   Free memory on device (31.23/31.86 GiB) on startup. Desired ...
 	// Written against the refusal alone, this matched only half of them.
-	reFreeMemory     = regexp.MustCompile(`(?i)Free memory on device\s+(?:cuda:\S+\s+)?\(([\d.]+)/([\d.]+)\s*GiB\)`)
-	reUnrecognized   = regexp.MustCompile(`unrecognized arguments:\s*(\S+)`)
-	reChunkedPrefill = regexp.MustCompile(`(?i)max_num_batched_tokens\s*[=:]\s*(\d+)`)
+	reFreeMemory      = regexp.MustCompile(`(?i)Free memory on device\s+(?:cuda:\S+\s+)?\(([\d.]+)/([\d.]+)\s*GiB\)`)
+	reBudget          = regexp.MustCompile(`(?i)desired GPU memory utilization (?:is )?\([\d.]+,\s*([\d.]+)\s*GiB\)`)
+	reBlockSize       = regexp.MustCompile(`(?i)attention block size to\s*([\d,]+)\s*tokens`)
+	reExpertsResident = regexp.MustCompile(`(?i)fits resident on each rank \(([\d,]+)\s*experts`)
+	reInitEngine      = regexp.MustCompile(`(?i)init engine.*?took\s*([\d.]+)\s*s(?:\s*\(compilation:\s*([\d.]+)\s*s\))?`)
+	reUnrecognized    = regexp.MustCompile(`unrecognized arguments:\s*(\S+)`)
+	reChunkedPrefill  = regexp.MustCompile(`(?i)max_num_batched_tokens\s*[=:]\s*(\d+)`)
 
 	// vLLM occasionally suggests "Try reducing max_model_len to N".
 	reSuggestedMaxLen = regexp.MustCompile(`(?i)max[_ ]model[_ ]len.*?(\d{3,7})`)

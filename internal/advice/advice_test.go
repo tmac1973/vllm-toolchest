@@ -561,3 +561,52 @@ func TestKVRefusalAsVLLM029WordsIt(t *testing.T) {
 		t.Errorf("Scan = %+v", it)
 	}
 }
+
+// The lines the Engine Notes summary reads, verbatim from a TP=4 start of
+// Qwen3.8-Flash-Next on compute.
+func TestObserveTheStartSummaryLines(t *testing.T) {
+	var m Measurements
+	for _, line := range []string{
+		"(APIServer pid=3266154) INFO 10-29 20:50:13 [config.py:486] Mamba cache mode is set to 'align' for Qwen4ExpForConditionalGeneration by default when prefix caching is enabled",
+		"(Worker_TP0 pid=3266545) INFO 10-29 20:54:06 [interface.py:918] Setting attention block size to 832 tokens to ensure that attention page size is >= mamba page size.",
+		"(APIServer pid=3266154) INFO 10-29 20:50:13 [expert_plan.py:1310] expert offload plan: every routed expert fits resident on each rank (24576 experts, 14.94 GiB of the 17.44 GiB arena); expert offload DISABLED for this run",
+		"(Worker_TP0 pid=3266545) INFO 10-29 20:52:16 [ram_uva.py:332] PLE language_model.model.layers.1.ple: host table SHARED across TP ranks (memfd), 320001536 rows x 130 B = 38.74 GiB pinned (torch.uint8), UVA gather of the step's distinct rows on a side stream",
+		"(Worker_TP0 pid=3266545) INFO 10-29 20:55:21 [gpu_worker.py:796] Free memory on device (31.23/31.86 GiB) on startup. Desired GPU memory utilization is (0.97, 30.9 GiB). Actual usage is 22.65 GiB for consumed memory (weights + non-torch), 1.1 GiB for peak activation, and 0.33 GiB for CUDAGraph memory.",
+		"(EngineCore pid=3266379) INFO 10-29 20:55:22 [core.py:374] init engine (profile, create kv cache, warmup model) took 74.75 s (compilation: 9.50 s)",
+	} {
+		Observe(&m, line)
+	}
+
+	if !m.Hybrid {
+		t.Error("the mamba cache line did not mark the model hybrid")
+	}
+	if m.BlockTokens != 832 {
+		t.Errorf("BlockTokens = %d, want 832", m.BlockTokens)
+	}
+	if m.ExpertsResident != 24576 {
+		t.Errorf("ExpertsResident = %d, want 24576", m.ExpertsResident)
+	}
+	if m.PLEOffloadGB != 38.74 {
+		t.Errorf("PLEOffloadGB = %v, want 38.74", m.PLEOffloadGB)
+	}
+	if m.DeviceGB != 31.86 || m.BudgetGB != 30.9 {
+		t.Errorf("device/budget = %v/%v GiB, want 31.86/30.9", m.DeviceGB, m.BudgetGB)
+	}
+	if m.InitSeconds != 74.75 || m.CompileSeconds != 9.5 {
+		t.Errorf("init/compile = %v/%v s, want 74.75/9.5", m.InitSeconds, m.CompileSeconds)
+	}
+	// The same line carries the usage figures the estimator already reads.
+	if m.ConsumedGB != 22.65 {
+		t.Errorf("ConsumedGB = %v, want 22.65", m.ConsumedGB)
+	}
+}
+
+// The refusal says the same budget in other words, and must not be mistaken
+// for a card size of zero.
+func TestObserveReadsTheBudgetFromARefusal(t *testing.T) {
+	var m Measurements
+	Observe(&m, "ValueError: Free memory on device cuda:0 (27.28/31.86 GiB) on startup is less than desired GPU memory utilization (0.97, 30.9 GiB).")
+	if m.DeviceGB != 31.86 || m.BudgetGB != 30.9 {
+		t.Errorf("device/budget = %v/%v GiB, want 31.86/30.9", m.DeviceGB, m.BudgetGB)
+	}
+}
