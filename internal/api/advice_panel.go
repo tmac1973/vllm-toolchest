@@ -21,6 +21,10 @@ type adviceRow struct {
 	// of a person, who decides.
 	Field     string
 	Suggested string
+	// SuggestedLabel is Suggested as a person reads it. Usually the same; a
+	// KV pool size arrives in bytes, which is what the config takes and not
+	// what anyone wants to read.
+	SuggestedLabel string
 	// Line is what vLLM actually wrote, kept so the reader can check the
 	// paraphrase against the source rather than taking our word for it.
 	Line string
@@ -72,6 +76,12 @@ type adviceView struct {
 	// same panel polled again. The strip pulses on a change and then stops;
 	// without this it would pulse every ten seconds forever.
 	Sig string
+
+	// Start is what vLLM measured on this start, written out in words: the
+	// context pool and each stream's share of it, where each card's memory
+	// went, how long setup took. Shown above the advice, quiet start or not,
+	// and nil until the engine has reported any of it.
+	Start *startSummary
 }
 
 // applyTarget is the element an apply swaps into. The panel lives on the
@@ -115,7 +125,9 @@ func (s *Server) adviceSnapshot() adviceView {
 		return newAdviceView(nil)
 	}
 	v := newAdviceView(s.process.Advice())
-	v.ModelID = s.process.GetStatus().ModelID
+	st := s.process.GetStatus()
+	v.ModelID = st.ModelID
+	v.Start = newStartSummary(s.process.Measured(), st.Args)
 	return v
 }
 
@@ -123,14 +135,15 @@ func newAdviceView(items []advice.Item) adviceView {
 	v := adviceView{Quiet: len(items) == 0}
 	for _, it := range items {
 		v.Rows = append(v.Rows, adviceRow{
-			Severity:   string(it.Severity),
-			Hue:        adviceHue(it.Severity),
-			Message:    it.Message,
-			Field:      it.Field,
-			Suggested:  it.Suggested,
-			Line:       it.Line,
-			Applicable: it.Applicable,
-			Ours:       it.Ours,
+			Severity:       string(it.Severity),
+			Hue:            adviceHue(it.Severity),
+			Message:        it.Message,
+			Field:          it.Field,
+			Suggested:      it.Suggested,
+			SuggestedLabel: suggestedLabel(it.Field, it.Suggested),
+			Line:           it.Line,
+			Applicable:     it.Applicable,
+			Ours:           it.Ours,
 			// Only an applicable row can pin anything, since only it offers
 			// the button that would.
 			Pins: it.Applicable && it.Field == "kv_cache_memory",
@@ -235,4 +248,15 @@ func adviceHue(severity advice.Severity) string {
 		return "#b86e00"
 	}
 	return "#6b7280"
+}
+
+// suggestedLabel writes a suggestion for reading. Only the byte count needs
+// it; anything that does not parse is shown as the engine wrote it.
+func suggestedLabel(field, value string) string {
+	if field == "kv_cache_memory" {
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
+			return gib(float64(n) / (1 << 30))
+		}
+	}
+	return value
 }
