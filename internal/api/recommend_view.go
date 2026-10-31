@@ -22,7 +22,7 @@ type recommendFeedView struct {
 	More                   []recommendCard // the rest, folded
 	Unverified             []recommendUnverified
 	Unavailable            string
-	Empty                  bool // built, and nothing in it fits
+	Empty                  string // built, and nothing in this order: what to say
 	Age                    string
 	Stale                  bool
 }
@@ -50,6 +50,7 @@ type recommendUnverified struct {
 var recommendChips = []recommendChip{
 	{Intent: recommend.IntentQuality, Label: "Best quality"},
 	{Intent: recommend.IntentFastest, Label: "Fastest"},
+	{Intent: recommend.IntentAccelerated, Label: "Accelerated"},
 	{Intent: recommend.IntentContext, Label: "Longest context"},
 	{Intent: recommend.IntentNewest, Label: "Newest"},
 }
@@ -70,6 +71,10 @@ func newRecommendFeedView(r recommend.Result, now time.Time) recommendFeedView {
 	v.Profile = strings.Join(parts, " · ")
 
 	for _, c := range recommendChips {
+		// No accelerated formats here: the chip could only ever be empty.
+		if c.Intent == recommend.IntentAccelerated && len(p.Accelerated) == 0 {
+			continue
+		}
 		c.Pressed = c.Intent == r.Intent
 		v.Chips = append(v.Chips, c)
 	}
@@ -93,7 +98,12 @@ func newRecommendFeedView(r recommend.Result, now time.Time) recommendFeedView {
 	if len(v.Cards) > recommendShown {
 		v.Cards, v.More = v.Cards[:recommendShown], v.Cards[recommendShown:]
 	}
-	v.Empty = r.Unavailable == "" && len(r.Verified) == 0
+	if r.Unavailable == "" && len(r.Verified) == 0 {
+		v.Empty = "Nothing among the models looked at fits this machine. Search below for something smaller."
+		if r.Intent == recommend.IntentAccelerated {
+			v.Empty = "Nothing in a format accelerated on " + p.GPUArch + " fits this machine. The other orders show what does."
+		}
+	}
 	return v
 }
 
