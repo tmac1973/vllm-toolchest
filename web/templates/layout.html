@@ -682,6 +682,11 @@
             --pico-form-element-spacing-vertical: 0.3rem;
             --pico-form-element-spacing-horizontal: 0.5rem;
         }
+        /* On a very wide window the profile picker grows past 1200px. Chrome
+           will not open a select's option list that wide: it narrows the
+           list and scrolls it sideways, which cuts off the start of every
+           option. Keep selects narrow enough for the list to fit. */
+        .model-card-config select { max-width: 40rem; }
         .model-card-config input[type="checkbox"][role="switch"] { height: 1.1rem; }
         .model-card-config button { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
         .model-card-config label { font-size: 0.85rem; }
