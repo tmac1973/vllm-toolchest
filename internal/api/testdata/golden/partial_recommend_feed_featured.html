@@ -41,6 +41,8 @@
   <button type="button" class="recommend-chip" aria-pressed="true"
           hx-get="/api/recommend?intent=fastest" hx-target="#recommend-feed" hx-swap="innerHTML">Fastest</button>
   <button type="button" class="recommend-chip" aria-pressed="false"
+          hx-get="/api/recommend?intent=accelerated" hx-target="#recommend-feed" hx-swap="innerHTML">Accelerated</button>
+  <button type="button" class="recommend-chip" aria-pressed="false"
           hx-get="/api/recommend?intent=context" hx-target="#recommend-feed" hx-swap="innerHTML">Longest context</button>
   <button type="button" class="recommend-chip" aria-pressed="false"
           hx-get="/api/recommend?intent=newest" hx-target="#recommend-feed" hx-swap="innerHTML">Newest</button>

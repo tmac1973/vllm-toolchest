@@ -288,6 +288,27 @@ func TestObjectives(t *testing.T) {
 	}
 }
 
+// Accelerated keeps only the accelerated models, in quality's order.
+func TestTheAcceleratedOrder(t *testing.T) {
+	cands := []Candidate{
+		{ID: "a/bf16", TP: 1, Available: 32, Spare: 30, Downloads: 9, ParamsB: 70},
+		{ID: "a/fp8-small", Accelerated: true, TP: 1, Available: 32, Spare: 20, Downloads: 5, ParamsB: 8},
+		{ID: "a/fp8-big", Accelerated: true, TP: 2, Available: 64, Spare: 10, Downloads: 1, ParamsB: 32},
+		{ID: "a/awq", WeightOnly: true, TP: 1, Available: 32, Spare: 25, Downloads: 3, ParamsB: 14},
+	}
+	o := orders(cands, []int{0, 1, 2, 3}, 4)
+	var got []string
+	for _, i := range o[IntentAccelerated] {
+		got = append(got, cands[i].ID)
+	}
+	if want := []string{"a/fp8-big", "a/fp8-small"}; !slices.Equal(got, want) {
+		t.Errorf("accelerated = %v, want %v", got, want)
+	}
+	if len(o[IntentQuality]) != 4 {
+		t.Errorf("quality lost models: %d", len(o[IntentQuality]))
+	}
+}
+
 // A config is fetched once per revision; a new lastModified is a new fetch.
 func TestConfigCache(t *testing.T) {
 	dir := t.TempDir()
