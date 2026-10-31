@@ -5,15 +5,17 @@ import (
 	"strings"
 )
 
-// The four aims a list is ordered by.
+// The aims a list is ordered by. Accelerated is the one that also filters:
+// only the models in a format this machine accelerates, in quality's order.
 const (
-	IntentQuality = "quality"
-	IntentFastest = "fastest"
-	IntentContext = "context"
-	IntentNewest  = "newest"
+	IntentQuality     = "quality"
+	IntentAccelerated = "accelerated"
+	IntentFastest     = "fastest"
+	IntentContext     = "context"
+	IntentNewest      = "newest"
 )
 
-var intents = []string{IntentQuality, IntentFastest, IntentContext, IntentNewest}
+var intents = []string{IntentQuality, IntentAccelerated, IntentFastest, IntentContext, IntentNewest}
 
 // orders works out each aim's order over the verified candidates, as indices,
 // once per refresh: a chip press is a slice read.
@@ -22,6 +24,7 @@ var intents = []string{IntentQuality, IntentFastest, IntentContext, IntentNewest
 //	fastest = 0.50·(1 − width) + 0.30·headroom + 0.20·accelerated − 0.40·(weight-only or offloaded)
 //	context = the context it holds here
 //	newest  = recency
+//	accelerated = quality, over the accelerated models only
 //
 // Percentiles are over the verified set. Headroom is the spare memory's share
 // of the cards at the recommended width; width is that width's place among
@@ -55,6 +58,7 @@ func orders(cands []Candidate, verified []int, cards int) map[string][]int {
 		}
 		slow := b2f(c.WeightOnly || c.Offload)
 		score[IntentQuality][i] = 0.70*params[i] + 0.20*headroom + 0.10*b2f(c.Accelerated)
+		score[IntentAccelerated][i] = score[IntentQuality][i]
 		score[IntentFastest][i] = max(0, min(1, 0.50*(1-tpNorm)+0.30*headroom+0.20*b2f(c.Accelerated)-0.40*slow))
 		score[IntentContext][i] = ctx[i]
 		score[IntentNewest][i] = rec[i]
@@ -78,6 +82,9 @@ func orders(cands []Candidate, verified []int, cards int) map[string][]int {
 			}
 			return strings.Compare(set[a].ID, set[b].ID)
 		})
+		if in == IntentAccelerated {
+			idx = slices.DeleteFunc(idx, func(i int) bool { return !set[i].Accelerated })
+		}
 		for i := range idx {
 			idx[i] = verified[idx[i]]
 		}

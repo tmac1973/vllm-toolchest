@@ -40,8 +40,8 @@
 {{- if .Stale}}
 <p class="recommend-stale"><small>This list is more than six hours old. Refresh to ask Hugging Face again.</small></p>
 {{- end}}
-{{- if .Empty}}
-<p class="recommend-empty"><small>Nothing among the models looked at fits this machine. Search below for something smaller.</small></p>
+{{- with .Empty}}
+<p class="recommend-empty"><small>{{.}}</small></p>
 {{- end}}
 {{- range .Cards}}{{template "recommend_card" .}}{{end}}
 {{- with .More}}

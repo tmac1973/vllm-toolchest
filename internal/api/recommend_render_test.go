@@ -70,6 +70,19 @@ func TestTheFeedRenders(t *testing.T) {
 	}
 }
 
+// The Accelerated chip shows only where some format is accelerated: on a
+// card with none it could only ever be empty.
+func TestTheAcceleratedChip(t *testing.T) {
+	r := feedResult(true)
+	if out := renderFeed(t, r); !strings.Contains(out, `hx-get="/api/recommend?intent=accelerated"`) {
+		t.Error("no Accelerated chip on gfx1201")
+	}
+	r.Profile.GPUArch, r.Profile.Accelerated = "gfx1100", []string{}
+	if out := renderFeed(t, r); strings.Contains(out, "intent=accelerated") {
+		t.Error("an Accelerated chip on a card with no accelerated format")
+	}
+}
+
 func TestTheFeedsEmptyStates(t *testing.T) {
 	r := feedResult(true)
 	r.Verified, r.Unverified = nil, nil
@@ -83,6 +96,13 @@ func TestTheFeedsEmptyStates(t *testing.T) {
 	out = renderFeed(t, r)
 	if !strings.Contains(out, "Nothing among the models looked at fits this machine") || strings.Contains(out, `class="recommend-card"`) {
 		t.Errorf("empty:\n%s", out)
+	}
+
+	// Empty under Accelerated is about the format, not about the fit.
+	r.Intent = recommend.IntentAccelerated
+	out = renderFeed(t, r)
+	if !strings.Contains(out, "Nothing in a format accelerated on gfx1201 fits this machine") || strings.Contains(out, "Nothing among the models") {
+		t.Errorf("empty under accelerated:\n%s", out)
 	}
 
 	r.Stale = true
