@@ -70,3 +70,34 @@ func TestProxySendsTheEngineItsOwnKey(t *testing.T) {
 		t.Errorf("engine received Authorization %q", gotAuth)
 	}
 }
+
+// /metrics on the vllmctl port reaches the engine's own /metrics, behind the
+// same key as /v1. It used to fall through to the router's 404.
+func TestMetricsReachTheEngine(t *testing.T) {
+	var gotPath string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Write([]byte("vllm:num_requests_running 0\n"))
+	}))
+	defer backend.Close()
+
+	s := newTestServer(t, backend.URL)
+	s.cfg.APIKey = "k"
+
+	rec := httptest.NewRecorder()
+	s.buildRouter().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusUnauthorized || gotPath != "" {
+		t.Fatalf("without a key: status %d, engine saw %q", rec.Code, gotPath)
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer k")
+	rec = httptest.NewRecorder()
+	s.buildRouter().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/metrics" {
+		t.Fatalf("with a key: status %d, engine saw %q", rec.Code, gotPath)
+	}
+	if !strings.Contains(rec.Body.String(), "vllm:num_requests_running") {
+		t.Errorf("client received %q", rec.Body.String())
+	}
+}
