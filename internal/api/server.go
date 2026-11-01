@@ -377,6 +377,10 @@ func (s *Server) buildRouter() chi.Router {
 		r.Handle("/*", s.newProxyHandler())
 	})
 
+	// The engine's Prometheus metrics, so a client of the API above can
+	// read them on the same port. They sit behind the same key.
+	r.With(s.apiKeyAuth).Get("/metrics", s.newProxyHandler().ServeHTTP)
+
 	return r
 }
 
